@@ -11,10 +11,15 @@ On Ubuntu 22.04 or 24.04:
 curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh | sh
 ```
 
+Run that command from any directory. There is no repository clone, `mise`,
+Python, or manual dependency setup; the installer installs missing host
+requirements itself and keeps the node in `/opt/voipappz`.
+
 The installer prompts on the terminal for:
 
 - Docker Hub user and access token, when the private image must be pulled.
-- An Account Basic authorization value for mothership registration.
+- An Account Basic authorization value for mothership registration. Input is
+  hidden while it is pasted.
 - Node setup answers when no `va.yaml` was supplied.
 - A customer name only when the Account has no customer yet.
 

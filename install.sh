@@ -449,7 +449,10 @@ if docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
   say "$VA_VOIP_IMAGE is already present"
 else
   if [ -z "${VA_REGISTRY_USER:-}" ]; then ask "Docker Hub user"; VA_REGISTRY_USER=$REPLY; fi
-  if [ -z "${VA_REGISTRY_TOKEN:-}" ]; then ask "Docker Hub token" silent; VA_REGISTRY_TOKEN=$REPLY; fi
+  if [ -z "${VA_REGISTRY_TOKEN:-}" ]; then
+    ask "Docker Hub token (input hidden)" silent
+    VA_REGISTRY_TOKEN=$REPLY
+  fi
   if [ -z "$VA_REGISTRY_USER" ] || [ -z "$VA_REGISTRY_TOKEN" ]; then
     die "Docker Hub user and token are required to pull $VA_VOIP_IMAGE"
   fi
@@ -542,8 +545,11 @@ step "5/6  Registration"
 SELECTED_CUSTOMER_UUID=""
 if [ "$VA_REGISTER" = "1" ]; then
   if [ -z "${VA_API_AUTHORIZATION:-}" ]; then
-    ask "Account Basic authorization (Basic ...)" silent
-    VA_API_AUTHORIZATION=$REPLY
+    while [ -z "${VA_API_AUTHORIZATION:-}" ]; do
+      ask "Account Basic authorization (paste complete Basic ... value; input hidden)" silent
+      VA_API_AUTHORIZATION=$REPLY
+      [ -n "$VA_API_AUTHORIZATION" ] || say "authorization cannot be empty; try again"
+    done
   fi
   validate_authorization
   validate_api_url
