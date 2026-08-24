@@ -336,8 +336,9 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # Customer::Init correctly homes the bootstrap customer on the app node. Make
 # that test fixture unassigned so the installer can exercise its existing-
 # customer link path without weakening the rule that forbids implicit moves.
-docker exec va-postgres psql -U postgres -d voipappz -v ON_ERROR_STOP=1 -c \
-  "UPDATE customers SET node_uuid = NULL WHERE uuid = '$FIRST_UUID'" >/dev/null
+docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-app sh -c \
+  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "Customer.find_by_uuid(ENV.fetch(%q{CI_CUSTOMER_UUID})).update(node_uuid: nil)"' \
+  >/dev/null
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
 
