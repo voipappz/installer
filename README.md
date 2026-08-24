@@ -52,6 +52,23 @@ wins.
 The installer never starts or installs the mothership and never asks the CLI
 to create a customer.
 
+## Operate the node
+
+Use the installed CLI for node management:
+
+```sh
+cd /opt/voipappz
+voipappz status --profile voip
+voipappz health
+voipappz test --level ping
+voipappz logs
+voipappz restart
+```
+
+`status` checks the expected VoIP service, `health` reads the node's aggregate
+Kamailio/FreeSWITCH verdict, and the ping test sends a real SIP OPTIONS request
+to Kamailio. Docker Compose remains behind the CLI.
+
 ## Customer behavior
 
 - One visible customer: use it.
@@ -93,5 +110,6 @@ public `voipappz/mothership`, and boots its complete `app + storage`
 environment. It uses the real onboarding script, API, `Customer::Init`, and
 node CLI to test existing/new customers, retries, conflicts, disabled records,
 authorization failures, and UUID idempotency. It then shuts mothership down and
-checks the separate VoIP runtime and `/tmp/node.yaml` mount. There is no Python
-or fake API in this repository.
+uses the installed CLI to check the separate VoIP runtime, node health, and a
+real Kamailio SIP response before checking the `/tmp/node.yaml` mount. There is
+no Python or fake API in this repository.

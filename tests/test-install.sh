@@ -143,6 +143,7 @@ assert_no_secret_in_log() {
     [[ -z $value ]] && continue
     grep -Fq -- "$value" "$log" && die "a credential was written to $(basename "$log")"
   done
+  return 0
 }
 
 show_safe_log() {
@@ -432,6 +433,41 @@ run_installer success start-voip \
   VA_REGISTER=0 START=1 VA_API_AUTHORIZATION=
 NODE_UP=1
 wait_http http://127.0.0.1:4000/health 180
+
+# The installed CLI is the operator interface. Prove it can inspect the VoIP
+# profile, read the node's own aggregate health (including Kamailio and
+# FreeSWITCH), and complete a real SIP transaction with Kamailio.
+(
+  cd "$NODE_DIR"
+  ./bin/voipappz status --profile voip --json
+) >"$LOG_DIR/voip-status.json" 2>&1 || {
+  show_safe_log "$LOG_DIR/voip-status.json"
+  die 'installed CLI could not report VoIP status'
+}
+jq -e '.services | any(.name == "voip" and .container == "va-voip" and .state == "running")' \
+  "$LOG_DIR/voip-status.json" >/dev/null \
+  || die 'installed CLI did not report the VoIP service as running'
+
+deadline=$((SECONDS + 180))
+until (
+  cd "$NODE_DIR"
+  ./bin/voipappz health
+) >"$LOG_DIR/voip-health.log" 2>&1; do
+  if ((SECONDS >= deadline)); then
+    show_safe_log "$LOG_DIR/voip-health.log"
+    die 'installed CLI did not report a healthy VoIP node'
+  fi
+  sleep 3
+done
+
+(
+  cd "$NODE_DIR"
+  ./bin/voipappz test --level ping
+) >"$LOG_DIR/kamailio-sip.log" 2>&1 || {
+  show_safe_log "$LOG_DIR/kamailio-sip.log"
+  die 'installed CLI could not complete a SIP OPTIONS transaction with Kamailio'
+}
+pass 'installed CLI reports the VoIP stack and validates Kamailio on the wire'
 
 mount_source=$(docker inspect va-voip --format \
   '{{range .Mounts}}{{if eq .Destination "/tmp/node.yaml"}}{{.Source}}{{end}}{{end}}')

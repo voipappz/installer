@@ -119,7 +119,9 @@ job:
    disabled customers, re-home refusal, incomplete initialization, invalid
    authorization, and credential redaction.
 7. Stops mothership, starts a separate NATS broker, starts the installed VoIP
-   profile, and verifies node health and the `/tmp/node.yaml` bind mount.
+   profile, and uses the installed CLI to verify service status, aggregate node
+   health, and a real Kamailio SIP OPTIONS response. Raw Docker inspection is
+   limited to the `/tmp/node.yaml` mount and credential-boundary assertions.
 
 There is no Python mock, fake API, or installer-specific customer model. Tests
 must use the real public mothership and existing CLI.

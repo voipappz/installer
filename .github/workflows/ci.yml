@@ -22,7 +22,7 @@ jobs:
       matrix:
         ubuntu: ['22.04', '24.04']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate scripts
         run: |
           test -x install.sh
@@ -45,10 +45,10 @@ jobs:
         ubuntu: ['22.04', '24.04']
     steps:
       - name: Check out public installer
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check out public mothership
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: voipappz/mothership
           path: mothership
