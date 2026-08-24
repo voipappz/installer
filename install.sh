@@ -133,7 +133,7 @@ ask() {
 
 prepare_install_dir() {
   if mkdir -p "$INSTALL_DIR" 2>/dev/null && [ -w "$INSTALL_DIR" ]; then
-    return
+    return 0
   fi
   root_cmd mkdir -p "$INSTALL_DIR" || die "cannot write $INSTALL_DIR and sudo is unavailable"
   FS_AS_ROOT=1
@@ -145,7 +145,7 @@ ensure_host_tools() {
   if [ "$VA_REGISTER" = "1" ] && ! command -v jq >/dev/null 2>&1; then
     _packages="$_packages jq"
   fi
-  [ -n "$_packages" ] || return
+  [ -n "$_packages" ] || return 0
   command -v apt-get >/dev/null 2>&1 \
     || die "missing required tools ($_packages); install them and retry"
   say "installing required host tools: $_packages"
@@ -376,8 +376,9 @@ if docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
 else
   if [ -z "${VA_REGISTRY_USER:-}" ]; then ask "Docker Hub user"; VA_REGISTRY_USER=$REPLY; fi
   if [ -z "${VA_REGISTRY_TOKEN:-}" ]; then ask "Docker Hub token" silent; VA_REGISTRY_TOKEN=$REPLY; fi
-  [ -n "$VA_REGISTRY_USER" ] && [ -n "$VA_REGISTRY_TOKEN" ] \
-    || die "Docker Hub user and token are required to pull $VA_VOIP_IMAGE"
+  if [ -z "$VA_REGISTRY_USER" ] || [ -z "$VA_REGISTRY_TOKEN" ]; then
+    die "Docker Hub user and token are required to pull $VA_VOIP_IMAGE"
+  fi
 
   DOCKER_CONFIG_DIR="$(mktemp -d /tmp/voipappz-docker-auth.XXXXXX)"
   chmod 0700 "$DOCKER_CONFIG_DIR"
