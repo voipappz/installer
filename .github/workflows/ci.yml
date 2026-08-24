@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell:
+    name: Shell / Ubuntu ${{ matrix.ubuntu }}
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['22.04', '24.04']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate scripts
+        run: |
+          test -x install.sh
+          sh -n install.sh
+          dash -n install.sh
+          bash -n tests/clean-runner.sh tests/test-install.sh
+          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh
+          git diff --check
+          test -z "$(find tests -type f -name '*.py' -print -quit)"
+          ! grep -Eq 'python(3)?' install.sh
+
+  integration:
+    name: Clean install + real mothership / Ubuntu ${{ matrix.ubuntu }}
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['22.04', '24.04']
+    steps:
+      - name: Check out public installer
+        uses: actions/checkout@v4
+
+      - name: Check out public mothership
+        uses: actions/checkout@v4
+        with:
+          repository: voipappz/mothership
+          path: mothership
+
+      - name: Remove preinstalled Docker
+        run: tests/clean-runner.sh
+
+      - name: Install and register against real mothership
+        env:
+          VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: tests/test-install.sh "$GITHUB_WORKSPACE/mothership"
