@@ -333,6 +333,14 @@ until api GET /customers >/dev/null 2>&1; do
 done
 pass 'real Customer::Init created the bootstrap customer and Account'
 
+# Customer::Init correctly homes the bootstrap customer on the app node. Make
+# that test fixture unassigned so the installer can exercise its existing-
+# customer link path without weakening the rule that forbids implicit moves.
+docker exec va-postgres psql -U postgres -d voipappz -v ON_ERROR_STOP=1 -c \
+  "UPDATE customers SET node_uuid = NULL WHERE uuid = '$FIRST_UUID'" >/dev/null
+customer=$(api GET "/customers/$FIRST_UUID")
+assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
+
 run_installer success existing-customer
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
