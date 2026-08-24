@@ -47,7 +47,8 @@ wins.
 5. Runs `voipappz node register` in a temporary container. It reads the YAML
    and sends node data only.
 6. Resolves the customer through the mothership API, starts only the `voip`
-   profile with Docker Compose, and waits for node health.
+   profile with Docker Compose, and uses its CLI to apply the mounted YAML to
+   Kamailio before waiting for node health.
 
 The installer never starts or installs the mothership and never asks the CLI
 to create a customer.

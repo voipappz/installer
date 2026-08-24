@@ -585,6 +585,18 @@ if [ "$START" = "1" ]; then
   done
   curl -fsS --max-time 3 http://127.0.0.1:4000/health >/dev/null 2>&1 \
     || die "va-voip did not become healthy; run: docker logs va-voip"
+  docker_cmd exec -e VA_CONFIG_PATH=/tmp/node.yaml \
+    va-voip voipappz sbc egress sync >/dev/null \
+    || die "the node CLI could not apply va.yaml to Kamailio"
+
+  _attempt=0
+  while [ "$_attempt" -lt 40 ]; do
+    docker_cmd exec va-voip voipappz health >/dev/null 2>&1 && break
+    _attempt=$((_attempt + 1))
+    sleep 3
+  done
+  docker_cmd exec va-voip voipappz health >/dev/null 2>&1 \
+    || die "va-voip did not pass node health; run: docker exec va-voip voipappz health"
   say "va-voip is healthy"
 else
   say "installed but not started (START=0)"
