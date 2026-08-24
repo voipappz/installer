@@ -40,34 +40,33 @@ wins.
 1. Installs Docker Engine and Compose v2 when Docker is absent.
 2. Uses a temporary Docker configuration to pull
    `nirlevi/va-crystal:node`, then removes the registry credential file.
-3. Extracts the existing `voipappz` CLI and bundled stack into
-   `/opt/voipappz`.
-4. Creates or updates `/opt/voipappz/config/va.yaml` and verifies Compose
-   mounts it at `/tmp/node.yaml` in `va-voip`.
-5. Runs the existing `voipappz node register` command. That command reads the
-   YAML and sends node data only.
-6. Resolves the customer through the mothership API, then starts only
-   `voipappz up --profile voip` and waits for node health.
+3. Extracts the bundled stack into `/opt/voipappz` and runs its existing CLI
+   from the image.
+4. Creates or updates `/opt/voipappz/config/va.yaml`; Compose mounts that file
+   at `/tmp/node.yaml` in `va-voip`.
+5. Runs `voipappz node register` in a temporary container. It reads the YAML
+   and sends node data only.
+6. Resolves the customer through the mothership API, starts only the `voip`
+   profile with Docker Compose, and waits for node health.
 
 The installer never starts or installs the mothership and never asks the CLI
 to create a customer.
 
 ## Operate the node
 
-Use the installed CLI for node management:
+The CLI lives in the node container. Use it for node operations:
 
 ```sh
 cd /opt/voipappz
-voipappz status --profile voip
-voipappz health
-voipappz test --level ping
-voipappz logs
-voipappz restart
+docker compose --profile voip ps
+docker exec va-voip voipappz health
+docker exec va-voip voipappz test --level ping
+docker exec va-voip voipappz node --help
 ```
 
-`status` checks the expected VoIP service, `health` reads the node's aggregate
-Kamailio/FreeSWITCH verdict, and the ping test sends a real SIP OPTIONS request
-to Kamailio. Docker Compose remains behind the CLI.
+Docker Compose owns container lifecycle. The CLI owns node operations:
+registration, configuration, Kamailio, FreeSWITCH, health, and SIP tests. The
+ping test sends a real SIP OPTIONS request to Kamailio.
 
 ## Customer behavior
 
@@ -110,6 +109,6 @@ public `voipappz/mothership`, and boots its complete `app + storage`
 environment. It uses the real onboarding script, API, `Customer::Init`, and
 node CLI to test existing/new customers, retries, conflicts, disabled records,
 authorization failures, and UUID idempotency. It then shuts mothership down and
-uses the installed CLI to check the separate VoIP runtime, node health, and a
-real Kamailio SIP response before checking the `/tmp/node.yaml` mount. There is
-no Python or fake API in this repository.
+uses the in-container CLI to check the separate VoIP runtime, node health, and
+a real Kamailio SIP response before checking the `/tmp/node.yaml` mount. There
+is no Python or fake API in this repository.

@@ -27,11 +27,14 @@ The default installation is `/opt/voipappz` and the default private image is
    hosts.
 3. Log in to Docker Hub with a temporary Docker configuration, pull the node
    image, and remove the temporary credentials.
-4. Extract the existing `voipappz` binary and `/stack` from the image.
-5. Install, preserve, or create `config/va.yaml` and ensure Compose mounts it
-   at `/tmp/node.yaml`.
-6. Register the node, resolve its customer, erase authorization from the
-   process environment, and start only `voipappz up --profile voip`.
+4. Extract `/stack` from the image and verify the in-container `voipappz` CLI.
+5. Install, preserve, or create `config/va.yaml`; run the existing setup code
+   from the image; and ensure Compose mounts the YAML at `/tmp/node.yaml`.
+6. Register the node with the CLI in a temporary container, resolve its
+   customer, erase authorization, and start only the `voip` Compose profile.
+
+Docker Compose owns container lifecycle. The one production CLI stays inside
+the image and owns node setup, registration, health, Kamailio, and FreeSWITCH.
 
 The installed node needs an external NATS broker. The installer may add
 `mothership.url` or `broker.url` only when those values are absent from the
@@ -81,7 +84,9 @@ the requested customer name, never a credential.
 These rules are non-negotiable:
 
 - Never write `VA_API_AUTHORIZATION`, a Docker token, or an Account credential
-  to YAML, `.env`, the installation directory, a container, or logs.
+  to YAML, `.env`, the installation directory, the running node, or logs.
+- Pass Account authorization only to the short-lived registration CLI process
+  through its environment; remove that container when the command exits.
 - Never pass a secret as a command-line argument when stdin or the process
   environment can be used.
 - Prompt for secret values through `/dev/tty`, with terminal echo disabled.
@@ -109,9 +114,9 @@ job:
    packages.
 3. Runs the public installer so Docker installation and the real private image
    pull are exercised on a clean host.
-4. Uses the extracted CLI and mothership's committed `config/va.yaml.example`
-   to boot the complete mothership `app + storage` environment with
-   `voipappz up --profile app --wait --ci`.
+4. Uses the image CLI for setup and mothership's committed
+   `config/va.yaml.example`, then boots the complete mothership `app + storage`
+   environment with Docker Compose.
 5. Runs mothership's real onboarding script, Account authentication, node API,
    customer API, and `Customer::Init`.
 6. Tests existing/new customer handling, exact-name idempotency, UUID
@@ -119,9 +124,9 @@ job:
    disabled customers, re-home refusal, incomplete initialization, invalid
    authorization, and credential redaction.
 7. Stops mothership, starts a separate NATS broker, starts the installed VoIP
-   profile, and uses the installed CLI to verify service status, aggregate node
-   health, and a real Kamailio SIP OPTIONS response. Raw Docker inspection is
-   limited to the `/tmp/node.yaml` mount and credential-boundary assertions.
+   profile, and uses the in-container CLI to verify aggregate node health and a
+   real Kamailio SIP OPTIONS response. Docker inspection verifies service state,
+   the `/tmp/node.yaml` mount, and the credential boundary.
 
 There is no Python mock, fake API, or installer-specific customer model. Tests
 must use the real public mothership and existing CLI.

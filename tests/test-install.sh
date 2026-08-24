@@ -236,7 +236,7 @@ INTERNAL_IP=$(ip route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head
 render_example "$BOOT_CONFIG" "$NODE_UUID" "$NODE_SIP_UUID" Installer-CI-Node switch "$INTERNAL_IP"
 
 # First invocation has no Docker and must install it, pull the private node
-# image, extract the existing CLI/stack, and install the supplied YAML.
+# image, extract its stack, verify its in-container CLI, and install the YAML.
 FIRST_LOG="$LOG_DIR/clean-install.log"
 env \
   INSTALL_DIR="$NODE_DIR" \
@@ -255,13 +255,14 @@ assert_no_secret_in_log "$FIRST_LOG"
 docker info >/dev/null
 docker compose version >/dev/null
 docker image inspect nirlevi/va-crystal:node >/dev/null
-[[ -x $NODE_DIR/bin/voipappz ]] || die 'CLI was not extracted from the node image'
+docker run --rm --entrypoint voipappz nirlevi/va-crystal:node node --help >/dev/null \
+  || die 'node image CLI is unavailable'
 grep -Fq -- './config/va.yaml:/tmp/node.yaml' "$NODE_DIR/docker-compose.yaml" \
   || die 'compose does not mount va.yaml at /tmp/node.yaml'
 [[ -f $NODE_DIR/config/va.yaml ]] || die 'va.yaml was not installed'
 find /tmp -maxdepth 1 -type d -name 'voipappz-docker-auth.*' -print -quit | grep -q . \
   && die 'temporary installer Docker credentials were not removed'
-pass 'clean host installs Docker, image, CLI, stack, and va.yaml'
+pass 'clean host installs Docker, image, stack, and va.yaml'
 
 # A separate temporary Docker config is used only by this test environment to
 # pull the full mothership images. The installer already removed its own.
@@ -272,20 +273,22 @@ printf '%s' "$VA_REGISTRY_TOKEN" |
   || die 'Docker Hub login failed for mothership images'
 
 # Configure the public mothership checkout from its own committed example and
-# boot its normal app profile. The existing CLI includes every storage service
-# required by app, so this loads app + storage rather than an API-only subset.
-mkdir -p "$MOTHERSHIP_DIR/bin" "$MOTHERSHIP_DIR/config"
-install -m 0755 "$NODE_DIR/bin/voipappz" "$MOTHERSHIP_DIR/bin/voipappz"
+# boot the complete app + storage environment with Docker Compose. The runtime
+# CLI stays inside the node image and is used only for setup and node commands.
+mkdir -p "$MOTHERSHIP_DIR/config"
 render_example "$MOTHERSHIP_DIR/config/va.yaml" \
   "$APP_UUID" "$APP_SIP_UUID" Installer-CI-App app "$INTERNAL_IP"
-(
-  cd "$MOTHERSHIP_DIR"
-  VA_API_URL="$API_URL" ./bin/voipappz setup --ci
-) >"$LOG_DIR/mothership-setup.log" 2>&1
+docker run --rm --network host \
+  --user "$(id -u):$(id -g)" \
+  --entrypoint voipappz \
+  -e VA_PROJECT_DIR=/work -e VA_PATH= -e "VA_API_URL=$API_URL" \
+  -v "$MOTHERSHIP_DIR:/work" -w /work \
+  nirlevi/va-crystal:node setup --ci \
+  >"$LOG_DIR/mothership-setup.log" 2>&1
 MOTHERSHIP_UP=1
 (
   cd "$MOTHERSHIP_DIR"
-  ./bin/voipappz up --profile app --wait --ci
+  docker compose --profile app --profile storage up -d
 ) >"$LOG_DIR/mothership-up.log" 2>&1 || {
   show_safe_log "$LOG_DIR/mothership-up.log"
   die 'complete mothership environment failed to start'
@@ -329,14 +332,6 @@ until api GET /customers >/dev/null 2>&1; do
   sleep 3
 done
 pass 'real Customer::Init created the bootstrap customer and Account'
-
-# Normalize the node document with the existing setup implementation. This
-# fills the complete SIP topology from the committed example without a second
-# YAML implementation in the installer tests.
-(
-  cd "$NODE_DIR"
-  ./bin/voipappz setup --ci
-) >"$LOG_DIR/node-setup.log" 2>&1
 
 run_installer success existing-customer
 customer=$(api GET "/customers/$FIRST_UUID")
@@ -434,40 +429,27 @@ run_installer success start-voip \
 NODE_UP=1
 wait_http http://127.0.0.1:4000/health 180
 
-# The installed CLI is the operator interface. Prove it can inspect the VoIP
-# profile, read the node's own aggregate health (including Kamailio and
-# FreeSWITCH), and complete a real SIP transaction with Kamailio.
-(
-  cd "$NODE_DIR"
-  ./bin/voipappz status --profile voip --json
-) >"$LOG_DIR/voip-status.json" 2>&1 || {
-  show_safe_log "$LOG_DIR/voip-status.json"
-  die 'installed CLI could not report VoIP status'
-}
-jq -e '.services | any(.name == "voip" and .container == "va-voip" and .state == "running")' \
-  "$LOG_DIR/voip-status.json" >/dev/null \
-  || die 'installed CLI did not report the VoIP service as running'
+# The in-container CLI is the operator interface. Prove the VoIP container is
+# running, then use that CLI for health and a real SIP transaction.
+[[ $(docker inspect -f '{{.State.Running}}' va-voip) == true ]] \
+  || die 'VoIP service is not running'
 
 deadline=$((SECONDS + 180))
-until (
-  cd "$NODE_DIR"
-  ./bin/voipappz health
-) >"$LOG_DIR/voip-health.log" 2>&1; do
+until docker exec va-voip voipappz health \
+  >"$LOG_DIR/voip-health.log" 2>&1; do
   if ((SECONDS >= deadline)); then
     show_safe_log "$LOG_DIR/voip-health.log"
-    die 'installed CLI did not report a healthy VoIP node'
+    die 'in-container CLI did not report a healthy VoIP node'
   fi
   sleep 3
 done
 
-(
-  cd "$NODE_DIR"
-  ./bin/voipappz test --level ping
-) >"$LOG_DIR/kamailio-sip.log" 2>&1 || {
+docker exec va-voip voipappz test --level ping \
+  >"$LOG_DIR/kamailio-sip.log" 2>&1 || {
   show_safe_log "$LOG_DIR/kamailio-sip.log"
-  die 'installed CLI could not complete a SIP OPTIONS transaction with Kamailio'
+  die 'in-container CLI could not complete a SIP OPTIONS transaction with Kamailio'
 }
-pass 'installed CLI reports the VoIP stack and validates Kamailio on the wire'
+pass 'in-container CLI reports node health and validates Kamailio on the wire'
 
 mount_source=$(docker inspect va-voip --format \
   '{{range .Mounts}}{{if eq .Destination "/tmp/node.yaml"}}{{.Source}}{{end}}{{end}}')

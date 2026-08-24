@@ -30,6 +30,7 @@ DOCKER_CONFIG_DIR=""
 DOCKER_INSTALL_SCRIPT=""
 API_BODY_FILE=""
 PROVISIONING_GUARD=""
+ENV_TEMP=""
 TTY_STATE=""
 REPLY=""
 
@@ -73,6 +74,78 @@ docker_copy_cmd() {
   fi
 }
 
+image_cli() {
+  _va_path=$1
+  shift
+  if [ "$FS_AS_ROOT" = "1" ]; then
+    docker_cmd run --rm --network host \
+      --entrypoint voipappz \
+      -e VA_PROJECT_DIR=/work -e "VA_PATH=$_va_path" \
+      -v "$INSTALL_DIR:/work" -w /work \
+      "$VA_VOIP_IMAGE" "$@"
+  else
+    docker_cmd run --rm --network host \
+      --user "$(id -u):$(id -g)" \
+      --entrypoint voipappz \
+      -e VA_PROJECT_DIR=/work -e "VA_PATH=$_va_path" \
+      -v "$INSTALL_DIR:/work" -w /work \
+      "$VA_VOIP_IMAGE" "$@"
+  fi
+}
+
+register_node_cli() (
+  export VA_API_AUTHORIZATION
+  if [ "$FS_AS_ROOT" = "1" ]; then
+    docker_cmd run --rm --network host \
+      --entrypoint voipappz \
+      -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
+      -e VA_API_AUTHORIZATION \
+      -v "$INSTALL_DIR:/work" -w /work \
+      "$VA_VOIP_IMAGE" node register
+  else
+    docker_cmd run --rm --network host \
+      --user "$(id -u):$(id -g)" \
+      --entrypoint voipappz \
+      -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
+      -e VA_API_AUTHORIZATION \
+      -v "$INSTALL_DIR:/work" -w /work \
+      "$VA_VOIP_IMAGE" node register
+  fi
+)
+
+image_cli_tty() {
+  if [ "$FS_AS_ROOT" = "1" ]; then
+    docker_cmd run --rm -it --network host \
+      --entrypoint voipappz \
+      -e VA_PROJECT_DIR=/work -e VA_PATH= \
+      -v "$INSTALL_DIR:/work" -w /work \
+      "$VA_VOIP_IMAGE" setup < /dev/tty
+  else
+    docker_cmd run --rm -it --network host \
+      --user "$(id -u):$(id -g)" \
+      --entrypoint voipappz \
+      -e VA_PROJECT_DIR=/work -e VA_PATH= \
+      -v "$INSTALL_DIR:/work" -w /work \
+      "$VA_VOIP_IMAGE" setup < /dev/tty
+  fi
+}
+
+set_compose_env() {
+  _env_key=$1
+  _env_value=$2
+  [ -n "$_env_value" ] || return 0
+  validate_scalar "$_env_key" "$_env_value"
+  ENV_TEMP="$(fs_cmd mktemp "$INSTALL_DIR/.env.tmp.XXXXXX")" \
+    || die "could not update $INSTALL_DIR/.env"
+  fs_cmd sed "/^${_env_key}=/d" "$INSTALL_DIR/.env" |
+    fs_cmd tee "$ENV_TEMP" >/dev/null
+  printf '%s=%s\n' "$_env_key" "$_env_value" |
+    fs_cmd tee -a "$ENV_TEMP" >/dev/null
+  fs_cmd chmod 0600 "$ENV_TEMP"
+  fs_cmd mv -f -- "$ENV_TEMP" "$INSTALL_DIR/.env"
+  ENV_TEMP=""
+}
+
 cleanup_docker_config() {
   case "${DOCKER_CONFIG_DIR:-}" in
     /tmp/voipappz-docker-auth.*)
@@ -91,6 +164,7 @@ cleanup() {
   set +e
   [ -z "$TTY_STATE" ] || stty "$TTY_STATE" < /dev/tty 2>/dev/null
   [ -z "$CID" ] || docker_cmd rm -f "$CID" >/dev/null 2>&1
+  [ -z "$ENV_TEMP" ] || fs_cmd rm -f -- "$ENV_TEMP" 2>/dev/null
   cleanup_docker_config
   case "$DOCKER_INSTALL_SCRIPT" in
     /tmp/voipappz-docker-install.*) rm -f -- "$DOCKER_INSTALL_SCRIPT" ;;
@@ -400,21 +474,19 @@ fi
 VA_REGISTRY_TOKEN=""
 unset VA_REGISTRY_TOKEN VA_REGISTRY_USER 2>/dev/null
 
-step "3/6  CLI and stack"
+step "3/6  Node stack"
 CID="$(docker_cmd create "$VA_VOIP_IMAGE" true)" || die "could not open $VA_VOIP_IMAGE"
-fs_cmd mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/config"
-docker_copy_cmd cp "$CID:/usr/local/bin/voipappz" "$INSTALL_DIR/bin/voipappz" \
-  || die "$VA_VOIP_IMAGE has no bundled voipappz CLI"
+fs_cmd mkdir -p "$INSTALL_DIR/config"
 docker_copy_cmd cp "$CID:/stack/." "$INSTALL_DIR/" \
-  || die "$VA_VOIP_IMAGE has no bundled mothership stack"
+  || die "$VA_VOIP_IMAGE has no bundled node stack"
 docker_cmd rm -f "$CID" >/dev/null
 CID=""
 [ -f "$INSTALL_DIR/docker-compose.yaml" ] || die "the bundled stack has no docker-compose.yaml"
 grep -Fq -- './config/va.yaml:/tmp/node.yaml' "$INSTALL_DIR/docker-compose.yaml" \
   || die "the bundled stack does not mount config/va.yaml at /tmp/node.yaml"
-fs_cmd chmod 0755 "$INSTALL_DIR/bin/voipappz"
-root_cmd ln -sf "$INSTALL_DIR/bin/voipappz" /usr/local/bin/voipappz 2>/dev/null || true
-say "installed $("$INSTALL_DIR/bin/voipappz" --version 2>/dev/null || printf 'CLI')"
+docker_cmd run --rm --entrypoint voipappz "$VA_VOIP_IMAGE" node --help >/dev/null \
+  || die "$VA_VOIP_IMAGE has no working node CLI"
+say "installed the stack and verified its in-container CLI"
 
 step "4/6  va.yaml"
 VA_YAML="$INSTALL_DIR/config/va.yaml"
@@ -432,11 +504,7 @@ elif [ -f "$VA_YAML" ]; then
 else
   has_tty || die "no va.yaml and no terminal; pass VA_CONFIG=/path/to/va.yaml"
   say "running the existing setup wizard"
-  if [ "$FS_AS_ROOT" = "1" ]; then
-    (cd "$INSTALL_DIR" && root_cmd ./bin/voipappz setup)
-  else
-    (cd "$INSTALL_DIR" && ./bin/voipappz setup)
-  fi
+  image_cli_tty
 fi
 [ -f "$VA_YAML" ] || die "setup did not create $VA_YAML"
 fs_cmd chmod 0644 "$VA_YAML"
@@ -454,13 +522,21 @@ if ! grep -Eq '^[[:space:]]*broker:' "$VA_YAML"; then
   say "WARNING: va.yaml has no broker; it must be configured before the node starts"
 fi
 
-NODE_ENV="$("$INSTALL_DIR/bin/voipappz" env --export --file "$VA_YAML" 2>/dev/null)" \
-  || die "the installed CLI could not parse $VA_YAML"
+# Run the existing setup implementation in the image. This normalizes the
+# supplied YAML and creates the Compose .env without installing a second CLI.
+image_cli "" setup --ci >/dev/null \
+  || die "the node CLI could not finish setup"
+
+NODE_ENV="$(image_cli "/work/config/va.yaml" env --export 2>/dev/null)" \
+  || die "the image CLI could not parse $VA_YAML"
 NODE_UUID="$(printf '%s\n' "$NODE_ENV" | sed -n 's/^VA_NODE_UUID=//p' | head -1)"
 CONFIG_API_URL="$(printf '%s\n' "$NODE_ENV" | sed -n 's/^VA_API_URL=//p' | head -1)"
+CONFIG_NATS_URL="$(printf '%s\n' "$NODE_ENV" | sed -n 's/^VA_NATS_URL=//p' | head -1)"
 NODE_ENV=""
 [ -n "$NODE_UUID" ] || die "va.yaml did not produce a node UUID"
 [ -z "$CONFIG_API_URL" ] || VA_API_URL=$CONFIG_API_URL
+set_compose_env VA_API_URL "$CONFIG_API_URL"
+set_compose_env VA_NATS_URL "$CONFIG_NATS_URL"
 
 step "5/6  Registration"
 SELECTED_CUSTOMER_UUID=""
@@ -475,7 +551,7 @@ if [ "$VA_REGISTER" = "1" ]; then
   case "$_api_base" in */api) API_ROOT=$_api_base ;; *) API_ROOT="$_api_base/api" ;; esac
 
   say "registering node $NODE_UUID through the existing CLI"
-  (cd "$INSTALL_DIR" && VA_API_AUTHORIZATION="$VA_API_AUTHORIZATION" ./bin/voipappz node register) \
+  register_node_cli \
     || die "node registration failed; no customer change was attempted"
 
   API_BODY_FILE="$(mktemp /tmp/voipappz-api-response.XXXXXX)"
@@ -496,11 +572,8 @@ unset VA_API_AUTHORIZATION 2>/dev/null
 
 step "6/6  VoIP plane"
 if [ "$START" = "1" ]; then
-  if [ "$FS_AS_ROOT" = "1" ]; then
-    (cd "$INSTALL_DIR" && root_cmd ./bin/voipappz up --profile voip)
-  else
-    (cd "$INSTALL_DIR" && ./bin/voipappz up --profile voip)
-  fi
+  (cd "$INSTALL_DIR" && docker_cmd compose --profile voip up -d) \
+    || die "could not start the VoIP profile"
 
   _attempt=0
   while [ "$_attempt" -lt 40 ]; do
@@ -525,5 +598,6 @@ if [ "$START" = "1" ]; then
   say "container: va-voip"
   say "health:    http://127.0.0.1:4000/health"
 else
-  say "start:     cd $INSTALL_DIR && voipappz up --profile voip"
+  say "start:     cd $INSTALL_DIR && docker compose --profile voip up -d"
 fi
+say "CLI:       docker exec va-voip voipappz --help"
