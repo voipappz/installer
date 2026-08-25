@@ -912,11 +912,16 @@ if [ -n "$VA_CONFIG" ]; then
   fi
 elif [ -f "$VA_YAML" ]; then
   say "keeping $INSTALL_DIR/config/va.yaml"
-else
-  has_tty || die "no va.yaml and no terminal; pass VA_CONFIG=/path/to/va.yaml"
+elif has_tty; then
   say "running the existing setup wizard"
   image_cli_tty
   WIZARD_RAN=1
+else
+  # Unattended and no YAML given: the node-only setup with its defaults (a
+  # generated UUID and name, detected addresses). Nothing is asked.
+  say "no va.yaml and no terminal; creating one with the node CLI defaults"
+  image_cli /work/config/va.yaml setup --ci >/dev/null \
+    || die "the node CLI could not create va.yaml; pass VA_CONFIG=/path/to/va.yaml"
 fi
 [ -f "$VA_YAML" ] || die "setup did not create $VA_YAML"
 fs_cmd chmod 0644 "$VA_YAML"

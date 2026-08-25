@@ -4,12 +4,20 @@
 set -Eeuo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# The mothership fixture is NOT cloned: the node image carries the whole stack
+# repository at /stack (compose, config/va.yaml.example, services.tsv, the
+# onboarding script), and the installer extracts it. After the first install
+# has pulled the image, the test takes its own copy of /stack and boots the
+# mothership from that. A local checkout may still be passed as $1 by a
+# developer who wants to test against uncommitted mothership changes.
 MOTHERSHIP_DIR=${1:-}
-[[ -n $MOTHERSHIP_DIR && -f $MOTHERSHIP_DIR/docker-compose.yaml ]] || {
-  echo 'usage: tests/test-install.sh /path/to/mothership' >&2
-  exit 2
-}
-MOTHERSHIP_DIR=$(cd "$MOTHERSHIP_DIR" && pwd)
+if [[ -n $MOTHERSHIP_DIR ]]; then
+  [[ -f $MOTHERSHIP_DIR/docker-compose.yaml ]] || {
+    echo "usage: tests/test-install.sh [/path/to/mothership]" >&2
+    exit 2
+  }
+  MOTHERSHIP_DIR=$(cd "$MOTHERSHIP_DIR" && pwd)
+fi
 
 : "${VA_REGISTRY_USER:?VA_REGISTRY_USER is required}"
 : "${VA_REGISTRY_TOKEN:?VA_REGISTRY_TOKEN is required}"
@@ -287,14 +295,14 @@ printf 'Real VoIPAppz installer integration\n'
 command -v docker >/dev/null 2>&1 && die 'Docker must be absent at test start'
 INTERNAL_IP=$(ip route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1)
 [[ -n $INTERNAL_IP && $INTERNAL_IP != 127.* ]] || die 'could not detect a usable runner IP'
-render_example "$BOOT_CONFIG" "$NODE_UUID" "$NODE_SIP_UUID" Installer-CI-Node switch "$INTERNAL_IP"
 
 # First invocation has no Docker and must install it, pull the private node
-# image, extract its stack, verify its in-container CLI, and install the YAML.
+# image, extract its stack, verify its in-container CLI, and — with no YAML
+# and no terminal — create va.yaml from the node CLI's defaults.
 FIRST_LOG="$LOG_DIR/clean-install.log"
 env \
   INSTALL_DIR="$NODE_DIR" \
-  VA_CONFIG="$BOOT_CONFIG" \
+  VA_CONFIG= \
   VA_API_URL="$API_URL" \
   VA_NATS_URL=nats://127.0.0.1:4222 \
   VA_REGISTER=0 \
@@ -313,10 +321,26 @@ docker run --rm --entrypoint voipappz nirlevi/va-crystal:node node --help >/dev/
   || die 'node image CLI is unavailable'
 grep -Fq -- './config/va.yaml:/tmp/node.yaml' "$NODE_DIR/docker-compose.yaml" \
   || die 'compose does not mount va.yaml at /tmp/node.yaml'
-[[ -f $NODE_DIR/config/va.yaml ]] || die 'va.yaml was not installed'
+[[ -f $NODE_DIR/config/va.yaml ]] || die 'va.yaml was not created by the node CLI defaults'
+grep -Eq '^  uuid: [0-9a-f-]{36}$' "$NODE_DIR/config/va.yaml" || die 'the unattended va.yaml has no node uuid'
 find /tmp -maxdepth 1 -type d -name 'voipappz-docker-auth.*' -print -quit | grep -q . \
   && die 'temporary installer Docker credentials were not removed'
 pass 'clean host installs Docker, image, stack, and va.yaml'
+
+# The mothership, from the image: /stack is the stack repository, and this
+# copy is the one the test boots and onboards. No clone of anything.
+if [[ -z $MOTHERSHIP_DIR ]]; then
+  MOTHERSHIP_DIR="$RUN_ROOT/mothership"
+  mkdir -p "$MOTHERSHIP_DIR"
+  stack_cid=$(docker create nirlevi/va-crystal:node true)
+  docker cp "$stack_cid:/stack/." "$MOTHERSHIP_DIR/" || die 'the node image has no /stack to boot a mothership from'
+  docker rm -f "$stack_cid" >/dev/null
+  for f in docker-compose.yaml config/va.yaml.example config/services.tsv scripts/onboard-customer.sh; do
+    [[ -f $MOTHERSHIP_DIR/$f ]] || die "the image's /stack lacks $f"
+  done
+  pass 'mothership fixture taken from the node image (nothing cloned)'
+fi
+render_example "$BOOT_CONFIG" "$NODE_UUID" "$NODE_SIP_UUID" Installer-CI-Node switch "$INTERNAL_IP"
 
 # Offline image source: a docker-save archive loaded with VA_IMAGE_ARCHIVE and
 # no registry credentials. The archive is saved under another tag so the load

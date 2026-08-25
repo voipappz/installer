@@ -10,8 +10,7 @@ C = \033[36m
 D = \033[2m
 R = \033[0m
 
-# Sibling checkouts on a workstation.
-MOTHERSHIP_DIR ?= $(abspath $(CURDIR)/../mothership)
+# Sibling checkout on a workstation (only for install-archive).
 VA_CRYSTAL_DIR ?= $(abspath $(CURDIR)/../va-crystal)
 # The newest archive `make s3-archive` wrote in va-crystal, if any.
 ARCHIVE ?= $(lastword $(sort $(wildcard $(VA_CRYSTAL_DIR)/ci/build/va-crystal-node-*.tar.gz)))
@@ -22,7 +21,7 @@ help:
 	  'check'           'what CI runs first: syntax (sh, dash, bash), shellcheck, clean diff, no python' \
 	  'install'         'run install.sh from this checkout (asks sudo, image source, node, mothership, token)' \
 	  'install-archive' 'the same, loading the newest ../va-crystal/ci/build/*.tar.gz (ARCHIVE=… to pick one)' \
-	  'test'            'the full integration test against a real mothership — DISPOSABLE HOST ONLY, see DEVELOPMENT.md'
+	  'test'            'the integration test: real mothership booted from the node image — DISPOSABLE HOST ONLY'
 	@printf '\n  $(D)docs: README.md (operators)  DEVELOPMENT.md (developers)  CLAUDE.md (engineering notes)$(R)\n\n'
 
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from
@@ -54,10 +53,12 @@ install-archive:
 	VA_IMAGE_ARCHIVE="$(ARCHIVE)" sh install.sh
 
 # The "Clean install + real mothership" job, minus tests/clean-runner.sh
-# (which purges Docker and refuses to run outside GitHub Actions). It boots the
-# whole mothership, creates a system user, writes /opt/voipappz-ci — run it on
-# a throwaway VM, never on a workstation you care about.
+# (which purges Docker and refuses to run outside GitHub Actions). The
+# mothership is booted from the /stack inside the node image — nothing is
+# cloned; pass MOTHERSHIP_DIR=… only to test against a local checkout. It
+# creates a system user and writes /opt/voipappz-ci — run it on a throwaway
+# VM, never on a workstation you care about.
+MOTHERSHIP_DIR ?=
 test:
-	@test -f "$(MOTHERSHIP_DIR)/docker-compose.yaml" || { printf '$(B)no mothership checkout at $(MOTHERSHIP_DIR)$(R) — git clone git@github.com:voipappz/mothership ../mothership\n'; exit 1; }
 	@test -n "$${VA_REGISTRY_USER:-}" && test -n "$${VA_REGISTRY_TOKEN:-}" || { printf '$(B)export VA_REGISTRY_USER and VA_REGISTRY_TOKEN$(R) (Docker Hub, read access to nirlevi/va-crystal)\n'; exit 1; }
-	tests/test-install.sh "$(MOTHERSHIP_DIR)"
+	tests/test-install.sh $(MOTHERSHIP_DIR)

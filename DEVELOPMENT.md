@@ -17,16 +17,17 @@ If you only want to *install a node*, use [README.md](README.md).
 | `git`, `make` | this repo |
 | `gh` (optional) | watching GitHub Actions from the terminal |
 
-Optional sibling checkouts, expected next to this directory:
+Optional sibling checkout, expected next to this directory:
 
 ```
 voipappz/
 ├── installer/     this repo
-├── va-crystal/    builds the node image; `make s3-archive` writes a tar.gz the installer can load
-└── mothership/    the real API the integration test registers against
+└── va-crystal/    builds the node image; `make s3-archive` writes a tar.gz the installer can load
 ```
 
-Neither is required to edit and check the script.
+It is not required to edit and check the script. The mothership is **never
+cloned**: the integration test boots it from the `/stack` directory inside the
+node image, which is the stack repository as shipped.
 
 ## First run
 
@@ -80,9 +81,10 @@ Points worth knowing when reading the script:
 Two layers, mirroring `.github/workflows/ci.yml`:
 
 1. **`make check`** — static. Run before every commit.
-2. **`make test`** — the integration test, `tests/test-install.sh`. It boots
-   the complete mothership (`app + storage`) from `../mothership`, pulls the
-   real private image, installs the node several times (Docker Hub, local
+2. **`make test`** — the integration test, `tests/test-install.sh`. It pulls
+   the real private image, takes the stack repository from its `/stack`, boots
+   the complete mothership (`app + storage`) from that copy (nothing is
+   cloned; `MOTHERSHIP_DIR=…` overrides it with a local checkout), installs the node several times (Docker Hub, local
    archive, archive over HTTP, as a user outside the `docker` group, into a
    root-owned directory, over an untrusted TLS chain …), registers it, drives
    customer creation and `Customer::Init`, starts the VoIP profile and proves
@@ -110,6 +112,7 @@ secrets automatically.
 - **Clean install + real mothership / Ubuntu 22.04, 24.04** — the
   integration test, on pushes and manual dispatch only (fork PRs cannot
   receive the registry secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`).
+  It checks out only this repository.
 
 Watch a run: `gh run list --limit 1` then `gh run watch <id>`. A change is
 "done" when all four jobs are green.

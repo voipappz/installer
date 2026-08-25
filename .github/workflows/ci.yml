@@ -47,11 +47,6 @@ jobs:
       - name: Check out public installer
         uses: actions/checkout@v7
 
-      - name: Check out public mothership
-        uses: actions/checkout@v7
-        with:
-          repository: voipappz/mothership
-          path: mothership
 
       - name: Remove preinstalled Docker
         run: tests/clean-runner.sh
@@ -60,4 +55,6 @@ jobs:
         env:
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: tests/test-install.sh "$GITHUB_WORKSPACE/mothership"
+        # No mothership checkout: the test boots it from the /stack the node
+        # image carries, which is the only copy an installed node ever has.
+        run: tests/test-install.sh

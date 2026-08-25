@@ -29,7 +29,7 @@ The installer prompts on the terminal for:
   when left empty, the Account email and password. The Basic value is built
   only in memory.
 - Node setup answers when no `va.yaml` was supplied: node name, internal IP,
-  external IP. Nothing about domains or certificates — those belong to the
+  external IP. Without a terminal the node CLI's defaults are used instead. Nothing about domains or certificates — those belong to the
   mothership's own setup.
 - A customer name only when the Account has no customer yet.
 
@@ -221,9 +221,9 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 
 GitHub Actions runs on Ubuntu 22.04 and 24.04. The integration job removes the
 runner's preinstalled Docker packages, runs this installer, reinstalls from a
-`docker save` archive without registry credentials, checks out the
-public `voipappz/mothership`, and boots its complete `app + storage`
-environment. It uses the real onboarding script, API, `Customer::Init`, and
+`docker save` archive without registry credentials, then boots the complete
+mothership `app + storage` environment from the stack repository shipped
+inside the node image (nothing is cloned). It uses the real onboarding script, API, `Customer::Init`, and
 node CLI to test existing/new customers, retries, conflicts, disabled records,
 authorization failures, and UUID idempotency. It then shuts mothership down and
 uses the in-container CLI to check the separate VoIP runtime, aggregate node
