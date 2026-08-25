@@ -550,7 +550,8 @@ pass 'installation into a root-owned directory runs Compose elevated'
 # a Basic authorization value" while the same run passed from a docker-group
 # user. Registration is idempotent by node UUID, so re-registering is safe.
 SUDO_USER_NAME=va-ci-nodocker
-SUDO_DIR="$RUN_ROOT/nodocker"
+SUDO_DIR=/tmp/va-ci-nodocker   # /tmp: the RUN_ROOT mktemp dir is 0700 and blocks another user
+sudo rm -rf -- "$SUDO_DIR"
 sudo userdel -r "$SUDO_USER_NAME" >/dev/null 2>&1 || true
 sudo useradd -m -s /bin/sh "$SUDO_USER_NAME"
 printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$SUDO_USER_NAME" | sudo tee /etc/sudoers.d/va-ci-nodocker >/dev/null
