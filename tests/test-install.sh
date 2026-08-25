@@ -318,6 +318,37 @@ find /tmp -maxdepth 1 -type d -name 'voipappz-docker-auth.*' -print -quit | grep
   && die 'temporary installer Docker credentials were not removed'
 pass 'clean host installs Docker, image, stack, and va.yaml'
 
+# Offline image source: a docker-save archive loaded with VA_IMAGE_ARCHIVE and
+# no registry credentials. The archive is saved under another tag so the load
+# and retag path is exercised without a second registry pull.
+ARCHIVE_DIR="$(mktemp -d)"
+ARCHIVE_LOG="$LOG_DIR/archive-install.log"
+docker tag nirlevi/va-crystal:node installer-ci/va-crystal:archive
+docker save installer-ci/va-crystal:archive | gzip -1 >"$ARCHIVE_DIR/va-crystal.tar.gz"
+docker rmi installer-ci/va-crystal:archive >/dev/null
+env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN \
+  INSTALL_DIR="$ARCHIVE_DIR/node" \
+  VA_VOIP_IMAGE=installer-ci/va-crystal:loaded \
+  VA_IMAGE_ARCHIVE="$ARCHIVE_DIR/va-crystal.tar.gz" \
+  VA_CONFIG="$BOOT_CONFIG" \
+  VA_API_URL="$API_URL" \
+  VA_NATS_URL=nats://127.0.0.1:4222 \
+  VA_REGISTER=0 \
+  START=0 \
+  sh "$ROOT/install.sh" </dev/null >"$ARCHIVE_LOG" 2>&1 || {
+    show_safe_log "$ARCHIVE_LOG"
+    die 'installation from an image archive failed'
+  }
+docker image inspect installer-ci/va-crystal:loaded >/dev/null \
+  || die 'the loaded archive was not tagged as VA_VOIP_IMAGE'
+grep -Fq -- 'tagged installer-ci/va-crystal:archive as installer-ci/va-crystal:loaded' "$ARCHIVE_LOG" \
+  || die 'archive install did not report the retag'
+! grep -Fq -- 'logging in to' "$ARCHIVE_LOG" || die 'archive install contacted the registry'
+[[ -f $ARCHIVE_DIR/node/config/va.yaml ]] || die 'archive install did not install va.yaml'
+docker rmi installer-ci/va-crystal:loaded >/dev/null
+rm -rf "$ARCHIVE_DIR"
+pass 'installs from a local image archive without registry credentials'
+
 # A separate temporary Docker config is used only by this test environment to
 # pull the full mothership images. The installer already removed its own.
 mkdir -m 0700 "$DOCKER_AUTH_DIR"
@@ -561,10 +592,14 @@ pass 'Account Basic credential is absent from YAML, .env, and installer logs'
 # a 403 must stop before any customer change instead of reading as a bad login.
 LIMITED_EMAIL=installer-ci-limited@example.invalid
 LIMITED_PASSWORD='Vpz-Installer-CI-Limited-2026!'
+BOOTSTRAP_ACL=$(api GET /accounts | jq -r --arg email "$ACCOUNT_EMAIL" \
+  '.[] | select(.email == $email) | .acl.uuid')
+[[ $BOOTSTRAP_ACL =~ ^[0-9a-f-]{36}$ ]] || die 'could not read the bootstrap Account ACL'
 limited=$(api POST /accounts \
   --data-urlencode "email=$LIMITED_EMAIL" \
   --data-urlencode "password=$LIMITED_PASSWORD" \
   --data-urlencode "name=Installer CI Limited" \
+  --data-urlencode "acl_uuid=$BOOTSTRAP_ACL" \
   --data-urlencode 'enabled=true')
 assert_jq "$limited" '.uuid | type == "string"' 'a non-root Account exists for the 403 test'
 LIMITED_BASIC=$(printf '%s' "$LIMITED_EMAIL:$LIMITED_PASSWORD" | base64 | tr -d '\n')
