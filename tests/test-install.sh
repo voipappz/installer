@@ -498,11 +498,16 @@ pass 'invalid explicit mothership URL is rejected before it is persisted'
 # The same mothership over HTTPS with an incomplete chain. Registration and the
 # customer API must both fail without VA_CA_BUNDLE and both succeed with it.
 start_tls_proxy
-run_installer failure tls-untrusted-chain \
+# No flag, no prompt: the installer trusts the presented certificate, and when
+# the chain still cannot be verified it registers without verification and
+# says so. The install must succeed and the warning must be visible.
+run_installer success tls-untrusted-chain \
   VA_API_URL="$TLS_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
-# The probe stops it before the CLI is even asked (unattended: no trust prompt).
-grep -Eq 'untrusted mothership certificate|no customer change was attempted' "$LAST_LOG" \
-  || die 'an unverifiable mothership chain did not stop before customer work'
+grep -Fq 'trusting it as presented' "$LAST_LOG" \
+  || die 'an unverifiable mothership chain was not trusted as presented'
+grep -Fq 'registering without TLS verification' "$LAST_LOG" \
+  || die 'an unverifiable mothership chain did not fall back to no verification'
+rm -f -- "$NODE_DIR/config/ca-bundle.pem"
 
 run_installer success tls-ca-bundle \
   VA_API_URL="$TLS_URL" VA_CUSTOMER_UUID="$FIRST_UUID" \
@@ -512,7 +517,7 @@ cmp -s "$RUN_ROOT/tls/bundle.pem" "$NODE_DIR/config/ca-bundle.pem" \
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
   'customer API over the CA-bundled mothership linked the node'
-pass 'an incomplete mothership TLS chain is usable only through VA_CA_BUNDLE'
+pass 'an incomplete mothership TLS chain works automatically and with VA_CA_BUNDLE'
 
 # The bundle persists across reruns, so the URL keeps working without repeating
 # VA_CA_BUNDLE — and the installer never silently drops back to plain HTTP.

@@ -16,10 +16,11 @@ VA_IMAGE_SOURCE="${VA_IMAGE_SOURCE:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
 VA_CA_BUNDLE="${VA_CA_BUNDLE:-}"
-# 1 = trust the mothership's certificate as presented (the `curl -k` of this
-# installer): its chain is saved to config/ca-bundle.pem and verification then
-# runs against it. Interactively the fingerprint is shown and confirmed instead.
-VA_TLS_INSECURE="${VA_TLS_INSECURE:-0}"
+# Set to 1 when the mothership's certificate cannot be verified even after its
+# chain was trusted (an IP-addressed mothership with a hostname certificate):
+# registration then runs without TLS verification. Decided by the installer,
+# never by a flag.
+TLS_SKIP_VERIFY=0
 CA_BUNDLE=""
 if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
@@ -32,7 +33,6 @@ START="${START:-1}"
 
 case "$VA_REGISTER" in 0|1) ;; *) printf '!! VA_REGISTER must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$START" in 0|1) ;; *) printf '!! START must be 0 or 1\n' >&2; exit 1 ;; esac
-case "$VA_TLS_INSECURE" in 0|1) ;; *) printf '!! VA_TLS_INSECURE must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$INSTALL_DIR" in
   /*) ;;
   *) printf '!! INSTALL_DIR must be an absolute, specific directory\n' >&2; exit 1 ;;
@@ -168,7 +168,7 @@ register_node_cli() {
     docker_with_authorization run --rm --network host \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" -e "VA_TLS_INSECURE=$VA_TLS_INSECURE" \
+      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" -e "VA_TLS_INSECURE=$TLS_SKIP_VERIFY" \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   else
@@ -176,7 +176,7 @@ register_node_cli() {
       --user "$(id -u):$(id -g)" \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" -e "VA_TLS_INSECURE=$VA_TLS_INSECURE" \
+      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" -e "VA_TLS_INSECURE=$TLS_SKIP_VERIFY" \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   fi
@@ -553,7 +553,7 @@ validate_authorization() {
 # Save the certificate chain the mothership presents as this node's trust
 # anchor. Self-signed servers and private CAs both end up trusted this way,
 # with verification still on — the CLI reads SSL_CERT_FILE, nothing is
-# disabled. Called only after the operator (or VA_TLS_INSECURE=1) agreed.
+# disabled. Called by the probe when the certificate is not in the store.
 trust_mothership_certificate() {
   _host=${VA_API_URL#*://}; _host=${_host%%/*}
   case "$_host" in *:*) _port=${_host##*:}; _host=${_host%%:*} ;; *) _port=443 ;; esac
@@ -590,24 +590,16 @@ ensure_mothership_reachable() {
       60|35)
         if [ "$_trusted" = "1" ]; then
           # Trusting the chain was not enough: the certificate is for another
-          # name (an IP-addressed mothership with a hostname certificate).
-          # Only skipping verification can get past that.
-          [ "$VA_TLS_INSECURE" = "1" ] \
-            || die "the certificate of $VA_API_URL does not match its host; set VA_TLS_INSECURE=1 to register without verification"
-          say "certificate does not match the host; VA_TLS_INSECURE=1: registering without TLS verification"
+          # name (an IP-addressed mothership with a hostname certificate), or
+          # the chain is incomplete. Registration proceeds without verifying
+          # it — the operator chose this mothership URL, and it answered.
+          say "WARNING: the certificate of $VA_API_URL cannot be verified; registering without TLS verification"
+          TLS_SKIP_VERIFY=1
           return 0
         fi
-        say "the certificate of $VA_API_URL is not trusted"
+        say "the certificate of $VA_API_URL is not in the trust store; trusting it as presented:"
         mothership_certificate_summary
-        if [ "$VA_TLS_INSECURE" = "1" ]; then
-          say "VA_TLS_INSECURE=1: trusting it as presented"
-          trust_mothership_certificate; _trusted=1; continue
-        fi
-        if has_tty; then
-          ask "Trust this certificate and continue? [y/N]"
-          case "$REPLY" in y|Y|yes|YES) trust_mothership_certificate; _trusted=1; continue ;; esac
-        fi
-        die "untrusted mothership certificate; pass VA_CA_BUNDLE=<ca.pem>, or VA_TLS_INSECURE=1 to trust it as presented" ;;
+        trust_mothership_certificate; _trusted=1; continue ;;
       *)
         say "cannot reach $VA_API_URL: ${_err:-curl exit $_rc}"
         has_tty || die "mothership unreachable; check VA_API_URL and the network"
@@ -637,7 +629,7 @@ api_request() {
     {
       printf 'header = "Authorization: %s"\nheader = "Accept: application/json"\n' "$VA_API_AUTHORIZATION"
       [ -z "$CA_BUNDLE" ] || printf 'cacert = "%s"\n' "$CA_BUNDLE"
-      [ "$VA_TLS_INSECURE" = "0" ] || printf 'insecure\n'
+      [ "$TLS_SKIP_VERIFY" = "0" ] || printf 'insecure\n'
     } |
       curl --config - --silent --show-error --connect-timeout 10 --max-time 45 \
         --request "$_method" --output "$API_BODY_FILE" --write-out '%{http_code}' \
