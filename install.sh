@@ -33,6 +33,9 @@ PROVISIONING_GUARD=""
 ENV_TEMP=""
 TTY_STATE=""
 REPLY=""
+ACCOUNT_EMAIL_INPUT=""
+ACCOUNT_PASSWORD_INPUT=""
+ACCOUNT_BASIC_INPUT=""
 
 say()  { printf '  %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -174,7 +177,13 @@ cleanup() {
   esac
   VA_REGISTRY_TOKEN=""
   VA_API_AUTHORIZATION=""
-  unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION 2>/dev/null
+  VA_API_EMAIL=""
+  VA_API_PASSWORD=""
+  ACCOUNT_EMAIL_INPUT=""
+  ACCOUNT_PASSWORD_INPUT=""
+  ACCOUNT_BASIC_INPUT=""
+  REPLY=""
+  unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION VA_API_EMAIL VA_API_PASSWORD 2>/dev/null
   exit "$_status"
 }
 trap cleanup EXIT
@@ -203,6 +212,40 @@ ask() {
     TTY_STATE=""
     printf '\n' > /dev/tty
   fi
+}
+
+set_account_authorization() {
+  ACCOUNT_EMAIL_INPUT=${VA_API_EMAIL:-}
+  ACCOUNT_PASSWORD_INPUT=${VA_API_PASSWORD:-}
+
+  while [ -z "$ACCOUNT_EMAIL_INPUT" ]; do
+    ask "Account email"
+    ACCOUNT_EMAIL_INPUT=$REPLY
+    [ -n "$ACCOUNT_EMAIL_INPUT" ] || say "email cannot be empty; try again"
+  done
+  case "$ACCOUNT_EMAIL_INPUT" in *:*) die "Account email cannot contain ':'" ;; esac
+  printf '%s' "$ACCOUNT_EMAIL_INPUT" | LC_ALL=C grep -q '[[:cntrl:]]' \
+    && die "Account email contains a control character"
+
+  while [ -z "$ACCOUNT_PASSWORD_INPUT" ]; do
+    ask "Account password (input hidden)" silent
+    ACCOUNT_PASSWORD_INPUT=$REPLY
+    [ -n "$ACCOUNT_PASSWORD_INPUT" ] || say "password cannot be empty; try again"
+  done
+  printf '%s' "$ACCOUNT_PASSWORD_INPUT" | LC_ALL=C grep -q '[[:cntrl:]]' \
+    && die "Account password contains a control character"
+
+  ACCOUNT_BASIC_INPUT="$(
+    printf '%s:%s' "$ACCOUNT_EMAIL_INPUT" "$ACCOUNT_PASSWORD_INPUT" | base64 | tr -d '\n'
+  )"
+  VA_API_AUTHORIZATION="Basic $ACCOUNT_BASIC_INPUT"
+  ACCOUNT_EMAIL_INPUT=""
+  ACCOUNT_PASSWORD_INPUT=""
+  ACCOUNT_BASIC_INPUT=""
+  VA_API_EMAIL=""
+  VA_API_PASSWORD=""
+  REPLY=""
+  unset VA_API_EMAIL VA_API_PASSWORD 2>/dev/null
 }
 
 prepare_install_dir() {
@@ -545,13 +588,12 @@ step "5/6  Registration"
 SELECTED_CUSTOMER_UUID=""
 if [ "$VA_REGISTER" = "1" ]; then
   if [ -z "${VA_API_AUTHORIZATION:-}" ]; then
-    while [ -z "${VA_API_AUTHORIZATION:-}" ]; do
-      ask "Account Basic authorization (paste complete Basic ... value; input hidden)" silent
-      VA_API_AUTHORIZATION=$REPLY
-      [ -n "$VA_API_AUTHORIZATION" ] || say "authorization cannot be empty; try again"
-    done
+    set_account_authorization
   fi
   validate_authorization
+  VA_API_EMAIL=""
+  VA_API_PASSWORD=""
+  unset VA_API_EMAIL VA_API_PASSWORD 2>/dev/null
   validate_api_url
   _api_base=${VA_API_URL%/}
   case "$_api_base" in */api) API_ROOT=$_api_base ;; *) API_ROOT="$_api_base/api" ;; esac

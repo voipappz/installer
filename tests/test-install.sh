@@ -139,7 +139,7 @@ YAML
 
 assert_no_secret_in_log() {
   log=$1
-  for value in "$VA_REGISTRY_TOKEN" "$BASIC_AUTH" "$BASIC_VALUE"; do
+  for value in "$VA_REGISTRY_TOKEN" "$BASIC_AUTH" "$BASIC_VALUE" "$ACCOUNT_PASSWORD"; do
     [[ -z $value ]] && continue
     grep -Fq -- "$value" "$log" && die "a credential was written to $(basename "$log")"
   done
@@ -342,7 +342,8 @@ docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-app sh -c \
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
 
-run_installer success existing-customer
+run_installer success existing-customer \
+  VA_API_AUTHORIZATION= VA_API_EMAIL="$ACCOUNT_EMAIL" VA_API_PASSWORD="$ACCOUNT_PASSWORD"
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
   'existing customer is linked to this node'

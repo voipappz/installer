@@ -18,8 +18,8 @@ requirements itself and keeps the node in `/opt/voipappz`.
 The installer prompts on the terminal for:
 
 - Docker Hub user and access token, when the private image must be pulled.
-- An Account Basic authorization value for mothership registration. Input is
-  hidden while it is pasted.
+- Account email and password for mothership registration. Password input is
+  hidden; the Basic authorization value is built only in memory.
 - Node setup answers when no `va.yaml` was supplied.
 - A customer name only when the Account has no customer yet.
 
