@@ -346,8 +346,38 @@ grep -Fq -- 'tagged installer-ci/va-crystal:archive as installer-ci/va-crystal:l
 ! grep -Fq -- 'logging in to' "$ARCHIVE_LOG" || die 'archive install contacted the registry'
 [[ -f $ARCHIVE_DIR/node/config/va.yaml ]] || die 'archive install did not install va.yaml'
 docker rmi installer-ci/va-crystal:loaded >/dev/null
-rm -rf "$ARCHIVE_DIR"
 pass 'installs from a local image archive without registry credentials'
+
+# URL source: the same archive served over HTTP with its .sha256 beside it,
+# as S3 publishes it. VA_IMAGE_SOURCE=archive + a URL, no registry variables.
+URL_LOG="$LOG_DIR/archive-url-install.log"
+sha256sum "$ARCHIVE_DIR/va-crystal.tar.gz" | awk '{print $1}' >"$ARCHIVE_DIR/va-crystal.tar.gz.sha256"
+docker run -d --name installer-ci-www -p 127.0.0.1:18080:80 \
+  -v "$ARCHIVE_DIR:/usr/share/nginx/html:ro" nginx:alpine >/dev/null
+for _ in $(seq 1 30); do curl -fsI http://127.0.0.1:18080/va-crystal.tar.gz.sha256 >/dev/null 2>&1 && break; sleep 1; done
+env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN \
+  INSTALL_DIR="$ARCHIVE_DIR/node-url" \
+  VA_VOIP_IMAGE=installer-ci/va-crystal:fromurl \
+  VA_IMAGE_SOURCE=archive \
+  VA_IMAGE_ARCHIVE=http://127.0.0.1:18080/va-crystal.tar.gz \
+  VA_CONFIG="$BOOT_CONFIG" \
+  VA_API_URL="$API_URL" \
+  VA_NATS_URL=nats://127.0.0.1:4222 \
+  VA_REGISTER=0 \
+  START=0 \
+  sh "$ROOT/install.sh" </dev/null >"$URL_LOG" 2>&1 || {
+    show_safe_log "$URL_LOG"
+    die 'installation from an image archive URL failed'
+  }
+docker rm -f installer-ci-www >/dev/null
+grep -Fq -- 'sha256 verified' "$URL_LOG" || die 'URL install did not verify the published sha256'
+docker image inspect installer-ci/va-crystal:fromurl >/dev/null \
+  || die 'the downloaded archive was not tagged as VA_VOIP_IMAGE'
+find /tmp -maxdepth 1 -name 'voipappz-image-archive.*' -print -quit | grep -q . \
+  && die 'the downloaded archive was not removed'
+docker rmi installer-ci/va-crystal:fromurl >/dev/null
+rm -rf "$ARCHIVE_DIR"
+pass 'installs from an image archive URL with sha256 verification'
 
 # A separate temporary Docker config is used only by this test environment to
 # pull the full mothership images. The installer already removed its own.

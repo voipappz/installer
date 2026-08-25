@@ -8,6 +8,11 @@ set -eu
 
 VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}"
 VA_IMAGE_ARCHIVE="${VA_IMAGE_ARCHIVE:-}"
+# Where `make s3-publish` in va-crystal puts the newest proven image archive.
+VA_IMAGE_URL="${VA_IMAGE_URL:-https://voipappz-assets-il.s3.il-central-1.amazonaws.com/images/va-crystal-node-latest.tar.gz}"
+# dockerhub | s3 | archive — unattended choice of image source. Empty means:
+# VA_IMAGE_ARCHIVE if set, else registry credentials if set, else ask.
+VA_IMAGE_SOURCE="${VA_IMAGE_SOURCE:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
 VA_CA_BUNDLE="${VA_CA_BUNDLE:-}"
@@ -27,6 +32,15 @@ case "$INSTALL_DIR" in
   /*) ;;
   *) printf '!! INSTALL_DIR must be an absolute, specific directory\n' >&2; exit 1 ;;
 esac
+case "$VA_IMAGE_SOURCE" in
+  ''|dockerhub|archive) ;;
+  s3) [ -n "$VA_IMAGE_ARCHIVE" ] || VA_IMAGE_ARCHIVE=$VA_IMAGE_URL ;;
+  *) printf '!! VA_IMAGE_SOURCE must be dockerhub, s3 or archive\n' >&2; exit 1 ;;
+esac
+if [ "$VA_IMAGE_SOURCE" = "archive" ] && [ -z "$VA_IMAGE_ARCHIVE" ]; then
+  printf '!! VA_IMAGE_SOURCE=archive needs VA_IMAGE_ARCHIVE=<path or URL>\n' >&2; exit 1
+fi
+[ "$VA_IMAGE_SOURCE" != "dockerhub" ] || VA_IMAGE_ARCHIVE=""
 # A saved image archive (.tar or .tar.gz): an absolute local path, or an
 # http(s) URL that is downloaded to a temporary file first.
 if [ -n "$VA_IMAGE_ARCHIVE" ]; then
@@ -334,16 +348,18 @@ ask() {
 # VA_IMAGE_ARCHIVE or VA_REGISTRY_USER/VA_REGISTRY_TOKEN and never see this.
 choose_image_source() {
   [ -z "$VA_IMAGE_ARCHIVE" ] || return 0
+  [ -z "$VA_IMAGE_SOURCE" ] || return 0
   [ -z "${VA_REGISTRY_USER:-}" ] && [ -z "${VA_REGISTRY_TOKEN:-}" ] || return 0
   has_tty || return 0
-  printf '  Image source:\n    1) pull %s from Docker Hub\n    2) load a docker-save archive (.tar or .tar.gz) from a path or URL\n' \
+  printf '  Image source:\n    1) pull %s from Docker Hub (needs a Docker Hub user + token)\n    2) download the latest image archive from Amazon S3\n    3) load a docker-save archive (.tar or .tar.gz) from a local path or URL\n' \
     "$VA_VOIP_IMAGE" > /dev/tty
   while :; do
-    ask "Choose 1 or 2 [1]"
+    ask "Choose 1, 2 or 3 [2]"
     case "$REPLY" in
-      ''|1) return 0 ;;
-      2) break ;;
-      *) printf '  enter 1 or 2\n' > /dev/tty ;;
+      1) return 0 ;;
+      ''|2) VA_IMAGE_ARCHIVE=$VA_IMAGE_URL; return 0 ;;
+      3) break ;;
+      *) printf '  enter 1, 2 or 3\n' > /dev/tty ;;
     esac
   done
   while :; do

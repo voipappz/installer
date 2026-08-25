@@ -17,9 +17,10 @@ requirements itself and keeps the node in `/opt/voipappz`.
 
 The installer prompts on the terminal for:
 
-- The image source when the private image is not already present: pull from
-  Docker Hub (user and access token) or load a `docker save` archive
-  (`.tar` or `.tar.gz`) of `nirlevi/va-crystal:node` from a local path or URL.
+- The image source when the image is not already present: `1` pull from
+  Docker Hub (user and access token), `2` download the latest published
+  archive from Amazon S3 (default, no credentials), or `3` load a
+  `docker save` archive (`.tar` or `.tar.gz`) from a local path or URL.
 - The mothership URL (default `https://cloud.voipappz.io`), when neither
   `VA_API_URL` nor the YAML names one. The NATS broker is taken from the same
   host (`nats://<mothership-host>:4222`) unless the YAML or `VA_NATS_URL` says
@@ -87,8 +88,9 @@ curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh 
 ```
 
 The installer takes no command-line arguments — it is piped into `sh`, so
-every setting is an environment variable. Interactively, run it with no
-variables at all:
+every setting is an environment variable. It asks for `sudo` itself when the
+install directory or Docker needs it. Interactively, run it with no variables
+at all:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh | sh
@@ -98,15 +100,19 @@ When `nirlevi/va-crystal:node` is not already in Docker it asks:
 
 ```
   Image source:
-    1) pull nirlevi/va-crystal:node from Docker Hub
-    2) load a docker-save archive (.tar or .tar.gz) from a path or URL
-  Choose 1 or 2 [1]: 2
+    1) pull nirlevi/va-crystal:node from Docker Hub (needs a Docker Hub user + token)
+    2) download the latest image archive from Amazon S3
+    3) load a docker-save archive (.tar or .tar.gz) from a local path or URL
+  Choose 1, 2 or 3 [2]: 3
   Absolute path or http(s) URL of the image archive: /absolute/path/va-crystal-node-2026.08.24-1.tar.gz
 ```
 
-Empty or invalid answers re-prompt. Unattended installs (any of
-`VA_IMAGE_ARCHIVE`, `VA_REGISTRY_USER`, `VA_REGISTRY_TOKEN` exported) never see
-the menu.
+Empty or invalid answers re-prompt. Unattended installs choose with
+`VA_IMAGE_SOURCE=dockerhub|s3|archive` (or implicitly: `VA_IMAGE_ARCHIVE`
+set → archive; registry variables set → Docker Hub) and never see the menu.
+Option 2 downloads `VA_IMAGE_URL`, which defaults to
+`https://voipappz-assets-il.s3.il-central-1.amazonaws.com/images/va-crystal-node-latest.tar.gz`
+and is verified against its published `.sha256`.
 
 Rules:
 
@@ -181,6 +187,8 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 | `VA_CONFIG=/path/va.yaml` | Install this node YAML. |
 | `VA_IMAGE_ARCHIVE=/path/va-crystal.tar.gz` or `https://…/va-crystal-node-latest.tar.gz` | Load the node image from a `docker save` archive (local file or http(s) URL) instead of pulling it; no Docker Hub credentials are needed. A URL is downloaded to a temporary file, verified against a sibling `.sha256` when one is published, and removed after loading. If the archive was saved under another name, the single image it holds is tagged as `VA_VOIP_IMAGE`. |
 | `VA_VOIP_IMAGE=<ref>` | Image reference to use (default `nirlevi/va-crystal:node`). |
+| `VA_IMAGE_SOURCE=dockerhub\|s3\|archive` | Pick the image source unattended. `s3` downloads `VA_IMAGE_URL` (the latest published archive). |
+| `VA_IMAGE_URL=https://…` | Override the S3 archive URL used by the `s3` source. |
 | `INSTALL_DIR=/path` | Change the install directory. |
 | `VA_CUSTOMER_UUID=<uuid>` | Select an existing visible customer. |
 | `VA_CUSTOMER_NAME=<name>` | Select by exact name or create it. |
