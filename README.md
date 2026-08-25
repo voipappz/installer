@@ -20,9 +20,16 @@ The installer prompts on the terminal for:
 - The image source when the private image is not already present: pull from
   Docker Hub (user and access token) or load a `docker save` archive
   (`.tar` or `.tar.gz`) of `nirlevi/va-crystal:node` from a local path or URL.
-- Account email and password for mothership registration. Password input is
-  hidden; the Basic authorization value is built only in memory.
-- Node setup answers when no `va.yaml` was supplied.
+- The mothership URL (default `https://cloud.voipappz.io`), when neither
+  `VA_API_URL` nor the YAML names one. The NATS broker is taken from the same
+  host (`nats://<mothership-host>:4222`) unless the YAML or `VA_NATS_URL` says
+  otherwise.
+- The Account token (hidden input; the Account's Basic authorization key), or,
+  when left empty, the Account email and password. The Basic value is built
+  only in memory.
+- Node setup answers when no `va.yaml` was supplied: node name, internal IP,
+  external IP. Nothing about domains or certificates — those belong to the
+  mothership's own setup.
 - A customer name only when the Account has no customer yet.
 
 For an unattended install, export the credentials and pass an existing YAML:
@@ -180,7 +187,7 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 | `START=0` | Install and register without starting `va-voip`. |
 | `VA_REGISTER=0` | Install/start without mothership registration. |
 | `VA_API_URL=https://...` | Set the mothership URL and persist it to YAML. |
-| `VA_NATS_URL=nats://...` | Add a broker URL when YAML has none. |
+| `VA_NATS_URL=nats://...` | Add a broker URL when YAML has none (default: the mothership host, port 4222). |
 | `VA_CA_BUNDLE=/path/chain.pem` | Extra PEM trust anchors for a mothership whose TLS chain the image cannot verify (for example, a server that omits its intermediate certificate). Copied to `config/ca-bundle.pem` and used by registration and customer API calls; TLS verification stays on. |
 
 ## CI coverage

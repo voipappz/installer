@@ -48,6 +48,7 @@ DOCKER_CONFIG_DIR=""
 DOCKER_INSTALL_SCRIPT=""
 API_BODY_FILE=""
 ARCHIVE_DOWNLOAD=""
+WIZARD_RAN=0
 PROVISIONING_GUARD=""
 ENV_TEMP=""
 TTY_STATE=""
@@ -147,18 +148,22 @@ register_node_cli() (
   fi
 )
 
+# The image CLI has two wizards. With VA_PATH set it runs the node-only one
+# (name, internal IP, external IP) and writes just the mounted YAML; with
+# VA_PATH empty it runs the full host wizard (organization, domain, TLS/acme,
+# alerts), which belongs to the mothership. A node install must get the former.
 image_cli_tty() {
   if [ "$FS_AS_ROOT" = "1" ]; then
     docker_cmd run --rm -it --network host \
       --entrypoint voipappz \
-      -e VA_PROJECT_DIR=/work -e VA_PATH= \
+      -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
       -v "$INSTALL_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" setup < /dev/tty
   else
     docker_cmd run --rm -it --network host \
       --user "$(id -u):$(id -g)" \
       --entrypoint voipappz \
-      -e VA_PROJECT_DIR=/work -e VA_PATH= \
+      -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
       -v "$INSTALL_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" setup < /dev/tty
   fi
@@ -203,38 +208,48 @@ resolve_host() {
   printf '%s' "$_ip"
 }
 
+yaml_api_url() {
+  fs_cmd sed -n '/^mothership:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_YAML" |
+    head -1 | tr -d "\"'" | tr -d '[:space:]'
+}
+
 yaml_broker_url() {
   fs_cmd sed -n '/^broker:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_YAML" |
     head -1 | tr -d "\"'" | tr -d '[:space:]'
 }
 
-set_yaml_api_url() {
-  _url=$1
-  validate_scalar "VA_API_URL" "$_url"
+# Set <section>.url in va.yaml: replace the value in place (also when it is
+# empty), or append the section when it is missing.
+set_yaml_section_url() {
+  _section=$1
+  _name=$2
+  _url=$3
+  validate_scalar "$_name" "$_url"
   ENV_TEMP="$(fs_cmd mktemp "$INSTALL_DIR/config/.va.yaml.tmp.XXXXXX")" \
     || die "could not update $VA_YAML"
-  fs_cmd awk -v url="$_url" '
+  # shellcheck disable=SC2016
+  fs_cmd awk -v url="$_url" -v section="$_section" '
     function emit_url() { print "  url: \047" url "\047"; wrote = 1 }
-    /^mothership:[[:space:]]*(#.*)?$/ {
-      in_mothership = 1
-      saw_mothership = 1
+    $0 ~ "^" section ":[[:space:]]*(#.*)?$" {
+      in_section = 1
+      saw_section = 1
       print
       next
     }
-    in_mothership && /^[^[:space:]#]/ {
+    in_section && /^[^[:space:]#]/ {
       if (!wrote) emit_url()
-      in_mothership = 0
+      in_section = 0
     }
-    in_mothership && /^[[:space:]]+url:[[:space:]]*/ {
+    in_section && /^[[:space:]]+url:[[:space:]]*/ {
       if (!wrote) emit_url()
       next
     }
     { print }
     END {
-      if (in_mothership && !wrote) emit_url()
-      if (!saw_mothership) {
+      if (in_section && !wrote) emit_url()
+      if (!saw_section) {
         print ""
-        print "mothership:"
+        print section ":"
         emit_url()
       }
     }
@@ -243,6 +258,9 @@ set_yaml_api_url() {
   fs_cmd mv -f -- "$ENV_TEMP" "$VA_YAML"
   ENV_TEMP=""
 }
+
+set_yaml_api_url() { set_yaml_section_url mothership VA_API_URL "$1"; }
+set_yaml_broker_url() { set_yaml_section_url broker VA_NATS_URL "$1"; }
 
 cleanup_docker_config() {
   case "${DOCKER_CONFIG_DIR:-}" in
@@ -342,6 +360,23 @@ choose_image_source() {
 set_account_authorization() {
   ACCOUNT_EMAIL_INPUT=${VA_API_EMAIL:-}
   ACCOUNT_PASSWORD_INPUT=${VA_API_PASSWORD:-}
+
+  # An Account token is its Basic authorization key (the API authenticates
+  # Accounts with Basic only). Accepted with or without the "Basic " prefix;
+  # empty falls back to email + password, which build the same value.
+  if [ -z "$ACCOUNT_EMAIL_INPUT" ] && [ -z "$ACCOUNT_PASSWORD_INPUT" ]; then
+    ask "Account token (input hidden; empty = use email + password)" silent
+    ACCOUNT_BASIC_INPUT=$REPLY
+    case "$ACCOUNT_BASIC_INPUT" in "Basic "*) ACCOUNT_BASIC_INPUT=${ACCOUNT_BASIC_INPUT#Basic } ;; esac
+    if [ -n "$ACCOUNT_BASIC_INPUT" ]; then
+      printf '%s' "$ACCOUNT_BASIC_INPUT" | LC_ALL=C grep -Eq '^[A-Za-z0-9+/=]+$' \
+        || die "Account token must be the Basic authorization key (base64)"
+      VA_API_AUTHORIZATION="Basic $ACCOUNT_BASIC_INPUT"
+      ACCOUNT_BASIC_INPUT=""
+      REPLY=""
+      return 0
+    fi
+  fi
 
   while [ -z "$ACCOUNT_EMAIL_INPUT" ]; do
     ask "Account email"
@@ -733,6 +768,7 @@ else
   has_tty || die "no va.yaml and no terminal; pass VA_CONFIG=/path/to/va.yaml"
   say "running the existing setup wizard"
   image_cli_tty
+  WIZARD_RAN=1
 fi
 [ -f "$VA_YAML" ] || die "setup did not create $VA_YAML"
 fs_cmd chmod 0644 "$VA_YAML"
@@ -755,18 +791,36 @@ elif [ -f "$INSTALL_DIR/config/ca-bundle.pem" ]; then
   say "keeping $CA_BUNDLE"
 fi
 
+# The one thing a node must be told: where its mothership is. Asked only when
+# nothing supplied it (no VA_API_URL, no mothership in the YAML) and a terminal
+# exists; unattended installs keep the default.
+if [ "$VA_API_URL_EXPLICIT" = "0" ] && has_tty && { [ "$WIZARD_RAN" = "1" ] || [ -z "$(yaml_api_url)" ]; }; then
+  _url_default="$(yaml_api_url)"; [ -n "$_url_default" ] || _url_default=$VA_API_URL
+  while :; do
+    ask "Mothership URL [$_url_default]"
+    [ -n "$REPLY" ] || REPLY=$_url_default
+    case "$REPLY" in
+      https://*|http://localhost*|http://127.0.0.1*) VA_API_URL=${REPLY%/}; VA_API_URL_EXPLICIT=1; break ;;
+      *) printf '  the mothership URL must use HTTPS\n' > /dev/tty ;;
+    esac
+  done
+fi
 if [ "$VA_API_URL_EXPLICIT" = "1" ]; then
   set_yaml_api_url "$VA_API_URL"
   say "using mothership $VA_API_URL"
-elif ! grep -Eq '^[[:space:]]*mothership:' "$VA_YAML"; then
-  validate_scalar "VA_API_URL" "$VA_API_URL"
-  printf "\nmothership:\n  url: '%s'\n" "$VA_API_URL" | fs_cmd tee -a "$VA_YAML" >/dev/null
+elif [ -z "$(yaml_api_url)" ]; then
+  set_yaml_api_url "$VA_API_URL"
 fi
-if [ -n "$VA_NATS_URL" ] && ! grep -Eq '^[[:space:]]*broker:' "$VA_YAML"; then
-  validate_scalar "VA_NATS_URL" "$VA_NATS_URL"
-  printf "\nbroker:\n  url: '%s'\n" "$VA_NATS_URL" | fs_cmd tee -a "$VA_YAML" >/dev/null
+# The broker lives beside the mothership: with no broker in the YAML and no
+# VA_NATS_URL, use nats://<mothership host>:4222.
+if [ -z "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
+  _api_host=${VA_API_URL#*://}; _api_host=${_api_host%%/*}; _api_host=${_api_host%%:*}
+  [ -n "$_api_host" ] && VA_NATS_URL="nats://$_api_host:4222" && say "broker derived from the mothership host: $VA_NATS_URL"
 fi
-if ! grep -Eq '^[[:space:]]*broker:' "$VA_YAML"; then
+if [ -n "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
+  set_yaml_broker_url "$VA_NATS_URL"
+fi
+if [ -z "$(yaml_broker_url)" ]; then
   [ "$START" = "0" ] || die "va.yaml has no broker; add broker.url or set VA_NATS_URL"
   say "WARNING: va.yaml has no broker; it must be configured before the node starts"
 fi
