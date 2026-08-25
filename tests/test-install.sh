@@ -37,6 +37,8 @@ LAST_LOG=""
 MOTHERSHIP_UP=0
 NODE_UP=0
 BROKER_UP=0
+TLS_PROXY_UP=0
+TLS_URL=https://localhost:5443
 
 die() {
   printf '\nnot ok - %s\n' "$*" >&2
@@ -78,6 +80,7 @@ cleanup() {
         >/dev/null 2>&1 || true
     fi
     [[ $BROKER_UP == 0 ]] || docker rm -f installer-ci-nats >/dev/null 2>&1 || true
+    [[ $TLS_PROXY_UP == 0 ]] || docker rm -f installer-ci-tls >/dev/null 2>&1 || true
     stop_mothership
   fi
   case "$RUN_ROOT" in
@@ -92,8 +95,9 @@ trap 'exit 143' HUP TERM
 wait_http() {
   url=$1
   timeout=${2:-300}
+  shift 2 2>/dev/null || shift $#
   deadline=$((SECONDS + timeout))
-  until curl -fsS --max-time 5 "$url" >/dev/null 2>&1; do
+  until curl -fsS --max-time 5 "$@" "$url" >/dev/null 2>&1; do
     ((SECONDS < deadline)) || die "timed out waiting for $url"
     sleep 3
   done
@@ -226,6 +230,56 @@ assert_full_mothership() {
   [[ $(docker inspect -f '{{.State.ExitCode}}' va-createbuckets) == 0 ]] \
     || die 'mothership bucket initialization failed'
   pass 'complete mothership app/storage environment is running'
+}
+
+# A mothership behind TLS that serves its LEAF ONLY — no intermediate. This is
+# the real-world deployment mistake the installer met on first contact with a
+# live cloud: the chain is valid, but nothing on the client can build it, so the
+# image CLI (which verifies HTTPS, and has no insecure switch) refuses to
+# connect. VA_CA_BUNDLE is the supported answer, and it must keep verification
+# ON — hence a private CA that the runner does not trust by default.
+start_tls_proxy() {
+  tls_dir="$RUN_ROOT/tls"
+  mkdir -p "$tls_dir"
+  (
+    cd "$tls_dir"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 2 -keyout root.key -out root.pem \
+      -subj '/CN=Installer CI Root' -addext 'basicConstraints=critical,CA:TRUE'
+    openssl req -newkey rsa:2048 -nodes -keyout int.key -out int.csr \
+      -subj '/CN=Installer CI Intermediate'
+    openssl x509 -req -in int.csr -CA root.pem -CAkey root.key -CAcreateserial \
+      -days 2 -out int.pem -extfile <(printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign\n')
+    openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr -subj '/CN=localhost'
+    openssl x509 -req -in leaf.csr -CA int.pem -CAkey int.key -CAcreateserial \
+      -days 2 -out leaf.pem -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n')
+    # The bundle the operator is given: the anchors the server fails to send.
+    cat root.pem int.pem > bundle.pem
+    cat > proxy.conf <<'NGINX'
+server {
+  listen 5443 ssl;
+  server_name localhost;
+  # Deliberately leaf-only: fullchain.pem here is what fixes it server-side.
+  ssl_certificate     /tls/leaf.pem;
+  ssl_certificate_key /tls/leaf.key;
+  location / {
+    proxy_pass http://127.0.0.1:5000;
+    proxy_set_header Host $host;
+  }
+}
+NGINX
+  ) >/dev/null 2>&1 || die 'could not build the TLS proxy material'
+  chmod 0644 "$tls_dir"/*.pem "$tls_dir"/*.key
+  docker run -d --name installer-ci-tls --network host \
+    -v "$tls_dir:/tls:ro" -v "$tls_dir/proxy.conf:/etc/nginx/conf.d/default.conf:ro" \
+    nginx:alpine >/dev/null || die 'could not start the TLS proxy'
+  TLS_PROXY_UP=1
+  wait_http "$TLS_URL/health" 60 --cacert "$tls_dir/bundle.pem"
+  # Prove the premise: without the bundle this endpoint is untrusted, with it the
+  # chain verifies. A test that passes for the wrong reason would be worthless.
+  curl -fsS --max-time 10 "$TLS_URL/health" >/dev/null 2>&1 \
+    && die 'test precondition: the leaf-only chain was trusted without the bundle'
+  curl -fsS --max-time 10 --cacert "$tls_dir/bundle.pem" "$TLS_URL/health" >/dev/null \
+    || die 'test precondition: the CA bundle did not verify the leaf-only chain'
 }
 
 printf 'Real VoIPAppz installer integration\n'
@@ -378,14 +432,38 @@ grep -Fq 'VA_API_URL=http://cloud.voipappz.example' "$NODE_DIR/.env" \
   && die 'invalid mothership URL was written to .env'
 pass 'invalid explicit mothership URL is rejected before it is persisted'
 
-# An extra CA bundle is installed next to the YAML and never breaks a plain
-# HTTP mothership; it only adds trust anchors.
-run_installer success ca-bundle VA_CUSTOMER_UUID="$FIRST_UUID" \
-  VA_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-cmp -s /etc/ssl/certs/ca-certificates.crt "$NODE_DIR/config/ca-bundle.pem" \
+# The same mothership over HTTPS with an incomplete chain. Registration and the
+# customer API must both fail without VA_CA_BUNDLE and both succeed with it.
+start_tls_proxy
+run_installer failure tls-untrusted-chain \
+  VA_API_URL="$TLS_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
+grep -Fq 'no customer change was attempted' "$LAST_LOG" \
+  || die 'an unverifiable mothership chain did not stop before customer work'
+
+run_installer success tls-ca-bundle \
+  VA_API_URL="$TLS_URL" VA_CUSTOMER_UUID="$FIRST_UUID" \
+  VA_CA_BUNDLE="$RUN_ROOT/tls/bundle.pem"
+cmp -s "$RUN_ROOT/tls/bundle.pem" "$NODE_DIR/config/ca-bundle.pem" \
   || die 'CA bundle was not installed to config/ca-bundle.pem'
+customer=$(api GET "/customers/$FIRST_UUID")
+assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
+  'customer API over the CA-bundled mothership linked the node'
+pass 'an incomplete mothership TLS chain is usable only through VA_CA_BUNDLE'
+
+# The bundle persists across reruns, so the URL keeps working without repeating
+# VA_CA_BUNDLE — and the installer never silently drops back to plain HTTP.
+run_installer success tls-persisted-bundle \
+  VA_API_URL="$TLS_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
+grep -Fq "keeping $NODE_DIR/config/ca-bundle.pem" "$LAST_LOG" \
+  || die 'installed CA bundle was not reused on a later run'
+pass 'installed CA bundle is reused on later runs'
+
+docker rm -f installer-ci-tls >/dev/null 2>&1
+TLS_PROXY_UP=0
 rm -f -- "$NODE_DIR/config/ca-bundle.pem"
-pass 'extra CA bundle is installed for registration'
+run_installer success plain-http-after-tls \
+  VA_API_URL="$API_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
+pass 'a removed CA bundle leaves the plain mothership working'
 
 # A root-owned installation directory keeps .env at mode 0600, so Compose has to
 # run elevated even when the Docker socket is reachable unelevated.
