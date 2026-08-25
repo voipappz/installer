@@ -672,7 +672,10 @@ pick_docker
 docker_cmd compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
 
 step "2/6  Platform image"
-if docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
+# An archive named up front is always installed, replacing the tag if it is
+# already present — that is how a node is upgraded. Only an unspecified source
+# lets a present image stand.
+if [ -z "$VA_IMAGE_ARCHIVE" ] && docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
   say "$VA_VOIP_IMAGE is already present"
 elif choose_image_source && [ -n "$VA_IMAGE_ARCHIVE" ]; then
   # Offline path: a `docker save` archive (plain or gzip) of the node image.
@@ -860,6 +863,12 @@ else
   [ -z "$CONFIG_API_URL" ] || VA_API_URL=$CONFIG_API_URL
 fi
 set_compose_env VA_API_URL "$VA_API_URL"
+# Compose runs nirlevi/va-crystal:${VA_VOIP_TAG:-node}; make it run the image
+# that was installed.
+case "$VA_VOIP_IMAGE" in
+  nirlevi/va-crystal:*) set_compose_env VA_VOIP_TAG "${VA_VOIP_IMAGE#nirlevi/va-crystal:}" ;;
+  *) say "WARNING: $VA_VOIP_IMAGE is not nirlevi/va-crystal:<tag>; docker-compose.yaml pins that repository" ;;
+esac
 
 # The CLI writes the bundled app-plane broker into .env (loopback, with a
 # token). When va.yaml names a different broker host, that YAML value is the

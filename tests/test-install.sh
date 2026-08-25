@@ -322,6 +322,7 @@ pass 'clean host installs Docker, image, stack, and va.yaml'
 # no registry credentials. The archive is saved under another tag so the load
 # and retag path is exercised without a second registry pull.
 ARCHIVE_DIR="$(mktemp -d)"
+chmod 0755 "$ARCHIVE_DIR"   # nginx (below) serves it as an unprivileged worker
 ARCHIVE_LOG="$LOG_DIR/archive-install.log"
 docker tag nirlevi/va-crystal:node installer-ci/va-crystal:archive
 docker save installer-ci/va-crystal:archive | gzip -1 >"$ARCHIVE_DIR/va-crystal.tar.gz"
@@ -352,6 +353,7 @@ pass 'installs from a local image archive without registry credentials'
 # as S3 publishes it. VA_IMAGE_SOURCE=archive + a URL, no registry variables.
 URL_LOG="$LOG_DIR/archive-url-install.log"
 sha256sum "$ARCHIVE_DIR/va-crystal.tar.gz" | awk '{print $1}' >"$ARCHIVE_DIR/va-crystal.tar.gz.sha256"
+chmod 0644 "$ARCHIVE_DIR"/va-crystal.tar.gz "$ARCHIVE_DIR"/va-crystal.tar.gz.sha256
 docker run -d --name installer-ci-www -p 127.0.0.1:18080:80 \
   -v "$ARCHIVE_DIR:/usr/share/nginx/html:ro" nginx:alpine >/dev/null
 for _ in $(seq 1 30); do curl -fsI http://127.0.0.1:18080/va-crystal.tar.gz.sha256 >/dev/null 2>&1 && break; sleep 1; done

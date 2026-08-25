@@ -117,7 +117,11 @@ and is verified against its published `.sha256`.
 Rules:
 
 - `VA_IMAGE_ARCHIVE` must be an absolute path or an `http(s)` URL.
-- If the image is already present in Docker, the archive is not used.
+- An archive you name is always loaded, replacing an already present image —
+  that is how a node is upgraded. Only when no source is given does a present
+  image stand.
+- `VA_VOIP_IMAGE` (default `nirlevi/va-crystal:node`) is the tag Compose runs;
+  the installer writes it to `.env` as `VA_VOIP_TAG`.
 - The archive normally carries `nirlevi/va-crystal:node` and the pinned
   `node-<VERSION>` tag. If it was saved under another name, its single image is
   tagged as `VA_VOIP_IMAGE` (default `nirlevi/va-crystal:node`) so Compose
