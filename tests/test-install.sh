@@ -551,17 +551,72 @@ grep -R -Fq -- "$BASIC_VALUE" "$NODE_DIR/config" "$NODE_DIR/.env" \
   && die 'Account Basic credential was written to node files'
 pass 'Account Basic credential is absent from YAML, .env, and installer logs'
 
+# Authenticating is not the same as being allowed to write nodes: node CRUD is
+# deployment-wide, so the API restricts it to the cross-tenant accounts listed in
+# VA_ROOT and answers 403 to everyone else. A live install met exactly this, and
+# a 403 must stop before any customer change instead of reading as a bad login.
+LIMITED_EMAIL=installer-ci-limited@example.invalid
+LIMITED_PASSWORD='Vpz-Installer-CI-Limited-2026!'
+limited=$(api POST /accounts \
+  --data-urlencode "email=$LIMITED_EMAIL" \
+  --data-urlencode "password=$LIMITED_PASSWORD" \
+  --data-urlencode "name=Installer CI Limited" \
+  --data-urlencode 'enabled=true')
+assert_jq "$limited" '.uuid | type == "string"' 'a non-root Account exists for the 403 test'
+LIMITED_BASIC=$(printf '%s' "$LIMITED_EMAIL:$LIMITED_PASSWORD" | base64 | tr -d '\n')
+deadline=$((SECONDS + 120))
+until printf 'header = "Authorization: Basic %s"\n' "$LIMITED_BASIC" |
+  curl --config - --silent --fail --max-time 10 --url "$API_URL/api/customers" >/dev/null 2>&1; do
+  ((SECONDS < deadline)) || die 'the non-root Account could not authenticate'
+  sleep 3
+done
+limited_status=$(printf 'header = "Authorization: Basic %s"\n' "$LIMITED_BASIC" |
+  curl --config - --silent --output /dev/null --write-out '%{http_code}' \
+    --max-time 20 --request POST --url "$API_URL/api/nodes")
+[[ $limited_status == 403 ]] \
+  || die "test precondition: the non-root Account got HTTP $limited_status, not 403, from POST /nodes"
+
+customer_count=$(api GET /customers | jq 'length')
+run_installer failure unauthorized-account \
+  VA_API_AUTHORIZATION="Basic $LIMITED_BASIC"
+grep -Fq 'no customer change was attempted' "$LAST_LOG" \
+  || die 'a forbidden Account did not stop before customer work'
+[[ $(api GET /customers | jq 'length') == "$customer_count" ]] \
+  || die 'a forbidden Account changed customer state'
+grep -Fq "$LIMITED_BASIC" "$LAST_LOG" && die 'the non-root credential was logged'
+pass 'an authenticated Account without node rights fails before customer work'
+
 # Mothership has now been used only for node/customer registration. Stop it,
 # provide an independent test broker, and verify the installed VoIP profile and
 # YAML mount without using mothership as a runtime test fixture.
 stop_mothership
-docker run -d --name installer-ci-nats -p 127.0.0.1:4222:4222 nats:alpine >/dev/null
+# Bind the broker to the runner's own address, not loopback: a real node reaches
+# NATS over the network, and the voip service maps `nats` to VA_NATS_HOST, so a
+# loopback-only test would never exercise that path.
+docker run -d --name installer-ci-nats -p "$INTERNAL_IP:4222:4222" nats:alpine >/dev/null
 BROKER_UP=1
-sed -i 's#^VA_NATS_URL=.*#VA_NATS_URL=nats://127.0.0.1:4222#' "$NODE_DIR/.env"
-sed -i 's#^VA_NATS_HOST=.*#VA_NATS_HOST=127.0.0.1#' "$NODE_DIR/.env"
+BROKER_URL="nats://$INTERNAL_IP:4222"
+deadline=$((SECONDS + 60))
+until (exec 3<>"/dev/tcp/$INTERNAL_IP/4222") 2>/dev/null; do
+  ((SECONDS < deadline)) || die 'the remote test broker never accepted connections'
+  sleep 2
+done
+sed -i "s#^\([[:space:]]*\)url: .nats://[^\"']*.#\1url: '$BROKER_URL'#" "$NODE_DIR/config/va.yaml"
+grep -Fq "$BROKER_URL" "$NODE_DIR/config/va.yaml" \
+  || die 'test setup could not point va.yaml at the remote broker'
 run_installer success start-voip \
   VA_REGISTER=0 START=1 VA_API_AUTHORIZATION=
 NODE_UP=1
+# The CLI reads the YAML; the installer must carry that value into Compose, or
+# the voip service maps `nats` to the wrong host.
+grep -Fq "VA_NATS_URL=$BROKER_URL" "$NODE_DIR/.env" \
+  || die 'the remote broker URL was not written to the Compose environment'
+grep -Fq "VA_NATS_HOST=$INTERNAL_IP" "$NODE_DIR/.env" \
+  || die 'the remote broker host was not written to the Compose environment'
+[[ $(docker inspect va-voip --format \
+  '{{range .HostConfig.ExtraHosts}}{{.}} {{end}}') == *"nats:$INTERNAL_IP"* ]] \
+  || die 'the voip service does not resolve nats to the remote broker'
+pass 'a non-loopback broker URL reaches Compose and the running node'
 wait_http http://127.0.0.1:4000/health 180
 
 # The in-container CLI is the operator interface. Prove the VoIP container is
