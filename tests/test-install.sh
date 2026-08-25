@@ -615,9 +615,21 @@ limited_status=$(printf 'header = "Authorization: Basic %s"\n' "$LIMITED_BASIC" 
 [[ $limited_status == 403 ]] \
   || die "test precondition: the non-root Account got HTTP $limited_status, not 403, from POST /nodes"
 
+# Registration is idempotent: an unchanged node needs no write, so a non-root
+# Account gets that far legitimately. Change a node field first, so the CLI must
+# actually write and the 403 is reached.
 customer_count=$(api GET /customers | jq 'length')
+node_name_before=$(api GET "/nodes/$NODE_UUID" | jq -r '.name')
+sed -i "s/^\([[:space:]]*name:\)[[:space:]]*$node_name_before\$/\1 Installer-CI-Node-Forbidden/" \
+  "$NODE_DIR/config/va.yaml"
+grep -Fq 'Installer-CI-Node-Forbidden' "$NODE_DIR/config/va.yaml" \
+  || die 'test setup could not change the node name'
 run_installer failure unauthorized-account \
   VA_API_AUTHORIZATION="Basic $LIMITED_BASIC"
+[[ $(api GET "/nodes/$NODE_UUID" | jq -r '.name') == "$node_name_before" ]] \
+  || die 'a forbidden Account changed the node'
+sed -i "s/^\([[:space:]]*name:\)[[:space:]]*Installer-CI-Node-Forbidden\$/\1 $node_name_before/" \
+  "$NODE_DIR/config/va.yaml"
 grep -Fq 'no customer change was attempted' "$LAST_LOG" \
   || die 'a forbidden Account did not stop before customer work'
 [[ $(api GET /customers | jq 'length') == "$customer_count" ]] \

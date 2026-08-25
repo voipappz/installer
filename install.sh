@@ -32,8 +32,10 @@ if [ -n "$VA_IMAGE_ARCHIVE" ]; then
     /*) ;;
     *) printf '!! VA_IMAGE_ARCHIVE must be an absolute path to a saved image archive\n' >&2; exit 1 ;;
   esac
-  [ -f "$VA_IMAGE_ARCHIVE" ] && [ -r "$VA_IMAGE_ARCHIVE" ] \
-    || { printf '!! VA_IMAGE_ARCHIVE is not a readable file: %s\n' "$VA_IMAGE_ARCHIVE" >&2; exit 1; }
+  if [ ! -f "$VA_IMAGE_ARCHIVE" ] || [ ! -r "$VA_IMAGE_ARCHIVE" ]; then
+    printf '!! VA_IMAGE_ARCHIVE is not a readable file: %s\n' "$VA_IMAGE_ARCHIVE" >&2
+    exit 1
+  fi
 fi
 
 FS_AS_ROOT=0
