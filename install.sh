@@ -586,7 +586,10 @@ ensure_mothership_reachable() {
     _err="$( { [ -z "$CA_BUNDLE" ] || printf 'cacert = "%s"\n' "$CA_BUNDLE"; } |
       curl --config - -sS --max-time 15 -o /dev/null "$_probe_base/nodes" 2>&1 >/dev/null)" || _rc=$?
     case "$_rc" in
-      0|22) say "mothership $VA_API_URL answers"; return 0 ;;
+      0|22)
+        say "mothership $VA_API_URL answers"
+        [ "$_trusted" = "1" ] || set_compose_env VA_TLS_INSECURE 0
+        return 0 ;;
       60|35)
         if [ "$_trusted" = "1" ]; then
           # Trusting the chain was not enough: the certificate is for another
@@ -599,7 +602,13 @@ ensure_mothership_reachable() {
         fi
         say "the certificate of $VA_API_URL is not in the trust store; trusting it as presented:"
         mothership_certificate_summary
-        trust_mothership_certificate; _trusted=1; continue ;;
+        trust_mothership_certificate; _trusted=1
+        # The running node (and its CLI: sync, health) reaches the same
+        # mothership from inside va-voip, where the saved chain is not
+        # mounted. Compose passes VA_TLS_INSECURE through, so the node talks
+        # to this mothership the way registration did.
+        set_compose_env VA_TLS_INSECURE 1
+        continue ;;
       *)
         say "cannot reach $VA_API_URL: ${_err:-curl exit $_rc}"
         has_tty || die "mothership unreachable; check VA_API_URL and the network"
