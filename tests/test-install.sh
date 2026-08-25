@@ -358,6 +358,18 @@ node=$(api GET "/nodes/$NODE_UUID")
 assert_jq "$node" ".uuid == \"$NODE_UUID\" and .type == \"switch\"" \
   'existing CLI registered only the YAML node'
 
+# An invalid explicit URL must be rejected before it is persisted; otherwise a
+# rerun without the override would inherit the bad value from va.yaml.
+yaml_before=$(cat "$NODE_DIR/config/va.yaml")
+run_installer failure invalid-explicit-url \
+  VA_API_URL=http://cloud.voipappz.example VA_CUSTOMER_UUID="$FIRST_UUID"
+grep -Fq 'must use HTTPS' "$LAST_LOG" || die 'invalid mothership URL was not rejected'
+[[ $(cat "$NODE_DIR/config/va.yaml") == "$yaml_before" ]] \
+  || die 'invalid mothership URL was written to va.yaml'
+grep -Fq 'VA_API_URL=http://cloud.voipappz.example' "$NODE_DIR/.env" \
+  && die 'invalid mothership URL was written to .env'
+pass 'invalid explicit mothership URL is rejected before it is persisted'
+
 run_installer success idempotent-rerun VA_CUSTOMER_UUID="$FIRST_UUID"
 grep -Fq 'already registered' "$LAST_LOG" \
   || die 'node re-registration was not reported as idempotent'

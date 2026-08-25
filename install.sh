@@ -504,6 +504,11 @@ resolve_customer() {
   esac
 }
 
+# Validate an explicit mothership URL before anything is written to disk;
+# step 4 persists it to va.yaml and .env, and VA_REGISTER=0 never reaches
+# the registration-time check.
+[ "$VA_API_URL_EXPLICIT" = "0" ] || validate_api_url
+
 prepare_install_dir
 ensure_host_tools
 
