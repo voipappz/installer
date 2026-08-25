@@ -604,9 +604,28 @@ done
 sed -i "s#^\([[:space:]]*\)url: .nats://[^\"']*.#\1url: '$BROKER_URL'#" "$NODE_DIR/config/va.yaml"
 grep -Fq "$BROKER_URL" "$NODE_DIR/config/va.yaml" \
   || die 'test setup could not point va.yaml at the remote broker'
+# The stack pins container names, so a leftover va-voip from an earlier
+# installation directory blocks Compose. An abandoned one is reclaimed; the
+# installer must not need a manual `docker rm` between runs.
+STALE_DIR="$RUN_ROOT/stale-node"
+mkdir -p "$STALE_DIR"
+(cd "$STALE_DIR" && cp "$NODE_DIR/docker-compose.yaml" . && cp -r "$NODE_DIR/config" . \
+  && cp "$NODE_DIR/.env" . && docker compose --profile voip create va-voip) >/dev/null 2>&1 \
+  || die 'could not stage a conflicting va-voip container'
+[[ $(docker inspect va-voip --format \
+  '{{index .Config.Labels "com.docker.compose.project.working_dir"}}') == "$STALE_DIR" ]] \
+  || die 'test setup did not create a foreign va-voip container'
+
 run_installer success start-voip \
   VA_REGISTER=0 START=1 VA_API_AUTHORIZATION=
 NODE_UP=1
+grep -Fq 'removing the abandoned container va-voip' "$LAST_LOG" \
+  || die 'a conflicting container from another directory was not reclaimed'
+[[ $(docker inspect va-voip --format \
+  '{{index .Config.Labels "com.docker.compose.project.working_dir"}}') == "$NODE_DIR" ]] \
+  || die 'the running va-voip does not belong to this installation'
+rm -rf -- "$STALE_DIR"
+pass 'a container left by another installation directory is reclaimed'
 # The CLI reads the YAML; the installer must carry that value into Compose, or
 # the voip service maps `nats` to the wrong host.
 grep -Fq "VA_NATS_URL=$BROKER_URL" "$NODE_DIR/.env" \

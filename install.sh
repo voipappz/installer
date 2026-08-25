@@ -705,6 +705,24 @@ unset VA_API_AUTHORIZATION 2>/dev/null
 
 step "6/6  VoIP plane"
 if [ "$START" = "1" ]; then
+  # The stack pins container names, so a leftover container from an earlier
+  # installation directory (or a removed test run) blocks Compose with a name
+  # conflict. Those names belong to this installer: reclaim an abandoned one,
+  # but never touch a running container — that could be a live node.
+  for _name in $( (cd "$INSTALL_DIR" && compose_cmd --profile voip config) 2>/dev/null |
+                    sed -n 's/^[[:space:]]*container_name:[[:space:]]*//p' ); do
+    _owner="$(docker_cmd inspect "$_name" \
+      --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)" \
+      || continue
+    [ "$_owner" = "$INSTALL_DIR" ] && continue
+    if [ "$(docker_cmd inspect -f '{{.State.Running}}' "$_name" 2>/dev/null)" = "true" ]; then
+      die "container $_name is running from ${_owner:-another project}; stop it before installing here"
+    fi
+    say "removing the abandoned container $_name from ${_owner:-another project}"
+    docker_cmd rm -f "$_name" >/dev/null 2>&1 \
+      || die "could not remove the conflicting container $_name"
+  done
+
   (cd "$INSTALL_DIR" && compose_cmd --profile voip up -d) \
     || die "could not start the VoIP profile"
 
