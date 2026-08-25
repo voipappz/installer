@@ -14,6 +14,7 @@ CA_BUNDLE=""
 if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
 VA_NATS_URL="${VA_NATS_URL:-}"
+VA_NATS_HOST="${VA_NATS_HOST:-}"
 VA_REGISTER="${VA_REGISTER:-1}"
 VA_CUSTOMER_UUID="${VA_CUSTOMER_UUID:-}"
 VA_CUSTOMER_NAME="${VA_CUSTOMER_NAME:-}"
@@ -171,6 +172,20 @@ host_of_url() {
   _rest=${_rest##*@}
   _rest=${_rest%%/*}
   printf '%s' "${_rest%%:*}"
+}
+
+# Compose maps the broker into the voip service with extra_hosts, and Docker
+# refuses a name there ("invalid IP address in add-host"), so a broker named by
+# DNS has to be resolved once, at install time.
+resolve_host() {
+  case "$1" in
+    '') return 0 ;;
+    *[!0-9.]*) ;;
+    *) printf '%s' "$1"; return 0 ;;
+  esac
+  _ip="$(getent ahostsv4 "$1" 2>/dev/null | awk '{ print $1; exit }')"
+  [ -n "$_ip" ] || _ip="$(getent hosts "$1" 2>/dev/null | awk '{ print $1; exit }')"
+  printf '%s' "$_ip"
 }
 
 yaml_broker_url() {
@@ -695,7 +710,12 @@ else
   BROKER_URL=$CONFIG_NATS_URL
 fi
 set_compose_env VA_NATS_URL "$BROKER_URL"
-set_compose_env VA_NATS_HOST "$(host_of_url "$BROKER_URL")"
+BROKER_HOST="$(host_of_url "$BROKER_URL")"
+BROKER_IP="${VA_NATS_HOST:-$(resolve_host "$BROKER_HOST")}"
+[ -n "$BROKER_IP" ] || [ -z "$BROKER_HOST" ] \
+  || die "could not resolve broker host $BROKER_HOST; set VA_NATS_HOST to its IP address"
+[ "$BROKER_IP" = "$BROKER_HOST" ] || say "broker $BROKER_HOST resolves to $BROKER_IP"
+set_compose_env VA_NATS_HOST "$BROKER_IP"
 
 step "5/6  Registration"
 SELECTED_CUSTOMER_UUID=""

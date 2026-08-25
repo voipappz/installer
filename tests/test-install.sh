@@ -616,6 +616,20 @@ mkdir -p "$STALE_DIR"
   '{{index .Config.Labels "com.docker.compose.project.working_dir"}}') == "$STALE_DIR" ]] \
   || die 'test setup did not create a foreign va-voip container'
 
+# Docker refuses a name in extra_hosts, so a broker named by DNS has to reach
+# Compose as an address. START=0: this asserts the environment, not a runtime.
+BROKER_NAME_URL="nats://localhost:4222"
+cp "$NODE_DIR/config/va.yaml" "$RUN_ROOT/va.yaml.ip-broker"
+sed -i "s#^\([[:space:]]*\)url: .nats://[^\"']*.#\1url: '$BROKER_NAME_URL'#" \
+  "$NODE_DIR/config/va.yaml"
+run_installer success named-broker VA_REGISTER=0 START=0 VA_API_AUTHORIZATION=
+grep -Fq "VA_NATS_URL=$BROKER_NAME_URL" "$NODE_DIR/.env" \
+  || die 'a named broker URL was not written to the Compose environment'
+grep -qE '^VA_NATS_HOST=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$NODE_DIR/.env" \
+  || die 'a named broker was not resolved to an address for extra_hosts'
+cp "$RUN_ROOT/va.yaml.ip-broker" "$NODE_DIR/config/va.yaml"
+pass 'a broker named by DNS reaches Compose as an address'
+
 run_installer success start-voip \
   VA_REGISTER=0 START=1 VA_API_AUTHORIZATION=
 NODE_UP=1
