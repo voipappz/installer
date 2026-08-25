@@ -181,6 +181,17 @@ the installer leaves `/opt/voipappz/.customer-provisioning-incomplete` and
 refuses to claim success until an operator resolves the initialization and
 removes that marker.
 
+Nothing is written to the installation directory until registration has
+succeeded: the stack, `va.yaml`, `.env` and CA bundle are prepared in a
+private temporary directory and copied over in one step; a failed run leaves
+the directory as it was (only the `.customer-provisioning-incomplete` marker
+is written there, deliberately, when customer creation was interrupted).
+
+Before registering, the installer probes the mothership URL. If it does not
+answer it says why and lets you correct the URL; if its certificate is not
+trusted it shows the certificate and asks whether to trust it (or does so with
+`VA_TLS_INSECURE=1`).
+
 The Account Basic value is passed only in the registration process environment.
 It is not written to YAML, `.env`, Docker, or installer logs.
 
@@ -200,6 +211,7 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 | `VA_REGISTER=0` | Install/start without mothership registration. |
 | `VA_API_URL=https://...` | Set the mothership URL and persist it to YAML. |
 | `VA_NATS_URL=nats://...` | Add a broker URL when YAML has none (default: the mothership host, port 4222). |
+| `VA_TLS_INSECURE=1` | The `curl -k` of this installer, for self-signed or private-CA mothership URLs: the presented chain is saved to `config/ca-bundle.pem` and trusted; if the certificate still does not match the host (an IP-addressed mothership with a hostname certificate) registration runs without TLS verification. Interactively the installer shows the certificate's subject and SHA-256 fingerprint and asks instead. |
 | `VA_CA_BUNDLE=/path/chain.pem` | Extra PEM trust anchors for a mothership whose TLS chain the image cannot verify (for example, a server that omits its intermediate certificate). Copied to `config/ca-bundle.pem` and used by registration and customer API calls; TLS verification stays on. |
 
 ## CI coverage

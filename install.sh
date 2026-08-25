@@ -16,6 +16,10 @@ VA_IMAGE_SOURCE="${VA_IMAGE_SOURCE:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
 VA_CA_BUNDLE="${VA_CA_BUNDLE:-}"
+# 1 = trust the mothership's certificate as presented (the `curl -k` of this
+# installer): its chain is saved to config/ca-bundle.pem and verification then
+# runs against it. Interactively the fingerprint is shown and confirmed instead.
+VA_TLS_INSECURE="${VA_TLS_INSECURE:-0}"
 CA_BUNDLE=""
 if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
@@ -28,6 +32,7 @@ START="${START:-1}"
 
 case "$VA_REGISTER" in 0|1) ;; *) printf '!! VA_REGISTER must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$START" in 0|1) ;; *) printf '!! START must be 0 or 1\n' >&2; exit 1 ;; esac
+case "$VA_TLS_INSECURE" in 0|1) ;; *) printf '!! VA_TLS_INSECURE must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$INSTALL_DIR" in
   /*) ;;
   *) printf '!! INSTALL_DIR must be an absolute, specific directory\n' >&2; exit 1 ;;
@@ -64,6 +69,7 @@ API_BODY_FILE=""
 ARCHIVE_DOWNLOAD=""
 WIZARD_RAN=0
 PROVISIONING_GUARD=""
+WORK_DIR=""
 ENV_TEMP=""
 TTY_STATE=""
 REPLY=""
@@ -129,14 +135,14 @@ image_cli() {
     docker_cmd run --rm --network host \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e "VA_PATH=$_va_path" \
-      -v "$INSTALL_DIR:/work" -w /work \
+      -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" "$@"
   else
     docker_cmd run --rm --network host \
       --user "$(id -u):$(id -g)" \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e "VA_PATH=$_va_path" \
-      -v "$INSTALL_DIR:/work" -w /work \
+      -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" "$@"
   fi
 }
@@ -162,16 +168,16 @@ register_node_cli() {
     docker_with_authorization run --rm --network host \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" \
-      -v "$INSTALL_DIR:/work" -w /work \
+      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" -e "VA_TLS_INSECURE=$VA_TLS_INSECURE" \
+      -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   else
     docker_with_authorization run --rm --network host \
       --user "$(id -u):$(id -g)" \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" \
-      -v "$INSTALL_DIR:/work" -w /work \
+      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" -e "VA_TLS_INSECURE=$VA_TLS_INSECURE" \
+      -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   fi
 }
@@ -185,14 +191,14 @@ image_cli_tty() {
     docker_cmd run --rm -it --network host \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -v "$INSTALL_DIR:/work" -w /work \
+      -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" setup < /dev/tty
   else
     docker_cmd run --rm -it --network host \
       --user "$(id -u):$(id -g)" \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -v "$INSTALL_DIR:/work" -w /work \
+      -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" setup < /dev/tty
   fi
 }
@@ -202,14 +208,14 @@ set_compose_env() {
   _env_value=$2
   [ -n "$_env_value" ] || return 0
   validate_scalar "$_env_key" "$_env_value"
-  ENV_TEMP="$(fs_cmd mktemp "$INSTALL_DIR/.env.tmp.XXXXXX")" \
-    || die "could not update $INSTALL_DIR/.env"
-  fs_cmd sed "/^${_env_key}=/d" "$INSTALL_DIR/.env" |
+  ENV_TEMP="$(fs_cmd mktemp "$WORK_DIR/.env.tmp.XXXXXX")" \
+    || die "could not update $WORK_DIR/.env"
+  fs_cmd sed "/^${_env_key}=/d" "$WORK_DIR/.env" |
     fs_cmd tee "$ENV_TEMP" >/dev/null
   printf '%s=%s\n' "$_env_key" "$_env_value" |
     fs_cmd tee -a "$ENV_TEMP" >/dev/null
   fs_cmd chmod 0600 "$ENV_TEMP"
-  fs_cmd mv -f -- "$ENV_TEMP" "$INSTALL_DIR/.env"
+  fs_cmd mv -f -- "$ENV_TEMP" "$WORK_DIR/.env"
   ENV_TEMP=""
 }
 
@@ -253,7 +259,7 @@ set_yaml_section_url() {
   _name=$2
   _url=$3
   validate_scalar "$_name" "$_url"
-  ENV_TEMP="$(fs_cmd mktemp "$INSTALL_DIR/config/.va.yaml.tmp.XXXXXX")" \
+  ENV_TEMP="$(fs_cmd mktemp "$WORK_DIR/config/.va.yaml.tmp.XXXXXX")" \
     || die "could not update $VA_YAML"
   # shellcheck disable=SC2016
   fs_cmd awk -v url="$_url" -v section="$_section" '
@@ -310,6 +316,9 @@ cleanup() {
   [ -z "$CID" ] || docker_cmd rm -f "$CID" >/dev/null 2>&1
   [ -z "$ENV_TEMP" ] || fs_cmd rm -f -- "$ENV_TEMP" 2>/dev/null
   cleanup_docker_config
+  case "$WORK_DIR" in
+    /tmp/voipappz-install.*) rm -rf -- "$WORK_DIR" 2>/dev/null || root_cmd rm -rf -- "$WORK_DIR" 2>/dev/null ;;
+  esac
   case "$DOCKER_INSTALL_SCRIPT" in
     /tmp/voipappz-docker-install.*) rm -f -- "$DOCKER_INSTALL_SCRIPT" ;;
   esac
@@ -345,7 +354,7 @@ ask() {
     TTY_STATE="$(stty -g < /dev/tty)" || die "cannot disable terminal echo"
     stty -echo < /dev/tty
   fi
-  printf '  %s: ' "$_prompt" > /dev/tty
+  printf '  \033[1m%s\033[0m: ' "$_prompt" > /dev/tty
   if ! IFS= read -r REPLY < /dev/tty; then
     [ -z "$TTY_STATE" ] || stty "$TTY_STATE" < /dev/tty 2>/dev/null
     TTY_STATE=""
@@ -439,11 +448,44 @@ set_account_authorization() {
 }
 
 prepare_install_dir() {
-  if mkdir -p "$INSTALL_DIR" 2>/dev/null && [ -w "$INSTALL_DIR" ]; then
+  [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ] && return 0
+  if [ ! -d "$INSTALL_DIR" ] && mkdir -p "$INSTALL_DIR" 2>/dev/null; then
     return 0
   fi
   root_cmd mkdir -p "$INSTALL_DIR" || die "cannot write $INSTALL_DIR and sudo is unavailable"
   FS_AS_ROOT=1
+}
+
+# Nothing is written to INSTALL_DIR until the node is registered. The stack,
+# va.yaml, .env and CA bundle are built in a private temporary directory and
+# copied over in one step at the end; a failed run leaves the installation
+# exactly as it was. What an existing installation already has (its va.yaml,
+# .env, CA bundle) is seeded into the work directory first, so reruns keep it.
+stage_work_dir() {
+  WORK_DIR="$(mktemp -d /tmp/voipappz-install.XXXXXX)" || die "could not create a work directory"
+  chmod 0700 "$WORK_DIR"
+  mkdir -p "$WORK_DIR/config"
+  for _f in config/va.yaml config/ca-bundle.pem .env; do
+    [ -e "$INSTALL_DIR/$_f" ] || continue
+    if [ -r "$INSTALL_DIR/$_f" ]; then
+      cp "$INSTALL_DIR/$_f" "$WORK_DIR/$_f"
+    else
+      root_cmd cp "$INSTALL_DIR/$_f" "$WORK_DIR/$_f" || die "cannot read $INSTALL_DIR/$_f (sudo is required to reuse it)"
+      root_cmd chown "$(id -u):$(id -g)" "$WORK_DIR/$_f" || die "cannot take over $WORK_DIR/$_f"
+    fi
+  done
+}
+
+# The one write to INSTALL_DIR: after registration succeeded. cp -R (not -a)
+# so a root-owned installation gets root-owned files; modes are kept.
+commit_install_dir() {
+  prepare_install_dir
+  fs_cmd cp -Rf "$WORK_DIR/." "$INSTALL_DIR/" || die "could not write $INSTALL_DIR"
+  rm -rf -- "$WORK_DIR" 2>/dev/null || root_cmd rm -rf -- "$WORK_DIR"
+  WORK_DIR=""
+  VA_YAML="$INSTALL_DIR/config/va.yaml"
+  [ -z "$CA_BUNDLE" ] || CA_BUNDLE="$INSTALL_DIR/config/ca-bundle.pem"
+  say "installed into $INSTALL_DIR"
 }
 
 ensure_host_tools() {
@@ -451,6 +493,9 @@ ensure_host_tools() {
   command -v curl >/dev/null 2>&1 || _packages="curl ca-certificates"
   if [ "$VA_REGISTER" = "1" ] && ! command -v jq >/dev/null 2>&1; then
     _packages="$_packages jq"
+  fi
+  if [ "$VA_REGISTER" = "1" ] && ! command -v openssl >/dev/null 2>&1; then
+    _packages="$_packages openssl"
   fi
   [ -n "$_packages" ] || return 0
   command -v apt-get >/dev/null 2>&1 \
@@ -505,6 +550,76 @@ validate_authorization() {
   case "$_credentials" in *[!A-Za-z0-9+/=]*) die "VA_API_AUTHORIZATION is malformed" ;; esac
 }
 
+# Save the certificate chain the mothership presents as this node's trust
+# anchor. Self-signed servers and private CAs both end up trusted this way,
+# with verification still on — the CLI reads SSL_CERT_FILE, nothing is
+# disabled. Called only after the operator (or VA_TLS_INSECURE=1) agreed.
+trust_mothership_certificate() {
+  _host=${VA_API_URL#*://}; _host=${_host%%/*}
+  case "$_host" in *:*) _port=${_host##*:}; _host=${_host%%:*} ;; *) _port=443 ;; esac
+  _chain="$(openssl s_client -connect "$_host:$_port" -servername "$_host" -showcerts </dev/null 2>/dev/null |
+    sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p')"
+  [ -n "$_chain" ] || die "could not read a certificate from $_host:$_port"
+  CA_BUNDLE="$WORK_DIR/config/ca-bundle.pem"
+  printf '%s\n' "$_chain" | fs_cmd tee "$CA_BUNDLE" >/dev/null
+  fs_cmd chmod 0644 "$CA_BUNDLE"
+  say "trusting the certificate presented by $_host -> $CA_BUNDLE"
+}
+
+mothership_certificate_summary() {
+  _host=${VA_API_URL#*://}; _host=${_host%%/*}
+  case "$_host" in *:*) _port=${_host##*:}; _host=${_host%%:*} ;; *) _port=443 ;; esac
+  openssl s_client -connect "$_host:$_port" -servername "$_host" </dev/null 2>/dev/null |
+    openssl x509 -noout -subject -issuer -fingerprint -sha256 2>/dev/null | sed 's/^/    /'
+}
+
+# The mothership must answer before the CLI is asked to register. Three
+# outcomes: it answers (any HTTP status — 401 is the normal unauthenticated
+# reply); its certificate is not trusted (curl 60) — trust it on request; or
+# it is unreachable — say why, and let a terminal correct the URL.
+ensure_mothership_reachable() {
+  _trusted=0
+  while :; do
+    _probe_base=${VA_API_URL%/}
+    case "$_probe_base" in */api) ;; *) _probe_base="$_probe_base/api" ;; esac
+    _rc=0
+    _err="$( { [ -z "$CA_BUNDLE" ] || printf 'cacert = "%s"\n' "$CA_BUNDLE"; } |
+      curl --config - -sS --max-time 15 -o /dev/null "$_probe_base/nodes" 2>&1 >/dev/null)" || _rc=$?
+    case "$_rc" in
+      0|22) say "mothership $VA_API_URL answers"; return 0 ;;
+      60|35)
+        if [ "$_trusted" = "1" ]; then
+          # Trusting the chain was not enough: the certificate is for another
+          # name (an IP-addressed mothership with a hostname certificate).
+          # Only skipping verification can get past that.
+          [ "$VA_TLS_INSECURE" = "1" ] \
+            || die "the certificate of $VA_API_URL does not match its host; set VA_TLS_INSECURE=1 to register without verification"
+          say "certificate does not match the host; VA_TLS_INSECURE=1: registering without TLS verification"
+          return 0
+        fi
+        say "the certificate of $VA_API_URL is not trusted"
+        mothership_certificate_summary
+        if [ "$VA_TLS_INSECURE" = "1" ]; then
+          say "VA_TLS_INSECURE=1: trusting it as presented"
+          trust_mothership_certificate; _trusted=1; continue
+        fi
+        if has_tty; then
+          ask "Trust this certificate and continue? [y/N]"
+          case "$REPLY" in y|Y|yes|YES) trust_mothership_certificate; _trusted=1; continue ;; esac
+        fi
+        die "untrusted mothership certificate; pass VA_CA_BUNDLE=<ca.pem>, or VA_TLS_INSECURE=1 to trust it as presented" ;;
+      *)
+        say "cannot reach $VA_API_URL: ${_err:-curl exit $_rc}"
+        has_tty || die "mothership unreachable; check VA_API_URL and the network"
+        ask "Mothership URL [$VA_API_URL]"
+        [ -z "$REPLY" ] || case "$REPLY" in
+          https://*|http://localhost*|http://127.0.0.1*) VA_API_URL=${REPLY%/}; set_yaml_api_url "$VA_API_URL"; set_compose_env VA_API_URL "$VA_API_URL" ;;
+          *) say "the mothership URL must use HTTPS" ;;
+        esac ;;
+    esac
+  done
+}
+
 validate_api_url() {
   case "$VA_API_URL" in
     https://*) ;;
@@ -522,6 +637,7 @@ api_request() {
     {
       printf 'header = "Authorization: %s"\nheader = "Accept: application/json"\n' "$VA_API_AUTHORIZATION"
       [ -z "$CA_BUNDLE" ] || printf 'cacert = "%s"\n' "$CA_BUNDLE"
+      [ "$VA_TLS_INSECURE" = "0" ] || printf 'insecure\n'
     } |
       curl --config - --silent --show-error --connect-timeout 10 --max-time 45 \
         --request "$_method" --output "$API_BODY_FILE" --write-out '%{http_code}' \
@@ -594,6 +710,7 @@ create_customer() {
     && die "new customer name contains a control character"
 
   say "creating customer $_name"
+  prepare_install_dir
   printf '%s\n' "$_name" | fs_cmd tee "$PROVISIONING_GUARD" >/dev/null
   fs_cmd chmod 0600 "$PROVISIONING_GUARD"
   api_request POST "/customers" --data-urlencode "name=$_name" \
@@ -665,7 +782,7 @@ resolve_customer() {
 # the registration-time check.
 [ "$VA_API_URL_EXPLICIT" = "0" ] || validate_api_url
 
-prepare_install_dir
+stage_work_dir
 ensure_host_tools
 
 printf '\nVoIPAppz VoIP node installer\n'
@@ -772,26 +889,26 @@ unset VA_REGISTRY_TOKEN VA_REGISTRY_USER 2>/dev/null
 
 step "3/6  Node stack"
 CID="$(docker_cmd create "$VA_VOIP_IMAGE" true)" || die "could not open $VA_VOIP_IMAGE"
-fs_cmd mkdir -p "$INSTALL_DIR/config"
-docker_copy_cmd cp "$CID:/stack/." "$INSTALL_DIR/" \
+fs_cmd mkdir -p "$WORK_DIR/config"
+docker_copy_cmd cp "$CID:/stack/." "$WORK_DIR/" \
   || die "$VA_VOIP_IMAGE has no bundled node stack"
 # `docker cp` creates host files owned by whoever ran the docker client — root
 # when Docker needs sudo. The directory is the operator's and the setup/register
 # containers run as the operator, so give the extracted stack back to them.
 if [ "$DOCKER_AS_ROOT" = "1" ] && [ "$FS_AS_ROOT" = "0" ]; then
-  root_cmd chown -R "$(id -u):$(id -g)" "$INSTALL_DIR" || die "could not chown $INSTALL_DIR"
+  root_cmd chown -R "$(id -u):$(id -g)" "$WORK_DIR" || die "could not chown $WORK_DIR"
 fi
 docker_cmd rm -f "$CID" >/dev/null
 CID=""
-[ -f "$INSTALL_DIR/docker-compose.yaml" ] || die "the bundled stack has no docker-compose.yaml"
-grep -Fq -- './config/va.yaml:/tmp/node.yaml' "$INSTALL_DIR/docker-compose.yaml" \
+[ -f "$WORK_DIR/docker-compose.yaml" ] || die "the bundled stack has no docker-compose.yaml"
+grep -Fq -- './config/va.yaml:/tmp/node.yaml' "$WORK_DIR/docker-compose.yaml" \
   || die "the bundled stack does not mount config/va.yaml at /tmp/node.yaml"
 docker_cmd run --rm --entrypoint voipappz "$VA_VOIP_IMAGE" node --help >/dev/null \
   || die "$VA_VOIP_IMAGE has no working node CLI"
 say "installed the stack and verified its in-container CLI"
 
 step "4/6  va.yaml"
-VA_YAML="$INSTALL_DIR/config/va.yaml"
+VA_YAML="$WORK_DIR/config/va.yaml"
 PROVISIONING_GUARD="$INSTALL_DIR/.customer-provisioning-incomplete"
 if [ -n "$VA_CONFIG" ]; then
   [ -f "$VA_CONFIG" ] || die "no va.yaml at $VA_CONFIG"
@@ -802,7 +919,7 @@ if [ -n "$VA_CONFIG" ]; then
     say "installed $VA_CONFIG -> $VA_YAML"
   fi
 elif [ -f "$VA_YAML" ]; then
-  say "keeping $VA_YAML"
+  say "keeping $INSTALL_DIR/config/va.yaml"
 else
   has_tty || die "no va.yaml and no terminal; pass VA_CONFIG=/path/to/va.yaml"
   say "running the existing setup wizard"
@@ -817,7 +934,7 @@ fs_cmd chmod 0644 "$VA_YAML"
 if [ -n "$VA_CA_BUNDLE" ]; then
   [ -r "$VA_CA_BUNDLE" ] || die "no readable CA bundle at $VA_CA_BUNDLE"
   grep -q 'BEGIN CERTIFICATE' "$VA_CA_BUNDLE" || die "$VA_CA_BUNDLE is not a PEM certificate bundle"
-  CA_BUNDLE="$INSTALL_DIR/config/ca-bundle.pem"
+  CA_BUNDLE="$WORK_DIR/config/ca-bundle.pem"
   if [ -f "$CA_BUNDLE" ] && cmp -s "$VA_CA_BUNDLE" "$CA_BUNDLE"; then
     say "CA bundle is already current"
   else
@@ -825,9 +942,9 @@ if [ -n "$VA_CA_BUNDLE" ]; then
     say "installed $VA_CA_BUNDLE -> $CA_BUNDLE"
   fi
   fs_cmd chmod 0644 "$CA_BUNDLE"
-elif [ -f "$INSTALL_DIR/config/ca-bundle.pem" ]; then
-  CA_BUNDLE="$INSTALL_DIR/config/ca-bundle.pem"
-  say "keeping $CA_BUNDLE"
+elif [ -f "$WORK_DIR/config/ca-bundle.pem" ]; then
+  CA_BUNDLE="$WORK_DIR/config/ca-bundle.pem"
+  say "keeping $INSTALL_DIR/config/ca-bundle.pem"
 fi
 
 # The one thing a node must be told: where its mothership is. Asked only when
@@ -921,6 +1038,7 @@ if [ "$VA_REGISTER" = "1" ]; then
   VA_API_PASSWORD=""
   unset VA_API_EMAIL VA_API_PASSWORD 2>/dev/null
   validate_api_url
+  ensure_mothership_reachable
   _api_base=${VA_API_URL%/}
   case "$_api_base" in */api) API_ROOT=$_api_base ;; *) API_ROOT="$_api_base/api" ;; esac
 
@@ -943,6 +1061,8 @@ else
 fi
 VA_API_AUTHORIZATION=""
 unset VA_API_AUTHORIZATION 2>/dev/null
+
+commit_install_dir
 
 step "6/6  VoIP plane"
 if [ "$START" = "1" ]; then
