@@ -229,3 +229,8 @@ authorization failures, and UUID idempotency. It then shuts mothership down and
 uses the in-container CLI to check the separate VoIP runtime, aggregate node
 health, Kamailio, dispatcher routability, and the `/tmp/node.yaml` mount. There
 is no Python or fake API in this repository.
+
+## Developing
+
+See [DEVELOPMENT.md](DEVELOPMENT.md): `make check` runs the static gate, `make install` runs
+the script from a checkout, `make test` runs the integration test on a disposable host.
