@@ -775,6 +775,12 @@ CID="$(docker_cmd create "$VA_VOIP_IMAGE" true)" || die "could not open $VA_VOIP
 fs_cmd mkdir -p "$INSTALL_DIR/config"
 docker_copy_cmd cp "$CID:/stack/." "$INSTALL_DIR/" \
   || die "$VA_VOIP_IMAGE has no bundled node stack"
+# `docker cp` creates host files owned by whoever ran the docker client — root
+# when Docker needs sudo. The directory is the operator's and the setup/register
+# containers run as the operator, so give the extracted stack back to them.
+if [ "$DOCKER_AS_ROOT" = "1" ] && [ "$FS_AS_ROOT" = "0" ]; then
+  root_cmd chown -R "$(id -u):$(id -g)" "$INSTALL_DIR" || die "could not chown $INSTALL_DIR"
+fi
 docker_cmd rm -f "$CID" >/dev/null
 CID=""
 [ -f "$INSTALL_DIR/docker-compose.yaml" ] || die "the bundled stack has no docker-compose.yaml"
