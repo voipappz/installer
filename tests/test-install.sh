@@ -652,7 +652,10 @@ until (exec 3<>"/dev/tcp/$INTERNAL_IP/4222") 2>/dev/null; do
   ((SECONDS < deadline)) || die 'the remote test broker never accepted connections'
   sleep 2
 done
-sed -i "s#^\([[:space:]]*\)url: .nats://[^\"']*.#\1url: '$BROKER_URL'#" "$NODE_DIR/config/va.yaml"
+# The CLI re-serializes va.yaml unquoted, so replace the url line under the
+# broker key rather than matching a quoted value.
+sed -i "/^broker:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 '$BROKER_URL'#" \
+  "$NODE_DIR/config/va.yaml"
 grep -Fq "$BROKER_URL" "$NODE_DIR/config/va.yaml" \
   || die 'test setup could not point va.yaml at the remote broker'
 # The stack pins container names, so a leftover va-voip from an earlier
@@ -671,7 +674,7 @@ mkdir -p "$STALE_DIR"
 # Compose as an address. START=0: this asserts the environment, not a runtime.
 BROKER_NAME_URL="nats://localhost:4222"
 cp "$NODE_DIR/config/va.yaml" "$RUN_ROOT/va.yaml.ip-broker"
-sed -i "s#^\([[:space:]]*\)url: .nats://[^\"']*.#\1url: '$BROKER_NAME_URL'#" \
+sed -i "/^broker:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 '$BROKER_NAME_URL'#" \
   "$NODE_DIR/config/va.yaml"
 run_installer success named-broker VA_REGISTER=0 START=0 VA_API_AUTHORIZATION=
 grep -Fq "VA_NATS_URL=$BROKER_NAME_URL" "$NODE_DIR/.env" \
