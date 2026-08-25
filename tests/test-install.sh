@@ -543,6 +543,39 @@ sudo test -O "$ROOT_DIR/.env" || die 'root-owned .env was not created by root'
 sudo rm -rf -- "$ROOT_DIR"
 pass 'installation into a root-owned directory runs Compose elevated'
 
+# An operator OUTSIDE the docker group: every docker call goes through sudo,
+# which resets the environment. The registration container must still receive
+# the Account authorization (it is handed over on stdin, never as an argument)
+# — the first real install failed here with "VA_API_AUTHORIZATION must contain
+# a Basic authorization value" while the same run passed from a docker-group
+# user. Registration is idempotent by node UUID, so re-registering is safe.
+SUDO_USER_NAME=va-ci-nodocker
+SUDO_DIR="$RUN_ROOT/nodocker"
+sudo userdel -r "$SUDO_USER_NAME" >/dev/null 2>&1 || true
+sudo useradd -m -s /bin/sh "$SUDO_USER_NAME"
+printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$SUDO_USER_NAME" | sudo tee /etc/sudoers.d/va-ci-nodocker >/dev/null
+sudo chmod 0440 /etc/sudoers.d/va-ci-nodocker
+sudo -u "$SUDO_USER_NAME" docker info >/dev/null 2>&1 && die 'test precondition: the no-docker user can reach Docker directly'
+sudo install -d -o "$SUDO_USER_NAME" -g "$SUDO_USER_NAME" -m 0755 "$SUDO_DIR"
+sudo install -o "$SUDO_USER_NAME" -m 0644 "$NODE_DIR/config/va.yaml" "$SUDO_DIR/boot.yaml"
+NODOCKER_LOG="$LOG_DIR/nodocker-install.log"
+# shellcheck disable=SC2024  # the redirect is meant to be ours, not the sudo user's
+sudo -u "$SUDO_USER_NAME" -H env -i PATH="$PATH" HOME="/home/$SUDO_USER_NAME" \
+  INSTALL_DIR="$SUDO_DIR/node" VA_CONFIG="$SUDO_DIR/boot.yaml" \
+  VA_API_URL="$API_URL" VA_NATS_URL=nats://127.0.0.1:4222 \
+  VA_API_AUTHORIZATION="$BASIC_AUTH" VA_CUSTOMER_UUID="$FIRST_UUID" \
+  VA_REGISTER=1 START=0 \
+  sh "$ROOT/install.sh" </dev/null >"$NODOCKER_LOG" 2>&1 || {
+    show_safe_log "$NODOCKER_LOG"
+    die 'installation by a user outside the docker group failed'
+  }
+assert_no_secret_in_log "$NODOCKER_LOG"
+grep -Fq -- 'registering node' "$NODOCKER_LOG" || die 'no-docker-group install never registered'
+sudo rm -rf -- "$SUDO_DIR"
+sudo rm -f /etc/sudoers.d/va-ci-nodocker
+sudo userdel -r "$SUDO_USER_NAME" >/dev/null 2>&1 || true
+pass 'a user outside the docker group registers through sudo'
+
 run_installer success idempotent-rerun VA_CUSTOMER_UUID="$FIRST_UUID"
 grep -Fq 'already registered' "$LAST_LOG" \
   || die 'node re-registration was not reported as idempotent'

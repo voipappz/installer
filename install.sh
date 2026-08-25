@@ -141,26 +141,40 @@ image_cli() {
   fi
 }
 
-register_node_cli() (
-  export VA_API_AUTHORIZATION
-  if [ -n "$CA_BUNDLE" ]; then SSL_CERT_FILE=/work/config/ca-bundle.pem; export SSL_CERT_FILE; fi
+# The registration container gets the Account authorization through its
+# environment, but that environment must be built INSIDE the docker command:
+# when Docker needs sudo, sudo resets the caller's environment and a plain
+# `-e VA_API_AUTHORIZATION` forwards nothing. The value crosses the sudo
+# boundary on stdin — never as an argument, where `ps` would show it.
+docker_with_authorization() {
+  if [ "$DOCKER_AS_ROOT" = "1" ]; then
+    printf '%s' "$VA_API_AUTHORIZATION" |
+      sudo sh -c 'VA_API_AUTHORIZATION=$(cat); export VA_API_AUTHORIZATION; exec "$@"' sh docker "$@"
+  else
+    printf '%s' "$VA_API_AUTHORIZATION" |
+      sh -c 'VA_API_AUTHORIZATION=$(cat); export VA_API_AUTHORIZATION; exec "$@"' sh docker "$@"
+  fi
+}
+
+register_node_cli() {
+  if [ -n "$CA_BUNDLE" ]; then _ssl_cert=/work/config/ca-bundle.pem; else _ssl_cert=""; fi
   if [ "$FS_AS_ROOT" = "1" ]; then
-    docker_cmd run --rm --network host \
+    docker_with_authorization run --rm --network host \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION -e SSL_CERT_FILE \
+      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" \
       -v "$INSTALL_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   else
-    docker_cmd run --rm --network host \
+    docker_with_authorization run --rm --network host \
       --user "$(id -u):$(id -g)" \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION -e SSL_CERT_FILE \
+      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" \
       -v "$INSTALL_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   fi
-)
+}
 
 # The image CLI has two wizards. With VA_PATH set it runs the node-only one
 # (name, internal IP, external IP) and writes just the mounted YAML; with
