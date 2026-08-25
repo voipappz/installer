@@ -558,6 +558,8 @@ sudo chmod 0440 /etc/sudoers.d/va-ci-nodocker
 sudo -u "$SUDO_USER_NAME" docker info >/dev/null 2>&1 && die 'test precondition: the no-docker user can reach Docker directly'
 sudo install -d -o "$SUDO_USER_NAME" -g "$SUDO_USER_NAME" -m 0755 "$SUDO_DIR"
 sudo install -o "$SUDO_USER_NAME" -m 0644 "$NODE_DIR/config/va.yaml" "$SUDO_DIR/boot.yaml"
+# The runner checkout is not readable by another user; hand over a copy.
+sudo install -o "$SUDO_USER_NAME" -m 0644 "$ROOT/install.sh" "$SUDO_DIR/install.sh"
 NODOCKER_LOG="$LOG_DIR/nodocker-install.log"
 # shellcheck disable=SC2024  # the redirect is meant to be ours, not the sudo user's
 sudo -u "$SUDO_USER_NAME" -H env -i PATH="$PATH" HOME="/home/$SUDO_USER_NAME" \
@@ -565,7 +567,7 @@ sudo -u "$SUDO_USER_NAME" -H env -i PATH="$PATH" HOME="/home/$SUDO_USER_NAME" \
   VA_API_URL="$API_URL" VA_NATS_URL=nats://127.0.0.1:4222 \
   VA_API_AUTHORIZATION="$BASIC_AUTH" VA_CUSTOMER_UUID="$FIRST_UUID" \
   VA_REGISTER=1 START=0 \
-  sh "$ROOT/install.sh" </dev/null >"$NODOCKER_LOG" 2>&1 || {
+  sh "$SUDO_DIR/install.sh" </dev/null >"$NODOCKER_LOG" 2>&1 || {
     show_safe_log "$NODOCKER_LOG"
     die 'installation by a user outside the docker group failed'
   }
