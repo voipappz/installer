@@ -344,11 +344,19 @@ assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for 
 
 # A caller-provided mothership URL is authoritative even when an existing YAML
 # points elsewhere. The CLI must register from the persisted override.
-sed -i "s#url: '$API_URL'#url: 'https://cloud.voipappz.io'#" "$NODE_DIR/config/va.yaml"
+# The image CLI re-serializes va.yaml, so match the URL in quoted or bare form.
+yaml_mothership_url() {
+  sed -n '/^mothership:/,/^[^[:space:]]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' \
+    "$NODE_DIR/config/va.yaml" | head -1 | tr -d "'\""
+}
+sed -i '/^mothership:/,/^[^[:space:]]/ s#^\([[:space:]]*url:\).*#\1 https://cloud.voipappz.io#' \
+  "$NODE_DIR/config/va.yaml"
+[[ $(yaml_mothership_url) == https://cloud.voipappz.io ]] \
+  || die 'test setup could not point the existing YAML at another mothership'
 run_installer success existing-customer \
   VA_API_URL="$API_URL" VA_API_AUTHORIZATION= \
   VA_API_EMAIL="$ACCOUNT_EMAIL" VA_API_PASSWORD="$ACCOUNT_PASSWORD"
-grep -Fq "url: '$API_URL'" "$NODE_DIR/config/va.yaml" \
+[[ $(yaml_mothership_url) == "$API_URL" ]] \
   || die 'explicit mothership URL was not persisted to va.yaml'
 pass 'explicit mothership URL overrides the existing YAML'
 customer=$(api GET "/customers/$FIRST_UUID")
