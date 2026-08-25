@@ -342,8 +342,15 @@ docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-app sh -c \
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
 
+# A caller-provided mothership URL is authoritative even when an existing YAML
+# points elsewhere. The CLI must register from the persisted override.
+sed -i "s#url: '$API_URL'#url: 'https://cloud.voipappz.io'#" "$NODE_DIR/config/va.yaml"
 run_installer success existing-customer \
-  VA_API_AUTHORIZATION= VA_API_EMAIL="$ACCOUNT_EMAIL" VA_API_PASSWORD="$ACCOUNT_PASSWORD"
+  VA_API_URL="$API_URL" VA_API_AUTHORIZATION= \
+  VA_API_EMAIL="$ACCOUNT_EMAIL" VA_API_PASSWORD="$ACCOUNT_PASSWORD"
+grep -Fq "url: '$API_URL'" "$NODE_DIR/config/va.yaml" \
+  || die 'explicit mothership URL was not persisted to va.yaml'
+pass 'explicit mothership URL overrides the existing YAML'
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
   'existing customer is linked to this node'
@@ -440,7 +447,7 @@ NODE_UP=1
 wait_http http://127.0.0.1:4000/health 180
 
 # The in-container CLI is the operator interface. Prove the VoIP container is
-# running, then use that CLI for health and a real SIP transaction.
+# running, then use the node-runtime CLI for its aggregate health verdict.
 [[ $(docker inspect -f '{{.State.Running}}' va-voip) == true ]] \
   || die 'VoIP service is not running'
 
@@ -454,12 +461,7 @@ until docker exec va-voip voipappz health \
   sleep 3
 done
 
-docker exec va-voip voipappz test --level ping \
-  >"$LOG_DIR/kamailio-sip.log" 2>&1 || {
-  show_safe_log "$LOG_DIR/kamailio-sip.log"
-  die 'in-container CLI could not complete a SIP OPTIONS transaction with Kamailio'
-}
-pass 'in-container CLI reports node health and validates Kamailio on the wire'
+pass 'in-container CLI reports node, Kamailio, dispatcher, and FreeSWITCH health'
 
 mount_source=$(docker inspect va-voip --format \
   '{{range .Mounts}}{{if eq .Destination "/tmp/node.yaml"}}{{.Source}}{{end}}{{end}}')

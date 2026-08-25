@@ -36,6 +36,19 @@ curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh 
 unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 ```
 
+To install and register against another mothership without starting the VoIP
+containers:
+
+```sh
+VA_API_URL='https://mothership.example.com' \
+VA_API_AUTHORIZATION='Basic <account-token>' \
+START=0 sh -c 'curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh | sh'
+```
+
+An explicit `VA_API_URL` updates `va.yaml`, including on a rerun. The complete
+Basic value exists only in the installer process; avoid putting a real token in
+shell history on a shared machine.
+
 Do not put the Account authorization in `va.yaml`. The default mothership is
 `https://cloud.voipappz.io`; a `mothership.url` already present in the YAML
 wins.
@@ -66,13 +79,11 @@ The CLI lives in the node container. Use it for node operations:
 cd /opt/voipappz
 docker compose --profile voip ps
 docker exec va-voip voipappz health
-docker exec va-voip voipappz test --level ping
 docker exec va-voip voipappz node --help
 ```
 
 Docker Compose owns container lifecycle. The CLI owns node operations:
-registration, configuration, Kamailio, FreeSWITCH, health, and SIP tests. The
-ping test sends a real SIP OPTIONS request to Kamailio.
+registration, configuration, Kamailio, FreeSWITCH, and health.
 
 ## Customer behavior
 
@@ -104,7 +115,7 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 | `VA_CUSTOMER_NAME=<name>` | Select by exact name or create it. |
 | `START=0` | Install and register without starting `va-voip`. |
 | `VA_REGISTER=0` | Install/start without mothership registration. |
-| `VA_API_URL=https://...` | Add a mothership URL when YAML has none. |
+| `VA_API_URL=https://...` | Set the mothership URL and persist it to YAML. |
 | `VA_NATS_URL=nats://...` | Add a broker URL when YAML has none. |
 
 ## CI coverage
@@ -115,6 +126,6 @@ public `voipappz/mothership`, and boots its complete `app + storage`
 environment. It uses the real onboarding script, API, `Customer::Init`, and
 node CLI to test existing/new customers, retries, conflicts, disabled records,
 authorization failures, and UUID idempotency. It then shuts mothership down and
-uses the in-container CLI to check the separate VoIP runtime, node health, and
-a real Kamailio SIP response before checking the `/tmp/node.yaml` mount. There
+uses the in-container CLI to check the separate VoIP runtime, aggregate node
+health, Kamailio, dispatcher routability, and the `/tmp/node.yaml` mount. There
 is no Python or fake API in this repository.

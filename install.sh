@@ -9,6 +9,7 @@ set -eu
 VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
+if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
 VA_NATS_URL="${VA_NATS_URL:-}"
 VA_REGISTER="${VA_REGISTER:-1}"
@@ -146,6 +147,42 @@ set_compose_env() {
     fs_cmd tee -a "$ENV_TEMP" >/dev/null
   fs_cmd chmod 0600 "$ENV_TEMP"
   fs_cmd mv -f -- "$ENV_TEMP" "$INSTALL_DIR/.env"
+  ENV_TEMP=""
+}
+
+set_yaml_api_url() {
+  _url=$1
+  validate_scalar "VA_API_URL" "$_url"
+  ENV_TEMP="$(fs_cmd mktemp "$INSTALL_DIR/config/.va.yaml.tmp.XXXXXX")" \
+    || die "could not update $VA_YAML"
+  fs_cmd awk -v url="$_url" '
+    function emit_url() { print "  url: \047" url "\047"; wrote = 1 }
+    /^mothership:[[:space:]]*(#.*)?$/ {
+      in_mothership = 1
+      saw_mothership = 1
+      print
+      next
+    }
+    in_mothership && /^[^[:space:]#]/ {
+      if (!wrote) emit_url()
+      in_mothership = 0
+    }
+    in_mothership && /^[[:space:]]+url:[[:space:]]*/ {
+      if (!wrote) emit_url()
+      next
+    }
+    { print }
+    END {
+      if (in_mothership && !wrote) emit_url()
+      if (!saw_mothership) {
+        print ""
+        print "mothership:"
+        emit_url()
+      }
+    }
+  ' "$VA_YAML" | fs_cmd tee "$ENV_TEMP" >/dev/null
+  fs_cmd chmod 0644 "$ENV_TEMP"
+  fs_cmd mv -f -- "$ENV_TEMP" "$VA_YAML"
   ENV_TEMP=""
 }
 
@@ -555,7 +592,10 @@ fi
 [ -f "$VA_YAML" ] || die "setup did not create $VA_YAML"
 fs_cmd chmod 0644 "$VA_YAML"
 
-if ! grep -Eq '^[[:space:]]*mothership:' "$VA_YAML"; then
+if [ "$VA_API_URL_EXPLICIT" = "1" ]; then
+  set_yaml_api_url "$VA_API_URL"
+  say "using mothership $VA_API_URL"
+elif ! grep -Eq '^[[:space:]]*mothership:' "$VA_YAML"; then
   validate_scalar "VA_API_URL" "$VA_API_URL"
   printf "\nmothership:\n  url: '%s'\n" "$VA_API_URL" | fs_cmd tee -a "$VA_YAML" >/dev/null
 fi
@@ -580,8 +620,13 @@ CONFIG_API_URL="$(printf '%s\n' "$NODE_ENV" | sed -n 's/^VA_API_URL=//p' | head 
 CONFIG_NATS_URL="$(printf '%s\n' "$NODE_ENV" | sed -n 's/^VA_NATS_URL=//p' | head -1)"
 NODE_ENV=""
 [ -n "$NODE_UUID" ] || die "va.yaml did not produce a node UUID"
-[ -z "$CONFIG_API_URL" ] || VA_API_URL=$CONFIG_API_URL
-set_compose_env VA_API_URL "$CONFIG_API_URL"
+if [ "$VA_API_URL_EXPLICIT" = "1" ]; then
+  [ "$CONFIG_API_URL" = "$VA_API_URL" ] \
+    || die "the node CLI did not preserve the requested mothership URL"
+else
+  [ -z "$CONFIG_API_URL" ] || VA_API_URL=$CONFIG_API_URL
+fi
+set_compose_env VA_API_URL "$VA_API_URL"
 set_compose_env VA_NATS_URL "$CONFIG_NATS_URL"
 
 step "5/6  Registration"
