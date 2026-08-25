@@ -500,7 +500,8 @@ pass 'invalid explicit mothership URL is rejected before it is persisted'
 start_tls_proxy
 run_installer failure tls-untrusted-chain \
   VA_API_URL="$TLS_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
-grep -Fq 'no customer change was attempted' "$LAST_LOG" \
+# The probe stops it before the CLI is even asked (unattended: no trust prompt).
+grep -Eq 'untrusted mothership certificate|no customer change was attempted' "$LAST_LOG" \
   || die 'an unverifiable mothership chain did not stop before customer work'
 
 run_installer success tls-ca-bundle \
