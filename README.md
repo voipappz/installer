@@ -117,6 +117,7 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 | `VA_REGISTER=0` | Install/start without mothership registration. |
 | `VA_API_URL=https://...` | Set the mothership URL and persist it to YAML. |
 | `VA_NATS_URL=nats://...` | Add a broker URL when YAML has none. |
+| `VA_CA_BUNDLE=/path/chain.pem` | Extra PEM trust anchors for a mothership whose TLS chain the image cannot verify (for example, a server that omits its intermediate certificate). Copied to `config/ca-bundle.pem` and used by registration and customer API calls; TLS verification stays on. |
 
 ## CI coverage
 

@@ -9,6 +9,8 @@ set -eu
 VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
+VA_CA_BUNDLE="${VA_CA_BUNDLE:-}"
+CA_BUNDLE=""
 if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
 VA_NATS_URL="${VA_NATS_URL:-}"
@@ -99,11 +101,12 @@ image_cli() {
 
 register_node_cli() (
   export VA_API_AUTHORIZATION
+  if [ -n "$CA_BUNDLE" ]; then SSL_CERT_FILE=/work/config/ca-bundle.pem; export SSL_CERT_FILE; fi
   if [ "$FS_AS_ROOT" = "1" ]; then
     docker_cmd run --rm --network host \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION \
+      -e VA_API_AUTHORIZATION -e SSL_CERT_FILE \
       -v "$INSTALL_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   else
@@ -111,7 +114,7 @@ register_node_cli() (
       --user "$(id -u):$(id -g)" \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION \
+      -e VA_API_AUTHORIZATION -e SSL_CERT_FILE \
       -v "$INSTALL_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   fi
@@ -366,7 +369,10 @@ api_request() {
   shift 2
   : > "$API_BODY_FILE"
   if ! API_STATUS="$(
-    printf 'header = "Authorization: %s"\nheader = "Accept: application/json"\n' "$VA_API_AUTHORIZATION" |
+    {
+      printf 'header = "Authorization: %s"\nheader = "Accept: application/json"\n' "$VA_API_AUTHORIZATION"
+      [ -z "$CA_BUNDLE" ] || printf 'cacert = "%s"\n' "$CA_BUNDLE"
+    } |
       curl --config - --silent --show-error --connect-timeout 10 --max-time 45 \
         --request "$_method" --output "$API_BODY_FILE" --write-out '%{http_code}' \
         "$@" --url "${API_ROOT}${_path}"
@@ -596,6 +602,24 @@ else
 fi
 [ -f "$VA_YAML" ] || die "setup did not create $VA_YAML"
 fs_cmd chmod 0644 "$VA_YAML"
+
+# Optional extra CA bundle (PEM) for a mothership whose TLS chain is not
+# trusted by the image. Verification stays enabled; this only adds anchors.
+if [ -n "$VA_CA_BUNDLE" ]; then
+  [ -r "$VA_CA_BUNDLE" ] || die "no readable CA bundle at $VA_CA_BUNDLE"
+  grep -q 'BEGIN CERTIFICATE' "$VA_CA_BUNDLE" || die "$VA_CA_BUNDLE is not a PEM certificate bundle"
+  CA_BUNDLE="$INSTALL_DIR/config/ca-bundle.pem"
+  if [ -f "$CA_BUNDLE" ] && cmp -s "$VA_CA_BUNDLE" "$CA_BUNDLE"; then
+    say "CA bundle is already current"
+  else
+    fs_cmd cp "$VA_CA_BUNDLE" "$CA_BUNDLE"
+    say "installed $VA_CA_BUNDLE -> $CA_BUNDLE"
+  fi
+  fs_cmd chmod 0644 "$CA_BUNDLE"
+elif [ -f "$INSTALL_DIR/config/ca-bundle.pem" ]; then
+  CA_BUNDLE="$INSTALL_DIR/config/ca-bundle.pem"
+  say "keeping $CA_BUNDLE"
+fi
 
 if [ "$VA_API_URL_EXPLICIT" = "1" ]; then
   set_yaml_api_url "$VA_API_URL"

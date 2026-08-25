@@ -378,6 +378,15 @@ grep -Fq 'VA_API_URL=http://cloud.voipappz.example' "$NODE_DIR/.env" \
   && die 'invalid mothership URL was written to .env'
 pass 'invalid explicit mothership URL is rejected before it is persisted'
 
+# An extra CA bundle is installed next to the YAML and never breaks a plain
+# HTTP mothership; it only adds trust anchors.
+run_installer success ca-bundle VA_CUSTOMER_UUID="$FIRST_UUID" \
+  VA_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+cmp -s /etc/ssl/certs/ca-certificates.crt "$NODE_DIR/config/ca-bundle.pem" \
+  || die 'CA bundle was not installed to config/ca-bundle.pem'
+rm -f -- "$NODE_DIR/config/ca-bundle.pem"
+pass 'extra CA bundle is installed for registration'
+
 run_installer success idempotent-rerun VA_CUSTOMER_UUID="$FIRST_UUID"
 grep -Fq 'already registered' "$LAST_LOG" \
   || die 'node re-registration was not reported as idempotent'
