@@ -664,7 +664,7 @@ grep -Fq "$BROKER_URL" "$NODE_DIR/config/va.yaml" \
 STALE_DIR="$RUN_ROOT/stale-node"
 mkdir -p "$STALE_DIR"
 (cd "$STALE_DIR" && cp "$NODE_DIR/docker-compose.yaml" . && cp -r "$NODE_DIR/config" . \
-  && cp "$NODE_DIR/.env" . && docker compose --profile voip create va-voip) >/dev/null 2>&1 \
+  && cp "$NODE_DIR/.env" . && docker compose --profile voip create voip) >/dev/null 2>&1 \
   || die 'could not stage a conflicting va-voip container'
 [[ $(docker inspect va-voip --format \
   '{{index .Config.Labels "com.docker.compose.project.working_dir"}}') == "$STALE_DIR" ]] \
