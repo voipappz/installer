@@ -164,6 +164,20 @@ set_compose_env() {
   ENV_TEMP=""
 }
 
+# nats://user:token@host:4222 -> host. Compose needs the bare host for the voip
+# service's `nats:${VA_NATS_HOST}` mapping.
+host_of_url() {
+  _rest=${1#*://}
+  _rest=${_rest##*@}
+  _rest=${_rest%%/*}
+  printf '%s' "${_rest%%:*}"
+}
+
+yaml_broker_url() {
+  fs_cmd sed -n '/^broker:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_YAML" |
+    head -1 | tr -d "\"'" | tr -d '[:space:]'
+}
+
 set_yaml_api_url() {
   _url=$1
   validate_scalar "VA_API_URL" "$_url"
@@ -667,7 +681,21 @@ else
   [ -z "$CONFIG_API_URL" ] || VA_API_URL=$CONFIG_API_URL
 fi
 set_compose_env VA_API_URL "$VA_API_URL"
-set_compose_env VA_NATS_URL "$CONFIG_NATS_URL"
+
+# The CLI writes the bundled app-plane broker into .env (loopback, with a
+# token). When va.yaml names a different broker host, that YAML value is the
+# node's broker and must reach Compose — both as the URL and as the host the
+# voip service maps `nats` to. A same-host CLI value is kept as-is so its
+# credentials survive.
+BROKER_URL="$(yaml_broker_url)"
+if [ -n "$BROKER_URL" ] && \
+   [ "$(host_of_url "$BROKER_URL")" != "$(host_of_url "$CONFIG_NATS_URL")" ]; then
+  say "using broker $BROKER_URL from va.yaml"
+else
+  BROKER_URL=$CONFIG_NATS_URL
+fi
+set_compose_env VA_NATS_URL "$BROKER_URL"
+set_compose_env VA_NATS_HOST "$(host_of_url "$BROKER_URL")"
 
 step "5/6  Registration"
 SELECTED_CUSTOMER_UUID=""
