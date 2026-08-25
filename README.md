@@ -79,9 +79,27 @@ curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh 
   env VA_IMAGE_ARCHIVE=https://<bucket-host>/images/va-crystal-node-latest.tar.gz sh
 ```
 
-Interactively, run the installer with no variables and choose
-`2) load a docker-save archive` at the `Image source` prompt, then enter the
-path or URL. Empty or invalid answers re-prompt.
+The installer takes no command-line arguments — it is piped into `sh`, so
+every setting is an environment variable. Interactively, run it with no
+variables at all:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh | sh
+```
+
+When `nirlevi/va-crystal:node` is not already in Docker it asks:
+
+```
+  Image source:
+    1) pull nirlevi/va-crystal:node from Docker Hub
+    2) load a docker-save archive (.tar or .tar.gz) from a path or URL
+  Choose 1 or 2 [1]: 2
+  Absolute path or http(s) URL of the image archive: /absolute/path/va-crystal-node-2026.08.24-1.tar.gz
+```
+
+Empty or invalid answers re-prompt. Unattended installs (any of
+`VA_IMAGE_ARCHIVE`, `VA_REGISTRY_USER`, `VA_REGISTRY_TOKEN` exported) never see
+the menu.
 
 Rules:
 
