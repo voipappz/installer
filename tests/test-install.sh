@@ -322,7 +322,7 @@ docker run --rm --entrypoint voipappz nirlevi/va-crystal:node node --help >/dev/
 grep -Fq -- './config/va.yaml:/tmp/node.yaml' "$NODE_DIR/docker-compose.yaml" \
   || die 'compose does not mount va.yaml at /tmp/node.yaml'
 [[ -f $NODE_DIR/config/va.yaml ]] || die 'va.yaml was not created by the node CLI defaults'
-grep -Eq '^  uuid: [0-9a-f-]{36}$' "$NODE_DIR/config/va.yaml" || die 'the unattended va.yaml has no node uuid'
+grep -Eq 'uuid: [0-9a-f]{8}-[0-9a-f-]{27}' "$NODE_DIR/config/va.yaml" || die 'the unattended va.yaml has no node uuid'
 find /tmp -maxdepth 1 -type d -name 'voipappz-docker-auth.*' -print -quit | grep -q . \
   && die 'temporary installer Docker credentials were not removed'
 pass 'clean host installs Docker, image, stack, and va.yaml'
