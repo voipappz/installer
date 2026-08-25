@@ -468,6 +468,10 @@ pass 'a removed CA bundle leaves the plain mothership working'
 # A root-owned installation directory keeps .env at mode 0600, so Compose has to
 # run elevated even when the Docker socket is reachable unelevated.
 ROOT_DIR=/opt/voipappz-ci
+# GitHub runners ship /opt world-writable, so the installer would (correctly)
+# stay unelevated there. Make the directory genuinely root-owned first.
+sudo rm -rf -- "$ROOT_DIR"
+sudo install -d -o root -g root -m 0755 "$ROOT_DIR"
 run_installer success root-owned-install \
   INSTALL_DIR="$ROOT_DIR" VA_CONFIG="$BOOT_CONFIG" VA_REGISTER=0 START=0
 sudo test -O "$ROOT_DIR/.env" || die 'root-owned .env was not created by root'
