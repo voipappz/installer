@@ -27,15 +27,18 @@ case "$INSTALL_DIR" in
   /*) ;;
   *) printf '!! INSTALL_DIR must be an absolute, specific directory\n' >&2; exit 1 ;;
 esac
+# A saved image archive (.tar or .tar.gz): an absolute local path, or an
+# http(s) URL that is downloaded to a temporary file first.
 if [ -n "$VA_IMAGE_ARCHIVE" ]; then
   case "$VA_IMAGE_ARCHIVE" in
-    /*) ;;
-    *) printf '!! VA_IMAGE_ARCHIVE must be an absolute path to a saved image archive\n' >&2; exit 1 ;;
+    http://*|https://*) ;;
+    /*)
+      if [ ! -f "$VA_IMAGE_ARCHIVE" ] || [ ! -r "$VA_IMAGE_ARCHIVE" ]; then
+        printf '!! VA_IMAGE_ARCHIVE is not a readable file: %s\n' "$VA_IMAGE_ARCHIVE" >&2
+        exit 1
+      fi ;;
+    *) printf '!! VA_IMAGE_ARCHIVE must be an absolute path or an http(s) URL of a saved image archive\n' >&2; exit 1 ;;
   esac
-  if [ ! -f "$VA_IMAGE_ARCHIVE" ] || [ ! -r "$VA_IMAGE_ARCHIVE" ]; then
-    printf '!! VA_IMAGE_ARCHIVE is not a readable file: %s\n' "$VA_IMAGE_ARCHIVE" >&2
-    exit 1
-  fi
 fi
 
 FS_AS_ROOT=0
@@ -44,6 +47,7 @@ CID=""
 DOCKER_CONFIG_DIR=""
 DOCKER_INSTALL_SCRIPT=""
 API_BODY_FILE=""
+ARCHIVE_DOWNLOAD=""
 PROVISIONING_GUARD=""
 ENV_TEMP=""
 TTY_STATE=""
@@ -266,6 +270,9 @@ cleanup() {
   case "$API_BODY_FILE" in
     /tmp/voipappz-api-response.*) rm -f -- "$API_BODY_FILE" ;;
   esac
+  case "$ARCHIVE_DOWNLOAD" in
+    /tmp/voipappz-image-archive.*) rm -f -- "$ARCHIVE_DOWNLOAD" "$ARCHIVE_DOWNLOAD.sha256" ;;
+  esac
   VA_REGISTRY_TOKEN=""
   VA_API_AUTHORIZATION=""
   VA_API_EMAIL=""
@@ -311,7 +318,7 @@ choose_image_source() {
   [ -z "$VA_IMAGE_ARCHIVE" ] || return 0
   [ -z "${VA_REGISTRY_USER:-}" ] && [ -z "${VA_REGISTRY_TOKEN:-}" ] || return 0
   has_tty || return 0
-  printf '  Image source:\n    1) pull %s from Docker Hub\n    2) load a local docker-save archive (.tar or .tar.gz)\n' \
+  printf '  Image source:\n    1) pull %s from Docker Hub\n    2) load a docker-save archive (.tar or .tar.gz) from a path or URL\n' \
     "$VA_VOIP_IMAGE" > /dev/tty
   while :; do
     ask "Choose 1 or 2 [1]"
@@ -322,11 +329,12 @@ choose_image_source() {
     esac
   done
   while :; do
-    ask "Absolute path to the image archive"
+    ask "Absolute path or http(s) URL of the image archive"
     case "$REPLY" in
+      http://*|https://*) VA_IMAGE_ARCHIVE=$REPLY; return 0 ;;
       /*) if [ -f "$REPLY" ] && [ -r "$REPLY" ]; then VA_IMAGE_ARCHIVE=$REPLY; return 0; fi
           printf '  not a readable file: %s\n' "$REPLY" > /dev/tty ;;
-      *)  printf '  the path must be absolute\n' > /dev/tty ;;
+      *)  printf '  enter an absolute path or an http(s) URL\n' > /dev/tty ;;
     esac
   done
 }
@@ -618,9 +626,34 @@ if docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
 elif choose_image_source && [ -n "$VA_IMAGE_ARCHIVE" ]; then
   # Offline path: a `docker save` archive (plain or gzip) of the node image.
   # No registry credentials are needed or requested.
-  say "loading $VA_IMAGE_ARCHIVE"
-  LOADED="$(docker_cmd load -q -i "$VA_IMAGE_ARCHIVE")" \
+  ARCHIVE_FILE=$VA_IMAGE_ARCHIVE
+  case "$VA_IMAGE_ARCHIVE" in
+    http://*|https://*)
+      # Downloaded beside nothing else and removed on exit. A sibling
+      # <url>.sha256, when the server has one, must match; without one the
+      # download is trusted as-is, exactly like a local file.
+      ARCHIVE_DOWNLOAD="$(mktemp /tmp/voipappz-image-archive.XXXXXX)"
+      say "downloading $VA_IMAGE_ARCHIVE"
+      curl -fL --progress-bar --retry 5 --retry-all-errors -o "$ARCHIVE_DOWNLOAD" "$VA_IMAGE_ARCHIVE" \
+        || die "could not download $VA_IMAGE_ARCHIVE"
+      if curl -fsSL -o "$ARCHIVE_DOWNLOAD.sha256" "$VA_IMAGE_ARCHIVE.sha256" 2>/dev/null; then
+        EXPECTED_SHA="$(tr -d '[:space:]' < "$ARCHIVE_DOWNLOAD.sha256" | cut -c1-64)"
+        ACTUAL_SHA="$(sha256sum "$ARCHIVE_DOWNLOAD" | cut -d' ' -f1)"
+        [ "$EXPECTED_SHA" = "$ACTUAL_SHA" ] \
+          || die "sha256 mismatch for $VA_IMAGE_ARCHIVE (expected $EXPECTED_SHA, got $ACTUAL_SHA)"
+        say "sha256 verified"
+      else
+        say "no .sha256 published beside the archive; skipping checksum"
+      fi
+      ARCHIVE_FILE=$ARCHIVE_DOWNLOAD ;;
+  esac
+  say "loading $ARCHIVE_FILE"
+  LOADED="$(docker_cmd load -q -i "$ARCHIVE_FILE")" \
     || die "could not load an image from $VA_IMAGE_ARCHIVE"
+  case "$ARCHIVE_DOWNLOAD" in
+    /tmp/voipappz-image-archive.*) rm -f -- "$ARCHIVE_DOWNLOAD" "$ARCHIVE_DOWNLOAD.sha256" ;;
+  esac
+  ARCHIVE_DOWNLOAD=""
   if ! docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
     # The archive was saved under another name (or untagged). Retag the single
     # loaded image so Compose and the CLI helpers find it as $VA_VOIP_IMAGE.

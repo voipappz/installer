@@ -18,8 +18,8 @@ requirements itself and keeps the node in `/opt/voipappz`.
 The installer prompts on the terminal for:
 
 - The image source when the private image is not already present: pull from
-  Docker Hub (user and access token) or load a local `docker save` archive
-  (`.tar` or `.tar.gz`) of `nirlevi/va-crystal:node`.
+  Docker Hub (user and access token) or load a `docker save` archive
+  (`.tar` or `.tar.gz`) of `nirlevi/va-crystal:node` from a local path or URL.
 - Account email and password for mothership registration. Password input is
   hidden; the Basic authorization value is built only in memory.
 - Node setup answers when no `va.yaml` was supplied.
@@ -54,6 +54,48 @@ shell history on a shared machine.
 Do not put the Account authorization in `va.yaml`. The default mothership is
 `https://cloud.voipappz.io`; a `mothership.url` already present in the YAML
 wins.
+
+## Install from an image archive (offline, or without Docker Hub)
+
+The node image can also be installed from a `docker save` archive
+(`.tar` or `.tar.gz`) instead of being pulled from Docker Hub. No Docker Hub
+user or token is asked for or used. The archive is produced by va-crystal's
+`make s3-archive` (local file) or `make s3-publish` (uploaded to S3 as
+`va-crystal-node-<VERSION>.tar.gz` and `va-crystal-node-latest.tar.gz`, each
+with a `.sha256` beside it).
+
+From a local file:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh |
+  env VA_IMAGE_ARCHIVE=/absolute/path/va-crystal-node-2026.08.24-1.tar.gz sh
+```
+
+From a URL (downloaded to a temporary file, verified against the sibling
+`.sha256` when one exists, removed after loading):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh |
+  env VA_IMAGE_ARCHIVE=https://<bucket-host>/images/va-crystal-node-latest.tar.gz sh
+```
+
+Interactively, run the installer with no variables and choose
+`2) load a docker-save archive` at the `Image source` prompt, then enter the
+path or URL. Empty or invalid answers re-prompt.
+
+Rules:
+
+- `VA_IMAGE_ARCHIVE` must be an absolute path or an `http(s)` URL.
+- If the image is already present in Docker, the archive is not used.
+- The archive normally carries `nirlevi/va-crystal:node` and the pinned
+  `node-<VERSION>` tag. If it was saved under another name, its single image is
+  tagged as `VA_VOIP_IMAGE` (default `nirlevi/va-crystal:node`) so Compose
+  finds it. An archive with several unrelated images is refused; set
+  `VA_VOIP_IMAGE` to the one to use.
+- The S3 objects are private by default; use a public-read policy on
+  `images/*` or a pre-signed URL for URL installs.
+- Everything after the image (stack extraction, `va.yaml`, registration,
+  `docker compose --profile voip up -d`) is identical to a registry install.
 
 ## What it does
 
@@ -112,7 +154,7 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 | Variable | Meaning |
 |---|---|
 | `VA_CONFIG=/path/va.yaml` | Install this node YAML. |
-| `VA_IMAGE_ARCHIVE=/path/va-crystal.tar.gz` | Load the node image from a `docker save` archive instead of pulling it; no Docker Hub credentials are needed. If the archive was saved under another name, the single image it holds is tagged as `VA_VOIP_IMAGE`. |
+| `VA_IMAGE_ARCHIVE=/path/va-crystal.tar.gz` or `https://…/va-crystal-node-latest.tar.gz` | Load the node image from a `docker save` archive (local file or http(s) URL) instead of pulling it; no Docker Hub credentials are needed. A URL is downloaded to a temporary file, verified against a sibling `.sha256` when one is published, and removed after loading. If the archive was saved under another name, the single image it holds is tagged as `VA_VOIP_IMAGE`. |
 | `VA_VOIP_IMAGE=<ref>` | Image reference to use (default `nirlevi/va-crystal:node`). |
 | `INSTALL_DIR=/path` | Change the install directory. |
 | `VA_CUSTOMER_UUID=<uuid>` | Select an existing visible customer. |
@@ -126,7 +168,8 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 ## CI coverage
 
 GitHub Actions runs on Ubuntu 22.04 and 24.04. The integration job removes the
-runner's preinstalled Docker packages, runs this installer, checks out the
+runner's preinstalled Docker packages, runs this installer, reinstalls from a
+`docker save` archive without registry credentials, checks out the
 public `voipappz/mothership`, and boots its complete `app + storage`
 environment. It uses the real onboarding script, API, `Customer::Init`, and
 node CLI to test existing/new customers, retries, conflicts, disabled records,
