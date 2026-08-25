@@ -342,6 +342,13 @@ if [[ -z $MOTHERSHIP_DIR ]]; then
 fi
 render_example "$BOOT_CONFIG" "$NODE_UUID" "$NODE_SIP_UUID" Installer-CI-Node switch "$INTERNAL_IP"
 
+# The rest of the test talks about THIS node: a supplied YAML replaces the
+# unattended default one, and the CLI must read the supplied UUID back.
+run_installer success supplied-yaml-replaces-default \
+  VA_CONFIG="$BOOT_CONFIG" VA_API_URL="$API_URL" VA_NATS_URL=nats://127.0.0.1:4222 VA_REGISTER=0
+grep -Fq "$NODE_UUID" "$NODE_DIR/config/va.yaml" || die 'the supplied va.yaml did not replace the default one'
+pass 'a supplied va.yaml replaces the unattended default'
+
 # Offline image source: a docker-save archive loaded with VA_IMAGE_ARCHIVE and
 # no registry credentials. The archive is saved under another tag so the load
 # and retag path is exercised without a second registry pull.
