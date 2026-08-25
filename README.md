@@ -17,7 +17,9 @@ requirements itself and keeps the node in `/opt/voipappz`.
 
 The installer prompts on the terminal for:
 
-- Docker Hub user and access token, when the private image must be pulled.
+- The image source when the private image is not already present: pull from
+  Docker Hub (user and access token) or load a local `docker save` archive
+  (`.tar` or `.tar.gz`) of `nirlevi/va-crystal:node`.
 - Account email and password for mothership registration. Password input is
   hidden; the Basic authorization value is built only in memory.
 - Node setup answers when no `va.yaml` was supplied.
@@ -110,6 +112,8 @@ It is not written to YAML, `.env`, Docker, or installer logs.
 | Variable | Meaning |
 |---|---|
 | `VA_CONFIG=/path/va.yaml` | Install this node YAML. |
+| `VA_IMAGE_ARCHIVE=/path/va-crystal.tar.gz` | Load the node image from a `docker save` archive instead of pulling it; no Docker Hub credentials are needed. If the archive was saved under another name, the single image it holds is tagged as `VA_VOIP_IMAGE`. |
+| `VA_VOIP_IMAGE=<ref>` | Image reference to use (default `nirlevi/va-crystal:node`). |
 | `INSTALL_DIR=/path` | Change the install directory. |
 | `VA_CUSTOMER_UUID=<uuid>` | Select an existing visible customer. |
 | `VA_CUSTOMER_NAME=<name>` | Select by exact name or create it. |

@@ -7,6 +7,7 @@
 set -eu
 
 VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}"
+VA_IMAGE_ARCHIVE="${VA_IMAGE_ARCHIVE:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
 VA_CA_BUNDLE="${VA_CA_BUNDLE:-}"
@@ -26,6 +27,14 @@ case "$INSTALL_DIR" in
   /*) ;;
   *) printf '!! INSTALL_DIR must be an absolute, specific directory\n' >&2; exit 1 ;;
 esac
+if [ -n "$VA_IMAGE_ARCHIVE" ]; then
+  case "$VA_IMAGE_ARCHIVE" in
+    /*) ;;
+    *) printf '!! VA_IMAGE_ARCHIVE must be an absolute path to a saved image archive\n' >&2; exit 1 ;;
+  esac
+  [ -f "$VA_IMAGE_ARCHIVE" ] && [ -r "$VA_IMAGE_ARCHIVE" ] \
+    || { printf '!! VA_IMAGE_ARCHIVE is not a readable file: %s\n' "$VA_IMAGE_ARCHIVE" >&2; exit 1; }
+fi
 
 FS_AS_ROOT=0
 DOCKER_AS_ROOT=0
@@ -292,6 +301,32 @@ ask() {
     TTY_STATE=""
     printf '\n' > /dev/tty
   fi
+}
+
+# Interactive image source. Unattended installs pick the source through
+# VA_IMAGE_ARCHIVE or VA_REGISTRY_USER/VA_REGISTRY_TOKEN and never see this.
+choose_image_source() {
+  [ -z "$VA_IMAGE_ARCHIVE" ] || return 0
+  [ -z "${VA_REGISTRY_USER:-}" ] && [ -z "${VA_REGISTRY_TOKEN:-}" ] || return 0
+  has_tty || return 0
+  printf '  Image source:\n    1) pull %s from Docker Hub\n    2) load a local docker-save archive (.tar or .tar.gz)\n' \
+    "$VA_VOIP_IMAGE" > /dev/tty
+  while :; do
+    ask "Choose 1 or 2 [1]"
+    case "$REPLY" in
+      ''|1) return 0 ;;
+      2) break ;;
+      *) printf '  enter 1 or 2\n' > /dev/tty ;;
+    esac
+  done
+  while :; do
+    ask "Absolute path to the image archive"
+    case "$REPLY" in
+      /*) if [ -f "$REPLY" ] && [ -r "$REPLY" ]; then VA_IMAGE_ARCHIVE=$REPLY; return 0; fi
+          printf '  not a readable file: %s\n' "$REPLY" > /dev/tty ;;
+      *)  printf '  the path must be absolute\n' > /dev/tty ;;
+    esac
+  done
 }
 
 set_account_authorization() {
@@ -578,6 +613,30 @@ docker_cmd compose version >/dev/null 2>&1 || die "Docker Compose v2 is required
 step "2/6  Platform image"
 if docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
   say "$VA_VOIP_IMAGE is already present"
+elif choose_image_source && [ -n "$VA_IMAGE_ARCHIVE" ]; then
+  # Offline path: a `docker save` archive (plain or gzip) of the node image.
+  # No registry credentials are needed or requested.
+  say "loading $VA_IMAGE_ARCHIVE"
+  LOADED="$(docker_cmd load -q -i "$VA_IMAGE_ARCHIVE")" \
+    || die "could not load an image from $VA_IMAGE_ARCHIVE"
+  if ! docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
+    # The archive was saved under another name (or untagged). Retag the single
+    # loaded image so Compose and the CLI helpers find it as $VA_VOIP_IMAGE.
+    LOADED_REF="$(printf '%s\n' "$LOADED" |
+      sed -n 's/^Loaded image\( ID\)\{0,1\}: //p' | sort -u)"
+    NL='
+'
+    case "$LOADED_REF" in
+      '') die "$VA_IMAGE_ARCHIVE did not load $VA_VOIP_IMAGE" ;;
+      *"$NL"*)
+        die "$VA_IMAGE_ARCHIVE holds several images; set VA_VOIP_IMAGE to the one to use" ;;
+    esac
+    docker_cmd tag "$LOADED_REF" "$VA_VOIP_IMAGE" \
+      || die "could not tag $LOADED_REF as $VA_VOIP_IMAGE"
+    say "tagged $LOADED_REF as $VA_VOIP_IMAGE"
+  fi
+  LOADED=""
+  LOADED_REF=""
 else
   if [ -z "${VA_REGISTRY_USER:-}" ]; then ask "Docker Hub user"; VA_REGISTRY_USER=$REPLY; fi
   if [ -z "${VA_REGISTRY_TOKEN:-}" ]; then
