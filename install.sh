@@ -72,6 +72,17 @@ docker_auth_cmd() {
   fi
 }
 
+# Compose reads .env and the compose file from the installation directory. When
+# that directory is root-owned (mode-0600 .env), compose must run as root too,
+# even if the Docker socket is reachable as the invoking user.
+compose_cmd() {
+  if [ "$DOCKER_AS_ROOT" = "1" ] || [ "$FS_AS_ROOT" = "1" ]; then
+    root_cmd docker compose "$@"
+  else
+    docker compose "$@"
+  fi
+}
+
 docker_copy_cmd() {
   if [ "$DOCKER_AS_ROOT" = "1" ] || [ "$FS_AS_ROOT" = "1" ]; then
     root_cmd docker "$@"
@@ -694,7 +705,7 @@ unset VA_API_AUTHORIZATION 2>/dev/null
 
 step "6/6  VoIP plane"
 if [ "$START" = "1" ]; then
-  (cd "$INSTALL_DIR" && docker_cmd compose --profile voip up -d) \
+  (cd "$INSTALL_DIR" && compose_cmd --profile voip up -d) \
     || die "could not start the VoIP profile"
 
   _attempt=0

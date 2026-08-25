@@ -387,6 +387,17 @@ cmp -s /etc/ssl/certs/ca-certificates.crt "$NODE_DIR/config/ca-bundle.pem" \
 rm -f -- "$NODE_DIR/config/ca-bundle.pem"
 pass 'extra CA bundle is installed for registration'
 
+# A root-owned installation directory keeps .env at mode 0600, so Compose has to
+# run elevated even when the Docker socket is reachable unelevated.
+ROOT_DIR=/opt/voipappz-ci
+run_installer success root-owned-install \
+  INSTALL_DIR="$ROOT_DIR" VA_CONFIG="$BOOT_CONFIG" VA_REGISTER=0 START=0
+sudo test -O "$ROOT_DIR/.env" || die 'root-owned .env was not created by root'
+(cd "$ROOT_DIR" && docker compose --profile voip config >/dev/null 2>&1) \
+  && die 'test precondition: unelevated compose could still read the root .env'
+sudo rm -rf -- "$ROOT_DIR"
+pass 'installation into a root-owned directory runs Compose elevated'
+
 run_installer success idempotent-rerun VA_CUSTOMER_UUID="$FIRST_UUID"
 grep -Fq 'already registered' "$LAST_LOG" \
   || die 'node re-registration was not reported as idempotent'
