@@ -25,7 +25,7 @@ organization:
 # same UUID updates the same node instead of creating a second one. Generate
 # one with `uuidgen`, or leave the file out and let the installer do it.
 nodes:
-- uuid: df5b0b50-9d24-482b-88be-162351afc2c6 
+- uuid: 00000000-0000-0000-0000-000000000002
   name: Node1
   type: switch                     # a voip node; `app` is the mothership
   roles:
