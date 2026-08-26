@@ -603,10 +603,13 @@ ensure_mothership_reachable() {
         say "the certificate of $VA_API_URL is not in the trust store; trusting it as presented:"
         mothership_certificate_summary
         trust_mothership_certificate; _trusted=1
-        # The running node (and its CLI: sync, health) reaches the same
-        # mothership from inside va-voip, where the saved chain is not
-        # mounted. Compose passes VA_TLS_INSECURE through, so the node talks
-        # to this mothership the way registration did.
+        # A certificate that had to be trusted as presented is registered
+        # without verification. curl (the probe) accepts an intermediate as a
+        # trust anchor; the CLI's OpenSSL does not, so a chain that satisfies
+        # the probe can still fail the CLI. The saved chain stays for the
+        # node; compose passes VA_TLS_INSECURE through so the node's CLI
+        # (sync, health) talks to this mothership the same way.
+        TLS_SKIP_VERIFY=1
         set_compose_env VA_TLS_INSECURE 1
         continue ;;
       *)
