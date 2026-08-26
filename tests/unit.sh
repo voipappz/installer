@@ -117,6 +117,12 @@ check 'it names a mothership and a broker'           'grep -q "^mothership:" "$E
 check 'it carries no customers block'                '! grep -q "^customers:" "$EX"'
 check 'env.example exists'                           '[[ -f $ROOT/env.example ]]'
 check 'env.example holds no real secret'             '! grep -Eq "^[A-Z_]*(PASSWORD|SECRET|KEY|TOKEN)=[A-Za-z0-9+/]{12,}" "$ROOT/env.example"'
-check 'env.example documents the image tag'          'grep -q "^VA_VOIP_TAG=" "$ROOT/env.example"'
+check 'env.example names the image, not a compose tag' 'grep -q "^VA_VOIP_IMAGE=" "$ROOT/env.example" && ! grep -q "VA_VOIP_TAG" "$ROOT/env.example"'
+check 'env.example names the three secrets docker run needs' 'grep -q "^VA_FREESWITCH_PASSWORD=" "$ROOT/env.example" && grep -q "^VA_LICENSE_JWT_SECRET=" "$ROOT/env.example" && grep -q "^VA_LICENSE_ENCRYPTION_KEY=" "$ROOT/env.example"'
+# The image dropped /stack on 2026-08-26; a compose file here would start a
+# second, different node beside the one the installer runs.
+check 'the installer runs the node with docker run'  'grep -q "docker_cmd run -d --name va-voip" "$ROOT/install.sh"'
+check 'the installer no longer needs Compose'        '! grep -qE "compose (up|down|ps|config|version)" "$ROOT/install.sh"'
+check 'the installer no longer extracts /stack'      '! grep -q "stack/." "$ROOT/install.sh"'
 printf '\n'
 if ((fails == 0)); then printf '\033[1munit: all green\033[0m\n'; else printf '\033[1m!! %d unit failure(s)\033[0m\n' "$fails"; exit 1; fi

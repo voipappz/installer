@@ -108,24 +108,6 @@ docker_auth_cmd() {
   fi
 }
 
-# Compose reads .env and the compose file from the installation directory. When
-# that directory is root-owned (mode-0600 .env), compose must run as root too,
-# even if the Docker socket is reachable as the invoking user.
-compose_cmd() {
-  if [ "$DOCKER_AS_ROOT" = "1" ] || [ "$FS_AS_ROOT" = "1" ]; then
-    root_cmd docker compose "$@"
-  else
-    docker compose "$@"
-  fi
-}
-
-docker_copy_cmd() {
-  if [ "$DOCKER_AS_ROOT" = "1" ] || [ "$FS_AS_ROOT" = "1" ]; then
-    root_cmd docker "$@"
-  else
-    docker "$@"
-  fi
-}
 
 image_cli() {
   _va_path=$1
@@ -202,7 +184,11 @@ image_cli_tty() {
   fi
 }
 
-set_compose_env() {
+# One value in $INSTALL_DIR/.env, the installer's record of what this node
+# runs with. Compose is gone (the image is started with `docker run`), so this
+# file is no longer interpolated by anything — it is read back by the next run
+# and by `docker run -e` for the three secrets the image cannot derive.
+set_env_value() {
   _env_key=$1
   _env_value=$2
   [ -n "$_env_value" ] || return 0
@@ -480,11 +466,14 @@ stage_work_dir() {
 commit_install_dir() {
   prepare_install_dir
   fs_cmd cp -Rf "$WORK_DIR/." "$INSTALL_DIR/" || die "could not write $INSTALL_DIR"
-  # The copy adds and replaces; it cannot remove. The one file this installer
-  # deletes on purpose is its own compose override, which must not outlive
-  # the CA bundle it mounts.
-  [ -f "$WORK_DIR/docker-compose.override.yaml" ] \
-    || fs_cmd rm -f -- "$INSTALL_DIR/docker-compose.override.yaml"
+  # Nothing from the compose era may survive here: the scaffold the image used
+  # to carry is gone, and a stale compose file would start a second, different
+  # node beside the one this installer runs.
+  for _stale in docker-compose.yaml docker-compose.override.yaml; do
+    [ -e "$INSTALL_DIR/$_stale" ] || continue
+    fs_cmd rm -f -- "$INSTALL_DIR/$_stale"
+    say "removed the obsolete $_stale (the image no longer ships a compose stack)"
+  done
   rm -rf -- "$WORK_DIR" 2>/dev/null || root_cmd rm -rf -- "$WORK_DIR"
   WORK_DIR=""
   VA_YAML="$INSTALL_DIR/config/va.yaml"
@@ -616,7 +605,7 @@ ensure_mothership_reachable() {
         has_tty || die "mothership unreachable; check VA_API_URL and the network"
         ask "Mothership URL [$VA_API_URL]"
         [ -z "$REPLY" ] || case "$REPLY" in
-          https://*|http://localhost*|http://127.0.0.1*) VA_API_URL=${REPLY%/}; set_yaml_api_url "$VA_API_URL"; set_compose_env VA_API_URL "$VA_API_URL" ;;
+          https://*|http://localhost*|http://127.0.0.1*) VA_API_URL=${REPLY%/}; set_yaml_api_url "$VA_API_URL"; set_env_value VA_API_URL "$VA_API_URL" ;;
           *) say "the mothership URL must use HTTPS" ;;
         esac ;;
     esac
@@ -803,7 +792,9 @@ else
   DOCKER_INSTALL_SCRIPT=""
 fi
 pick_docker
-docker_cmd compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
+# No Compose check: the node is one `docker run`. The image carries kamailio,
+# FreeSWITCH, the node and its CLI, and stopped shipping a compose scaffold on
+# 2026-08-26.
 
 step "2/6  Platform image"
 # An archive named up front is always installed, replacing the tag if it is
@@ -890,25 +881,18 @@ fi
 VA_REGISTRY_TOKEN=""
 unset VA_REGISTRY_TOKEN VA_REGISTRY_USER 2>/dev/null
 
-step "3/6  Node stack"
-CID="$(docker_cmd create "$VA_VOIP_IMAGE" true)" || die "could not open $VA_VOIP_IMAGE"
+step "3/6  Node image"
+# THE IMAGE IS THE WHOLE NODE. It used to carry /stack — a compose scaffold the
+# installer copied out — and va-crystal dropped that on 2026-08-26
+# (ci/Dockerfile.stack: "NO /stack, NO SIBLING CHECKOUT"). kamailio's config,
+# FreeSWITCH's, the s6 tree and the CLI are all inside it now, so there is
+# nothing to extract and no compose file to run: one `docker run`, one
+# container. The installation directory holds only what belongs to THIS node —
+# config/va.yaml, .env and the CA bundle.
 fs_cmd mkdir -p "$WORK_DIR/config"
-docker_copy_cmd cp "$CID:/stack/." "$WORK_DIR/" \
-  || die "$VA_VOIP_IMAGE has no bundled node stack"
-# `docker cp` creates host files owned by whoever ran the docker client — root
-# when Docker needs sudo. The directory is the operator's and the setup/register
-# containers run as the operator, so give the extracted stack back to them.
-if [ "$DOCKER_AS_ROOT" = "1" ] && [ "$FS_AS_ROOT" = "0" ]; then
-  root_cmd chown -R "$(id -u):$(id -g)" "$WORK_DIR" || die "could not chown $WORK_DIR"
-fi
-docker_cmd rm -f "$CID" >/dev/null
-CID=""
-[ -f "$WORK_DIR/docker-compose.yaml" ] || die "the bundled stack has no docker-compose.yaml"
-grep -Fq -- './config/va.yaml:/tmp/node.yaml' "$WORK_DIR/docker-compose.yaml" \
-  || die "the bundled stack does not mount config/va.yaml at /tmp/node.yaml"
 docker_cmd run --rm --entrypoint voipappz "$VA_VOIP_IMAGE" node --help >/dev/null \
   || die "$VA_VOIP_IMAGE has no working node CLI"
-say "installed the stack and verified its in-container CLI"
+say "verified the in-container CLI of $VA_VOIP_IMAGE"
 
 step "4/6  va.yaml"
 VA_YAML="$WORK_DIR/config/va.yaml"
@@ -958,29 +942,9 @@ fi
 # The bundle has to reach the RUNNING node too, not just registration: the node
 # calls the mothership for dialplan and SBC routing on every call, and without
 # these anchors those calls die with "certificate verify failed" mid-INVITE.
-# The bundled compose file belongs to the image, so extend it the way Compose
-# intends — an override file this installer owns.
-COMPOSE_OVERRIDE="$WORK_DIR/docker-compose.override.yaml"
-if [ -n "$CA_BUNDLE" ]; then
-  ENV_TEMP="$(fs_cmd mktemp "$WORK_DIR/.override.tmp.XXXXXX")" \
-    || die "could not write $INSTALL_DIR/docker-compose.override.yaml"
-  printf '%s\n' \
-    '# Written by install.sh: trust anchors for the mothership TLS chain.' \
-    'services:' \
-    '  voip:' \
-    '    environment:' \
-    '      SSL_CERT_FILE: /etc/ssl/va-ca-bundle.pem' \
-    '    volumes:' \
-    '      - ./config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro' |
-    fs_cmd tee "$ENV_TEMP" >/dev/null
-  fs_cmd chmod 0644 "$ENV_TEMP"
-  fs_cmd mv -f -- "$ENV_TEMP" "$COMPOSE_OVERRIDE"
-  ENV_TEMP=""
-  say "the running node will trust $INSTALL_DIR/config/ca-bundle.pem"
-elif [ -f "$COMPOSE_OVERRIDE" ]; then
-  # No bundle any more: leaving the override would mount a missing path.
-  fs_cmd rm -f -- "$COMPOSE_OVERRIDE"
-fi
+# The CA bundle, when there is one, is mounted into the node and named by
+# SSL_CERT_FILE at `docker run` (below) — the pin the node CLI verifies the
+# mothership against.
 
 # The one thing a node must be told: where its mothership is. Asked only when
 # nothing supplied it (no VA_API_URL, no mothership in the YAML) and a terminal
@@ -1034,13 +998,10 @@ if [ "$VA_API_URL_EXPLICIT" = "1" ]; then
 else
   [ -z "$CONFIG_API_URL" ] || VA_API_URL=$CONFIG_API_URL
 fi
-set_compose_env VA_API_URL "$VA_API_URL"
-# Compose runs nirlevi/va-crystal:${VA_VOIP_TAG:-node}; make it run the image
-# that was installed.
-case "$VA_VOIP_IMAGE" in
-  nirlevi/va-crystal:*) set_compose_env VA_VOIP_TAG "${VA_VOIP_IMAGE#nirlevi/va-crystal:}" ;;
-  *) say "WARNING: $VA_VOIP_IMAGE is not nirlevi/va-crystal:<tag>; docker-compose.yaml pins that repository" ;;
-esac
+set_env_value VA_API_URL "$VA_API_URL"
+# Which image this node runs, recorded for the next run and for an operator
+# reading the file.
+set_env_value VA_VOIP_IMAGE "$VA_VOIP_IMAGE"
 
 # The CLI writes the bundled app-plane broker into .env (loopback, with a
 # token). When va.yaml names a different broker host, that YAML value is the
@@ -1054,13 +1015,13 @@ if [ -n "$BROKER_URL" ] && \
 else
   BROKER_URL=$CONFIG_NATS_URL
 fi
-set_compose_env VA_NATS_URL "$BROKER_URL"
+set_env_value VA_NATS_URL "$BROKER_URL"
 BROKER_HOST="$(host_of_url "$BROKER_URL")"
 BROKER_IP="${VA_NATS_HOST:-$(resolve_host "$BROKER_HOST")}"
 [ -n "$BROKER_IP" ] || [ -z "$BROKER_HOST" ] \
   || die "could not resolve broker host $BROKER_HOST; set VA_NATS_HOST to its IP address"
 [ "$BROKER_IP" = "$BROKER_HOST" ] || say "broker $BROKER_HOST resolves to $BROKER_IP"
-set_compose_env VA_NATS_HOST "$BROKER_IP"
+set_env_value VA_NATS_HOST "$BROKER_IP"
 
 step "5/6  Registration"
 SELECTED_CUSTOMER_UUID=""
@@ -1099,34 +1060,57 @@ unset VA_API_AUTHORIZATION 2>/dev/null
 
 commit_install_dir
 
-step "6/6  VoIP plane"
+step "6/6  The node"
 if [ "$START" = "1" ]; then
-  # The stack pins container names, so a leftover container from an earlier
-  # installation directory (or a removed test run) blocks Compose with a name
-  # conflict. Those names belong to this installer: reclaim an abandoned one,
-  # but never touch a running container — that could be a live node.
-  for _name in $( (cd "$INSTALL_DIR" && compose_cmd --profile voip config) 2>/dev/null |
-                    sed -n 's/^[[:space:]]*container_name:[[:space:]]*//p' ); do
-    _owner="$(docker_cmd inspect "$_name" \
-      --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)" \
-      || continue
-    [ "$_owner" = "$INSTALL_DIR" ] && continue
-    if [ "$(docker_cmd inspect -f '{{.State.Running}}' "$_name" 2>/dev/null)" = "true" ]; then
-      die "container $_name is running from ${_owner:-another project}; stop it before installing here"
-    fi
-    say "removing the abandoned container $_name from ${_owner:-another project}"
-    docker_cmd rm -f "$_name" >/dev/null 2>&1 \
-      || die "could not remove the conflicting container $_name"
-  done
+  # THE THREE VALUES THE IMAGE CANNOT DERIVE FROM va.yaml. Everything else the
+  # container needs it reads from the mounted YAML itself (the va-env oneshot
+  # runs `voipappz env --export --s6` before any service starts). These three
+  # are secrets: the CLI generated them into .env at setup and reads them back
+  # on a rerun, so a restart never rotates what the node already uses.
+  FS_PASSWORD="$(fs_cmd sed -n 's/^VA_FREESWITCH_PASSWORD=//p' "$INSTALL_DIR/.env" | head -1)"
+  LIC_JWT="$(fs_cmd sed -n 's/^VA_LICENSE_JWT_SECRET=//p' "$INSTALL_DIR/.env" | head -1)"
+  LIC_ENC="$(fs_cmd sed -n 's/^VA_LICENSE_ENCRYPTION_KEY=//p' "$INSTALL_DIR/.env" | head -1)"
+  [ -n "$FS_PASSWORD" ] && [ -n "$LIC_JWT" ] && [ -n "$LIC_ENC" ] \
+    || die "$INSTALL_DIR/.env is missing the FreeSWITCH or licence secrets; rerun the installer"
 
-  (cd "$INSTALL_DIR" && compose_cmd --profile voip up -d) \
-    || die "could not start the VoIP profile"
+  # This installer owns the name `va-voip`: replacing it IS how a node is
+  # upgraded, and there is no other project to conflict with now that Compose
+  # is gone. Subscribers live in a named volume, so they survive the swap.
+  if docker_cmd inspect va-voip >/dev/null 2>&1; then
+    say "replacing the running node container"
+    docker_cmd rm -f va-voip >/dev/null 2>&1 || die "could not remove the existing va-voip container"
+  fi
+
+  # --network host: a SIP node advertises its own addresses and takes RTP on a
+  # wide port range; a bridge would rewrite neither. The capabilities are what
+  # FreeSWITCH needs to set thread priorities and lock memory, and kamailio to
+  # manage its own sockets.
+  set -- docker_cmd run -d --name va-voip \
+    --network host \
+    --restart unless-stopped \
+    --cap-add NET_ADMIN --cap-add SYS_NICE --cap-add IPC_LOCK \
+    --security-opt seccomp=unconfined \
+    -v "$INSTALL_DIR/config/va.yaml:/tmp/node.yaml:ro" \
+    -v voipappz-kamailio:/var/lib/kamailio \
+    -e VA_PATH=/tmp/node.yaml \
+    -e "FREESWITCH_PASSWORD=$FS_PASSWORD" \
+    -e "VA_FREESWITCH_PASSWORD=$FS_PASSWORD" \
+    -e "LICENSE_JWT_SECRET=$LIC_JWT" \
+    -e "LICENSE_ENCRYPTION_KEY=$LIC_ENC"
+  if [ -n "$CA_BUNDLE" ]; then
+    set -- "$@" -v "$INSTALL_DIR/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
+      -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem
+    say "the node will trust $INSTALL_DIR/config/ca-bundle.pem"
+  fi
+  "$@" "$VA_VOIP_IMAGE" >/dev/null || die "could not start the node container"
+  FS_PASSWORD=""; LIC_JWT=""; LIC_ENC=""
+  say "started va-voip from $VA_VOIP_IMAGE"
 
   _attempt=0
   while [ "$_attempt" -lt 40 ]; do
     curl -fsS --max-time 3 http://127.0.0.1:4000/health >/dev/null 2>&1 && break
-    docker_cmd inspect va-voip >/dev/null 2>&1 \
-      || die "va-voip stopped before becoming healthy; run: docker logs va-voip"
+    [ "$(docker_cmd inspect -f '{{.State.Running}}' va-voip 2>/dev/null)" = "false" ] \
+      && die "va-voip stopped before becoming healthy; run: docker logs va-voip"
     _attempt=$((_attempt + 1))
     sleep 3
   done
@@ -1160,6 +1144,6 @@ if [ "$START" = "1" ]; then
   say "container: va-voip"
   say "health:    http://127.0.0.1:4000/health"
 else
-  say "start:     cd $INSTALL_DIR && docker compose --profile voip up -d"
+  say "start:     rerun this installer, or docker start va-voip once it exists"
 fi
 say "CLI:       docker exec va-voip voipappz --help"

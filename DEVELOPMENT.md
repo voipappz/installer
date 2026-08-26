@@ -26,8 +26,8 @@ voipappz/
 ```
 
 It is not required to edit and check the script. The mothership is **never
-cloned**: the integration test boots it from the `/stack` directory inside the
-node image, which is the stack repository as shipped.
+cloned**: the integration test downloads the public tarball of
+voipappz/mothership, the same way the mothership's own installer does.
 
 ## First run
 
@@ -82,7 +82,7 @@ Two layers, mirroring `.github/workflows/ci.yml`:
 
 1. **`make check`** — static. Run before every commit.
 2. **`make test`** — the integration test, `tests/test-install.sh`. It pulls
-   the real private image, takes the stack repository from its `/stack`, boots
+   the real private image, downloads the mothership tarball, boots
    the complete mothership (`app + storage`) from that copy (nothing is
    cloned; `MOTHERSHIP_DIR=…` overrides it with a local checkout), installs the node several times (Docker Hub, local
    archive, archive over HTTP, as a user outside the `docker` group, into a

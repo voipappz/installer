@@ -4,12 +4,11 @@
 set -Eeuo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-# The mothership fixture is NOT cloned: the node image carries the whole stack
-# repository at /stack (compose, config/va.yaml.example, services.tsv, the
-# onboarding script), and the installer extracts it. After the first install
-# has pulled the image, the test takes its own copy of /stack and boots the
-# mothership from that. A local checkout may still be passed as $1 by a
-# developer who wants to test against uncommitted mothership changes.
+# The mothership fixture is NOT cloned: it is DOWNLOADED, the same way the
+# mothership's own installer gets it — the public tarball of voipappz/mothership.
+# (The node image used to carry the stack at /stack; va-crystal dropped that on
+# 2026-08-26, so the image is the node and nothing else.) A local checkout may
+# still be passed as $1 by a developer testing uncommitted mothership changes.
 MOTHERSHIP_DIR=${1:-}
 if [[ -n $MOTHERSHIP_DIR ]]; then
   [[ -f $MOTHERSHIP_DIR/docker-compose.yaml ]] || {
@@ -84,10 +83,7 @@ cleanup() {
   set +e
   ((status == 0)) || diagnostics
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    if [[ $NODE_UP == 1 && -f $NODE_DIR/docker-compose.yaml ]]; then
-      (cd "$NODE_DIR" && docker compose --profile voip down -v --remove-orphans) \
-        >/dev/null 2>&1 || true
-    fi
+    [[ $NODE_UP == 0 ]] || docker rm -f va-voip >/dev/null 2>&1 || true
     [[ $BROKER_UP == 0 ]] || docker rm -f installer-ci-nats >/dev/null 2>&1 || true
     [[ $TLS_PROXY_UP == 0 ]] || docker rm -f installer-ci-tls >/dev/null 2>&1 || true
     stop_mothership
@@ -331,30 +327,35 @@ env \
   }
 assert_no_secret_in_log "$FIRST_LOG"
 docker info >/dev/null
-docker compose version >/dev/null
 docker image inspect nirlevi/va-crystal:node >/dev/null
 docker run --rm --entrypoint voipappz nirlevi/va-crystal:node node --help >/dev/null \
   || die 'node image CLI is unavailable'
-grep -Fq -- './config/va.yaml:/tmp/node.yaml' "$NODE_DIR/docker-compose.yaml" \
-  || die 'compose does not mount va.yaml at /tmp/node.yaml'
+# The image is the whole node: no compose scaffold to extract, and none left
+# behind. An installation directory holds this node's files and nothing else.
+[[ -e $NODE_DIR/docker-compose.yaml ]] \
+  && die 'the installation directory carries a compose file; the image ships no stack'
 [[ -f $NODE_DIR/config/va.yaml ]] || die 'va.yaml was not created by the node CLI defaults'
 grep -Eq 'uuid: [0-9a-f]{8}-[0-9a-f-]{27}' "$NODE_DIR/config/va.yaml" || die 'the unattended va.yaml has no node uuid'
 find /tmp -maxdepth 1 -type d -name 'voipappz-docker-auth.*' -print -quit | grep -q . \
   && die 'temporary installer Docker credentials were not removed'
-pass 'clean host installs Docker, image, stack, and va.yaml'
+pass 'clean host installs Docker, the image and va.yaml'
 
-# The mothership, from the image: /stack is the stack repository, and this
-# copy is the one the test boots and onboards. No clone of anything.
+# The mothership fixture: downloaded, not cloned — the same public tarball its
+# own installer fetches. The node image carries no stack any more.
 if [[ -z $MOTHERSHIP_DIR ]]; then
   MOTHERSHIP_DIR="$RUN_ROOT/mothership"
   mkdir -p "$MOTHERSHIP_DIR"
-  stack_cid=$(docker create nirlevi/va-crystal:node true)
-  docker cp "$stack_cid:/stack/." "$MOTHERSHIP_DIR/" || die 'the node image has no /stack to boot a mothership from'
-  docker rm -f "$stack_cid" >/dev/null
-  for f in docker-compose.yaml config/va.yaml.example config/services.tsv scripts/onboard-customer.sh; do
-    [[ -f $MOTHERSHIP_DIR/$f ]] || die "the image's /stack lacks $f"
+  curl -fL --retry 5 --retry-all-errors -o "$RUN_ROOT/mothership.tar.gz" \
+    "https://github.com/voipappz/mothership/archive/refs/heads/${VA_MOTHERSHIP_REF:-main}.tar.gz" \
+    || die 'could not download the mothership stack'
+  tar -xzf "$RUN_ROOT/mothership.tar.gz" -C "$RUN_ROOT"
+  top=$(find "$RUN_ROOT" -maxdepth 1 -type d -name 'mothership-*' | head -1)
+  [[ -n $top ]] || die 'the mothership tarball did not unpack'
+  (cd "$top" && tar -cf - .) | (cd "$MOTHERSHIP_DIR" && tar -xf -)
+  for f in docker-compose.yaml config/va.yaml.example scripts/onboard-customer.sh; do
+    [[ -f $MOTHERSHIP_DIR/$f ]] || die "the mothership tarball lacks $f"
   done
-  pass 'mothership fixture taken from the node image (nothing cloned)'
+  pass 'mothership fixture downloaded (nothing cloned)'
 fi
 render_example "$BOOT_CONFIG" "$NODE_UUID" "$NODE_SIP_UUID" Installer-CI-Node switch "$INTERNAL_IP"
 
@@ -578,12 +579,10 @@ run_installer success tls-ca-bundle \
 cmp -s "$RUN_ROOT/tls/bundle.pem" "$NODE_DIR/config/ca-bundle.pem" \
   || die 'CA bundle was not installed to config/ca-bundle.pem'
 # The running node calls the mothership for dialplan and SBC routing, so the
-# anchors must reach the container, not just registration.
-grep -Fq 'SSL_CERT_FILE: /etc/ssl/va-ca-bundle.pem' "$NODE_DIR/docker-compose.override.yaml" \
+# anchors must reach the container, not just registration. START=0 here, so the
+# proof is that the installer would mount it: the pin is on disk and named.
+grep -Fq "the node will trust $NODE_DIR/config/ca-bundle.pem" "$LAST_LOG" \
   || die 'the CA bundle was not given to the running node'
-(cd "$NODE_DIR" && docker compose --profile voip config) \
-  | grep -Fq '/etc/ssl/va-ca-bundle.pem' \
-  || die 'Compose did not merge the CA bundle override into the voip service'
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
   'customer API over the CA-bundled mothership linked the node'
@@ -630,12 +629,13 @@ TLS_PROXY_UP=0
 rm -f -- "$NODE_DIR/config/ca-bundle.pem"
 run_installer success plain-http-after-tls \
   VA_API_URL="$API_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
-[[ -f $NODE_DIR/docker-compose.override.yaml ]] \
-  && die 'the override outlived the CA bundle it mounts'
+grep -Fq 'will trust' "$LAST_LOG" \
+  && die 'a removed CA bundle was still mounted into the node'
 pass 'a removed CA bundle leaves the plain mothership working'
 
-# A root-owned installation directory keeps .env at mode 0600, so Compose has to
-# run elevated even when the Docker socket is reachable unelevated.
+# A root-owned installation directory keeps .env at mode 0600, so the installer
+# has to read it back elevated even when the Docker socket is reachable
+# unelevated — that file holds the three secrets `docker run` needs.
 ROOT_DIR=/opt/voipappz-ci
 # GitHub runners ship /opt world-writable, so the installer would (correctly)
 # stay unelevated there. Make the directory genuinely root-owned first.
@@ -644,10 +644,10 @@ sudo install -d -o root -g root -m 0755 "$ROOT_DIR"
 run_installer success root-owned-install \
   INSTALL_DIR="$ROOT_DIR" VA_CONFIG="$BOOT_CONFIG" VA_REGISTER=0 START=0
 sudo test -O "$ROOT_DIR/.env" || die 'root-owned .env was not created by root'
-(cd "$ROOT_DIR" && docker compose --profile voip config >/dev/null 2>&1) \
-  && die 'test precondition: unelevated compose could still read the root .env'
+[[ -r $ROOT_DIR/.env ]] \
+  && die 'test precondition: the root-owned .env was readable unelevated'
 sudo rm -rf -- "$ROOT_DIR"
-pass 'installation into a root-owned directory runs Compose elevated'
+pass 'installation into a root-owned directory reads its secrets elevated'
 
 # An operator OUTSIDE the docker group: every docker call goes through sudo,
 # which resets the environment. The registration container must still receive
@@ -834,16 +834,15 @@ sed -i "/^broker:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 '$BROKER_URL'#"
   "$NODE_DIR/config/va.yaml"
 grep -Fq "$BROKER_URL" "$NODE_DIR/config/va.yaml" \
   || die 'test setup could not point va.yaml at the remote broker'
-# The stack pins container names, so a leftover va-voip from an earlier
-# installation directory blocks Compose. An abandoned one is reclaimed; the
-# installer must not need a manual `docker rm` between runs.
+# A leftover va-voip from an earlier run holds the name this installer uses.
+# Replacing it is how a node is upgraded, so the installer must not need a
+# manual `docker rm` between runs. Stage one that is plainly not ours.
 STALE_DIR="$RUN_ROOT/stale-node"
 mkdir -p "$STALE_DIR"
-(cd "$STALE_DIR" && cp "$NODE_DIR/docker-compose.yaml" . && cp -r "$NODE_DIR/config" . \
-  && cp "$NODE_DIR/.env" . && docker compose --profile voip create voip) >/dev/null 2>&1 \
+docker rm -f va-voip >/dev/null 2>&1 || true
+docker create --name va-voip alpine:3.20 sleep 3600 >/dev/null \
   || die 'could not stage a conflicting va-voip container'
-[[ $(docker inspect va-voip --format \
-  '{{index .Config.Labels "com.docker.compose.project.working_dir"}}') == "$STALE_DIR" ]] \
+[[ $(docker inspect va-voip --format '{{.Config.Image}}') == alpine:3.20 ]] \
   || die 'test setup did not create a foreign va-voip container'
 
 # Docker refuses a name in extra_hosts, so a broker named by DNS has to reach
@@ -863,23 +862,23 @@ pass 'a broker named by DNS reaches Compose as an address'
 run_installer success start-voip \
   VA_REGISTER=0 START=1 VA_API_AUTHORIZATION=
 NODE_UP=1
-grep -Fq 'removing the abandoned container va-voip' "$LAST_LOG" \
-  || die 'a conflicting container from another directory was not reclaimed'
-[[ $(docker inspect va-voip --format \
-  '{{index .Config.Labels "com.docker.compose.project.working_dir"}}') == "$NODE_DIR" ]] \
-  || die 'the running va-voip does not belong to this installation'
+grep -Fq 'replacing the running node container' "$LAST_LOG" \
+  || die 'the pre-existing va-voip container was not replaced'
+[[ $(docker inspect va-voip --format '{{.Config.Image}}') == "$(sed -n 's/^VA_VOIP_IMAGE=//p' "$NODE_DIR/.env")" ]] \
+  || die 'the running va-voip is not the image the installer recorded'
 rm -rf -- "$STALE_DIR"
-pass 'a container left by another installation directory is reclaimed'
-# The CLI reads the YAML; the installer must carry that value into Compose, or
-# the voip service maps `nats` to the wrong host.
+pass 'an existing va-voip container is replaced by the one this install runs'
+# The node reads the broker from the mounted YAML; the installer records it and
+# refuses a name it cannot resolve.
 grep -Fq "VA_NATS_URL=$BROKER_URL" "$NODE_DIR/.env" \
-  || die 'the remote broker URL was not written to the Compose environment'
+  || die 'the remote broker URL was not recorded'
 grep -Fq "VA_NATS_HOST=$INTERNAL_IP" "$NODE_DIR/.env" \
-  || die 'the remote broker host was not written to the Compose environment'
-[[ $(docker inspect va-voip --format \
-  '{{range .HostConfig.ExtraHosts}}{{.}} {{end}}') == *"nats:$INTERNAL_IP"* ]] \
-  || die 'the voip service does not resolve nats to the remote broker'
-pass 'a non-loopback broker URL reaches Compose and the running node'
+  || die 'the resolved broker address was not recorded'
+[[ $(docker inspect va-voip --format '{{.HostConfig.NetworkMode}}') == host ]] \
+  || die 'the node does not run on the host network'
+[[ $(docker inspect va-voip --format '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}') == *"$NODE_DIR/config/va.yaml:/tmp/node.yaml"* ]] \
+  || die 'the node does not mount this installation va.yaml at /tmp/node.yaml'
+pass 'the node runs on the host network with this installation va.yaml'
 wait_http http://127.0.0.1:4000/health 180
 
 # The in-container CLI is the operator interface. Prove the VoIP container is

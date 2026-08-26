@@ -5,45 +5,87 @@ One command installs one VoIP node: the private `va-crystal` image, its stack in
 The mothership itself is a different machine and a different installer
 (`voipappz/mothership`).
 
-## Install
+## Run it — one example, start to finish
 
-On a clean Ubuntu 22.04 or 24.04 machine, from any directory:
+On a clean Ubuntu 22.04 or 24.04 machine:
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh | sh
+```console
+$ curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh | sh
+
+VoIPAppz VoIP node installer
+
+1/6  Docker
+  installing Docker
+
+2/6  Platform image
+  Image source:
+    1) pull nirlevi/va-crystal:node from Docker Hub (needs a Docker Hub user + token)
+    2) download the latest image archive from Amazon S3
+    3) load a docker-save archive (.tar or .tar.gz) from a local path or URL
+  Choose 1, 2 or 3 [2]: 2          ← Enter is enough
+  downloading https://voipappz-assets-il.s3.il-central-1.amazonaws.com/images/…
+  sha256 verified
+
+3/6  Node stack
+  installed the stack and verified its in-container CLI
+
+4/6  va.yaml
+  Node name [node-45d979c7-…]:     ← Enter, or type a name
+  Available network interfaces:
+    1. 10.0.0.10  eth0 (detected)
+  Choose internal IP [1]:          ← Enter
+  External IP [10.0.0.10]:         ← Enter, or the public address
+  Mothership URL [https://cloud.voipappz.io]:   ← Enter, or your own
+  broker derived from the mothership host: nats://cloud.voipappz.io:4222
+
+5/6  Registration
+  Account token (input hidden; empty = use email + password):   ← paste, or Enter
+  registering node 45d979c7-… through the existing CLI
+
+6/6  VoIP plane
+  va-voip is healthy
+
+VoIPAppz installation complete
+  node:      45d979c7-68c0-4c63-a86f-a229e0dfeab9
+  va.yaml:   /opt/voipappz/config/va.yaml -> /tmp/node.yaml (Docker bind mount)
+  container: va-voip
+  health:    http://127.0.0.1:4000/health
 ```
 
-Nothing to clone or prepare — it installs Docker if missing and asks for sudo
-itself. It prompts for:
+That is the whole install. Four Enters, a mothership URL and an Account token.
+The Account token is the Basic key of your mothership Account — leave it empty
+and it asks for e-mail and password instead.
 
-| Prompt | Answer |
+## Everyday commands
+
+The node is **one container, `va-voip`**, started with `docker run` — there is
+no Compose file, because the image carries the whole node:
+
+```sh
+docker ps --filter name=va-voip           # is it up?
+docker exec va-voip voipappz health       # is it well? names anything down
+docker logs -f va-voip                    # what is it doing?
+docker restart va-voip                    # after editing config/va.yaml
+docker stop va-voip                       # stop it (config and data stay)
+docker start va-voip                      # start it again
+```
+
+Kamailio, FreeSWITCH and the node agent run together in it, on the host network:
+SIP `5060` (Kamailio), `5070`/`5090` (FreeSWITCH phones/carriers),
+health `127.0.0.1:4000`, Kamailio RPC `127.0.0.1:8090`, FreeSWITCH ESL
+`127.0.0.1:8021`.
+
+Two files describe the node, and this repository ships an example of each:
+
+| File | What it is |
 |---|---|
-| Image source | `1` Docker Hub (user + token), `2` the latest published archive from Amazon S3 (default), `3` a `.tar.gz` from a path or URL |
-| Node name, internal IP, external IP | Enter accepts the detected values |
-| Mothership URL | default `https://cloud.voipappz.io`; the NATS broker defaults to `nats://<that host>:4222` |
-| Account token | the Account's Basic key, hidden; empty falls back to e-mail + password |
-| Customer name | only when the Account has no customer yet |
+| `/opt/voipappz/config/va.yaml` | the node: uuid, addresses, ports, gateways, mothership, broker — see [`va.yaml.example`](va.yaml.example) |
+| `/opt/voipappz/.env` | the installer's record and the three secrets it passes to `docker run` — see [`env.example`](env.example) |
 
-It never asks about domains or certificates — those belong to the mothership.
-
-## Run the node
-
-Everything runs as **one container, `va-voip`** (Kamailio + FreeSWITCH + the
-node agent), on the host network. Docker Compose owns it:
-
-```sh
-cd /opt/voipappz
-
-docker compose --profile voip up -d      # start (the installer does this)
-docker compose --profile voip ps         # what is running
-docker compose --profile voip logs -f    # follow all three services
-docker compose --profile voip restart    # restart after editing config/va.yaml
-docker compose --profile voip down       # stop (your data and config stay)
-```
-
-It listens on the host: SIP `5060` (Kamailio), `5070`/`5090` (FreeSWITCH
-internal/external), health `127.0.0.1:4000/health`, Kamailio RPC
-`127.0.0.1:8090`, FreeSWITCH ESL `127.0.0.1:8021`.
+The YAML is the only source. The container turns it into its own environment at
+boot (`voipappz env --export`, the `va-env` step), which is how Kamailio learns
+its addresses and FreeSWITCH its ports. Edit the YAML and restart; never edit
+the `.env`.
 
 ## Operate it
 
@@ -133,7 +175,7 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | Symptom | Do this |
 |---|---|
 | `va-voip did not pass node health` | `docker exec va-voip voipappz health` — it names each failing check |
-| Container will not start | `docker compose --profile voip logs va-voip` |
+| Container will not start | `docker logs va-voip` — the boot preflight names what is wrong in the YAML |
 | Registration failed on TLS | pass the mothership's CA: `VA_CA_BUNDLE=/path/chain.pem` |
 | Calls do not route | `docker exec va-voip voipappz sbc egress sync`, then `voipappz health` |
 | Wrong mothership | rerun with `VA_API_URL=https://…` (it is persisted to `va.yaml`) |
