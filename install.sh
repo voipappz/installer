@@ -24,7 +24,6 @@ CA_BUNDLE=""
 if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
 VA_NATS_URL="${VA_NATS_URL:-}"
-VA_NATS_HOST="${VA_NATS_HOST:-}"
 VA_REGISTER="${VA_REGISTER:-1}"
 VA_CUSTOMER_UUID="${VA_CUSTOMER_UUID:-}"
 VA_CUSTOMER_NAME="${VA_CUSTOMER_NAME:-}"
@@ -204,8 +203,7 @@ set_env_value() {
   ENV_TEMP=""
 }
 
-# nats://user:token@host:4222 -> host. Compose needs the bare host for the voip
-# service's `nats:${VA_NATS_HOST}` mapping.
+# nats://user:token@host:4222 -> host, for the resolution check.
 host_of_url() {
   _rest=${1#*://}
   _rest=${_rest##*@}
@@ -605,7 +603,7 @@ ensure_mothership_reachable() {
         has_tty || die "mothership unreachable; check VA_API_URL and the network"
         ask "Mothership URL [$VA_API_URL]"
         [ -z "$REPLY" ] || case "$REPLY" in
-          https://*|http://localhost*|http://127.0.0.1*) VA_API_URL=${REPLY%/}; set_yaml_api_url "$VA_API_URL"; set_env_value VA_API_URL "$VA_API_URL" ;;
+          https://*|http://localhost*|http://127.0.0.1*) VA_API_URL=${REPLY%/}; set_yaml_api_url "$VA_API_URL" ;;
           *) say "the mothership URL must use HTTPS" ;;
         esac ;;
     esac
@@ -1001,30 +999,21 @@ if [ "$VA_API_URL_EXPLICIT" = "1" ]; then
 else
   [ -z "$CONFIG_API_URL" ] || VA_API_URL=$CONFIG_API_URL
 fi
-set_env_value VA_API_URL "$VA_API_URL"
-# Which image this node runs, recorded for the next run and for an operator
-# reading the file.
+# Which image this node runs — the one thing besides the secrets that the
+# installer itself needs back on the next run.
 set_env_value VA_VOIP_IMAGE "$VA_VOIP_IMAGE"
 
-# The CLI writes the bundled app-plane broker into .env (loopback, with a
-# token). When va.yaml names a different broker host, that YAML value is the
-# node's broker and must reach Compose — both as the URL and as the host the
-# voip service maps `nats` to. A same-host CLI value is kept as-is so its
-# credentials survive.
+# The broker the node will use is what va.yaml says (the container reads it
+# there at boot). Checked here, not recorded: a broker name that does not
+# resolve is a node that starts and connects to nothing.
 BROKER_URL="$(yaml_broker_url)"
-if [ -n "$BROKER_URL" ] && \
-   [ "$(host_of_url "$BROKER_URL")" != "$(host_of_url "$CONFIG_NATS_URL")" ]; then
-  say "using broker $BROKER_URL from va.yaml"
-else
-  BROKER_URL=$CONFIG_NATS_URL
-fi
-set_env_value VA_NATS_URL "$BROKER_URL"
+[ -n "$BROKER_URL" ] || BROKER_URL=$CONFIG_NATS_URL
 BROKER_HOST="$(host_of_url "$BROKER_URL")"
-BROKER_IP="${VA_NATS_HOST:-$(resolve_host "$BROKER_HOST")}"
-[ -n "$BROKER_IP" ] || [ -z "$BROKER_HOST" ] \
-  || die "could not resolve broker host $BROKER_HOST; set VA_NATS_HOST to its IP address"
-[ "$BROKER_IP" = "$BROKER_HOST" ] || say "broker $BROKER_HOST resolves to $BROKER_IP"
-set_env_value VA_NATS_HOST "$BROKER_IP"
+if [ -n "$BROKER_HOST" ]; then
+  BROKER_IP="$(resolve_host "$BROKER_HOST")"
+  [ -n "$BROKER_IP" ] || die "could not resolve broker host $BROKER_HOST"
+  [ "$BROKER_IP" = "$BROKER_HOST" ] || say "broker $BROKER_HOST resolves to $BROKER_IP"
+fi
 
 step "5/6  Registration"
 SELECTED_CUSTOMER_UUID=""

@@ -818,7 +818,7 @@ pass 'an authenticated Account without node rights fails before customer work'
 # (control_mothership), as a real node must. Its NATS binds loopback; the
 # node's broker below binds the runner's address, so the two coexist.
 # Bind the broker to the runner's own address, not loopback: a real node reaches
-# NATS over the network, and the voip service maps `nats` to VA_NATS_HOST, so a
+# NATS over the network, and the node reads the broker from va.yaml, so a
 # loopback-only test would never exercise that path.
 docker run -d --name installer-ci-nats -p "$INTERNAL_IP:4222:4222" nats:alpine >/dev/null
 BROKER_UP=1
@@ -852,12 +852,10 @@ cp "$NODE_DIR/config/va.yaml" "$RUN_ROOT/va.yaml.ip-broker"
 sed -i "/^broker:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 '$BROKER_NAME_URL'#" \
   "$NODE_DIR/config/va.yaml"
 run_installer success named-broker VA_REGISTER=0 START=0 VA_API_AUTHORIZATION=
-grep -Fq "VA_NATS_URL=$BROKER_NAME_URL" "$NODE_DIR/.env" \
-  || die 'a named broker URL was not written to the Compose environment'
-grep -qE '^VA_NATS_HOST=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$NODE_DIR/.env" \
-  || die 'a named broker was not resolved to an address for extra_hosts'
+grep -Eq 'broker localhost resolves to 127\.0\.0\.1' "$LAST_LOG" \
+  || die 'a named broker was not resolved'
 cp "$RUN_ROOT/va.yaml.ip-broker" "$NODE_DIR/config/va.yaml"
-pass 'a broker named by DNS reaches Compose as an address'
+pass 'a broker named by DNS is resolved before the node starts'
 
 run_installer success start-voip \
   VA_REGISTER=0 START=1 VA_API_AUTHORIZATION=
@@ -868,12 +866,10 @@ grep -Fq 'replacing the running node container' "$LAST_LOG" \
   || die 'the running va-voip is not the image the installer recorded'
 rm -rf -- "$STALE_DIR"
 pass 'an existing va-voip container is replaced by the one this install runs'
-# The node reads the broker from the mounted YAML; the installer records it and
-# refuses a name it cannot resolve.
-grep -Fq "VA_NATS_URL=$BROKER_URL" "$NODE_DIR/.env" \
-  || die 'the remote broker URL was not recorded'
-grep -Fq "VA_NATS_HOST=$INTERNAL_IP" "$NODE_DIR/.env" \
-  || die 'the resolved broker address was not recorded'
+# The node reads the broker from the mounted YAML; the installer only checks
+# the name resolves. .env is the secrets and the image, nothing else.
+grep -Fq "$BROKER_URL" "$NODE_DIR/config/va.yaml" || die 'the broker is not in va.yaml'
+grep -Eq '^VA_NATS_(URL|HOST)=' "$NODE_DIR/.env" && die '.env carries broker values it no longer needs'
 [[ $(docker inspect va-voip --format '{{.HostConfig.NetworkMode}}') == host ]] \
   || die 'the node does not run on the host network'
 [[ $(docker inspect va-voip --format '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}') == *"$NODE_DIR/config/va.yaml:/tmp/node.yaml"* ]] \

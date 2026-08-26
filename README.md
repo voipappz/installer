@@ -80,7 +80,7 @@ Two files describe the node, and this repository ships an example of each:
 | File | What it is |
 |---|---|
 | `/opt/voipappz/config/va.yaml` | the node: uuid, addresses, ports, gateways, mothership, broker — see [`va.yaml.example`](va.yaml.example) |
-| `/opt/voipappz/.env` | the installer's record and the three secrets it passes to `docker run` — see [`env.example`](env.example) |
+| `/opt/voipappz/.env` | the three secrets `docker run` passes in, and the image it runs — see [`env.example`](env.example) |
 
 The YAML is the only source. The container turns it into its own environment at
 boot (`voipappz env --export`, the `va-env` step), which is how Kamailio learns
