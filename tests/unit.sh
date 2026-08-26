@@ -62,7 +62,7 @@ check 'a control character is refused'               '! ( validate_scalar X "$(p
 
 printf '\n── va.yaml url readers and writer\n'
 # shellcheck disable=SC2034  # read by the lifted functions
-WORK_DIR="$TMP"; INSTALL_DIR="$TMP"; mkdir -p "$TMP/config"
+WORK_DIR="$TMP"; INSTALL_DIR="$TMP"; : "$WORK_DIR" "$INSTALL_DIR"; mkdir -p "$TMP/config"
 VA_YAML="$TMP/config/va.yaml"
 cat > "$VA_YAML" <<'Y'
 organization:
