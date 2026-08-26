@@ -938,6 +938,9 @@ elif [ -f "$WORK_DIR/config/ca-bundle.pem" ]; then
   CA_BUNDLE="$WORK_DIR/config/ca-bundle.pem"
   say "keeping $INSTALL_DIR/config/ca-bundle.pem"
 fi
+# Whether it starts now or later, a node with a bundle runs with it mounted
+# and named by SSL_CERT_FILE — the pin its CLI verifies the mothership against.
+[ -z "$CA_BUNDLE" ] || say "the node will trust $INSTALL_DIR/config/ca-bundle.pem"
 
 # The bundle has to reach the RUNNING node too, not just registration: the node
 # calls the mothership for dialplan and SBC routing on every call, and without
@@ -1101,7 +1104,6 @@ if [ "$START" = "1" ]; then
   if [ -n "$CA_BUNDLE" ]; then
     set -- "$@" -v "$INSTALL_DIR/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
       -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem
-    say "the node will trust $INSTALL_DIR/config/ca-bundle.pem"
   fi
   "$@" "$VA_VOIP_IMAGE" >/dev/null || die "could not start the node container"
   FS_PASSWORD=""; LIC_JWT=""; LIC_ENC=""
