@@ -16,11 +16,10 @@ VA_IMAGE_SOURCE="${VA_IMAGE_SOURCE:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
 VA_CA_BUNDLE="${VA_CA_BUNDLE:-}"
-# Set to 1 when the mothership's certificate cannot be verified even after its
-# chain was trusted (an IP-addressed mothership with a hostname certificate):
-# registration then runs without TLS verification. Decided by the installer,
-# never by a flag.
-TLS_SKIP_VERIFY=0
+# 1 once the mothership's certificate was pinned (saved as presented to
+# config/ca-bundle.pem). The CLI then verifies against that pin and checks no
+# hostname; the installer's own customer API calls follow the same rule.
+PINNED=0
 CA_BUNDLE=""
 if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
@@ -168,7 +167,7 @@ register_node_cli() {
     docker_with_authorization run --rm --network host \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" -e "VA_TLS_INSECURE=$TLS_SKIP_VERIFY" \
+      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   else
@@ -176,7 +175,7 @@ register_node_cli() {
       --user "$(id -u):$(id -g)" \
       --entrypoint voipappz \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
-      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" -e "VA_TLS_INSECURE=$TLS_SKIP_VERIFY" \
+      -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   fi
@@ -593,30 +592,24 @@ ensure_mothership_reachable() {
     case "$_rc" in
       0|22)
         say "mothership $VA_API_URL answers"
-        [ "$_trusted" = "1" ] || set_compose_env VA_TLS_INSECURE 0
         return 0 ;;
       60|35)
         if [ "$_trusted" = "1" ]; then
-          # Trusting the chain was not enough: the certificate is for another
-          # name (an IP-addressed mothership with a hostname certificate), or
-          # the chain is incomplete. Registration proceeds without verifying
-          # it — the operator chose this mothership URL, and it answered.
-          say "WARNING: the certificate of $VA_API_URL cannot be verified; registering without TLS verification"
-          TLS_SKIP_VERIFY=1
+          # The pin is saved; curl still checks the name, the CLI does not
+          # (the pin IS the identity). An IP-addressed mothership with a
+          # hostname certificate lands here and registers fine.
+          say "the certificate is pinned; its name does not match $VA_API_URL, which the pin makes irrelevant"
           return 0
         fi
-        say "the certificate of $VA_API_URL is not in the trust store; trusting it as presented:"
+        # Trust as presented = PIN. The chain the mothership sends is saved to
+        # config/ca-bundle.pem; the CLI verifies against exactly that and
+        # refuses any other certificate. A self-signed mothership pins in one
+        # step. A public certificate served without its intermediate cannot be
+        # pinned from what it sends (nothing self-signed to anchor on): the CLI
+        # says so, and VA_CA_BUNDLE=<the CA chain> is the answer.
+        say "the certificate of $VA_API_URL is not in the trust store; pinning it as presented:"
         mothership_certificate_summary
-        trust_mothership_certificate; _trusted=1
-        # A certificate that had to be trusted as presented is registered
-        # without verification. curl (the probe) accepts an intermediate as a
-        # trust anchor; the CLI's OpenSSL does not, so a chain that satisfies
-        # the probe can still fail the CLI. The saved chain stays for the
-        # node; compose passes VA_TLS_INSECURE through so the node's CLI
-        # (sync, health) talks to this mothership the same way.
-        TLS_SKIP_VERIFY=1
-        set_compose_env VA_TLS_INSECURE 1
-        say "registering without TLS verification (certificate trusted as presented)"
+        trust_mothership_certificate; _trusted=1; PINNED=1
         continue ;;
       *)
         say "cannot reach $VA_API_URL: ${_err:-curl exit $_rc}"
@@ -647,7 +640,7 @@ api_request() {
     {
       printf 'header = "Authorization: %s"\nheader = "Accept: application/json"\n' "$VA_API_AUTHORIZATION"
       [ -z "$CA_BUNDLE" ] || printf 'cacert = "%s"\n' "$CA_BUNDLE"
-      [ "$TLS_SKIP_VERIFY" = "0" ] || printf 'insecure\n'
+      [ "$PINNED" = "0" ] || printf 'insecure\n'
     } |
       curl --config - --silent --show-error --connect-timeout 10 --max-time 45 \
         --request "$_method" --output "$API_BODY_FILE" --write-out '%{http_code}' \

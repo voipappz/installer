@@ -47,6 +47,7 @@ NODE_UP=0
 BROKER_UP=0
 TLS_PROXY_UP=0
 TLS_URL=https://localhost:5443
+TLS_SELF_URL=https://localhost:5444
 
 die() {
   printf '\nnot ok - %s\n' "$*" >&2
@@ -262,6 +263,9 @@ start_tls_proxy() {
       -days 2 -out leaf.pem -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n')
     # The bundle the operator is given: the anchors the server fails to send.
     cat root.pem int.pem > bundle.pem
+    # And the common field case: a self-signed mothership, pinnable as is.
+    openssl req -x509 -newkey rsa:2048 -nodes -days 2 -keyout self.key -out self.pem \
+      -subj '/CN=voipappz.local' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
     cat > proxy.conf <<'NGINX'
 server {
   listen 5443 ssl;
@@ -269,6 +273,16 @@ server {
   # Deliberately leaf-only: fullchain.pem here is what fixes it server-side.
   ssl_certificate     /tls/leaf.pem;
   ssl_certificate_key /tls/leaf.key;
+  location / {
+    proxy_pass http://127.0.0.1:5000;
+    proxy_set_header Host $host;
+  }
+}
+server {
+  listen 5444 ssl;
+  server_name localhost;
+  ssl_certificate     /tls/self.pem;
+  ssl_certificate_key /tls/self.key;
   location / {
     proxy_pass http://127.0.0.1:5000;
     proxy_set_header Host $host;
@@ -528,15 +542,32 @@ pass 'invalid explicit mothership URL is rejected before it is persisted'
 # The same mothership over HTTPS with an incomplete chain. Registration and the
 # customer API must both fail without VA_CA_BUNDLE and both succeed with it.
 start_tls_proxy
-# No flag, no prompt: the installer trusts the presented certificate, and when
-# the chain still cannot be verified it registers without verification and
-# says so. The install must succeed and the warning must be visible.
-run_installer success tls-untrusted-chain \
+# Trust as presented = PIN. A self-signed mothership (the field case: an
+# IP-addressed box with its own certificate) pins in one step, no flag, no
+# prompt, and registers.
+run_installer success tls-self-signed \
+  VA_API_URL="$TLS_SELF_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
+grep -Fq 'pinning it as presented' "$LAST_LOG" \
+  || die 'a self-signed mothership was not pinned automatically'
+grep -Fq 'CN = voipappz.local' "$LAST_LOG" || grep -Fq 'CN=voipappz.local' "$LAST_LOG" \
+  || die 'the pinned certificate was not shown'
+customer=$(api GET "/customers/$FIRST_UUID")
+assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" 'the self-signed mothership registered and linked the node'
+pass 'a self-signed mothership is pinned automatically and registers'
+rm -f -- "$NODE_DIR/config/ca-bundle.pem"
+
+# A public certificate served WITHOUT its intermediate cannot be pinned from
+# what it sends: nothing self-signed to anchor on. The installer still saves
+# it, the CLI refuses with its pin message, nothing is registered, and
+# VA_CA_BUNDLE (next) is the documented answer.
+run_installer failure tls-untrusted-chain \
   VA_API_URL="$TLS_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
-grep -Fq 'trusting it as presented' "$LAST_LOG" \
-  || die 'an unverifiable mothership chain was not trusted as presented'
-grep -Fq 'registering without TLS verification' "$LAST_LOG" \
-  || die 'an unverifiable mothership chain did not fall back to no verification'
+grep -Fq 'pinning it as presented' "$LAST_LOG" \
+  || die 'an incomplete mothership chain was not pinned as presented'
+grep -Eq 'pinned chain|could not be verified' "$LAST_LOG" \
+  || die 'the CLI did not explain the pin failure'
+grep -Fq 'no customer change was attempted' "$LAST_LOG" \
+  || die 'an incomplete chain did not stop before customer work'
 rm -f -- "$NODE_DIR/config/ca-bundle.pem"
 
 run_installer success tls-ca-bundle \
@@ -554,7 +585,7 @@ grep -Fq 'SSL_CERT_FILE: /etc/ssl/va-ca-bundle.pem' "$NODE_DIR/docker-compose.ov
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
   'customer API over the CA-bundled mothership linked the node'
-pass 'an incomplete mothership TLS chain works automatically and with VA_CA_BUNDLE'
+pass 'an incomplete mothership TLS chain is usable through VA_CA_BUNDLE'
 
 # The bundle persists across reruns, so the URL keeps working without repeating
 # VA_CA_BUNDLE — and the installer never silently drops back to plain HTTP.
@@ -567,7 +598,7 @@ pass 'installed CA bundle is reused on later runs'
 # THE REAL TERMINAL. Everything above preset its answers in the environment;
 # this run types them at the prompts through a pseudo-terminal (expect):
 # image source 3 + the archive path, the node wizard (name, internal and
-# external IP), the mothership URL over the untrusted TLS proxy — trusted
+# external IP), the mothership URL of the self-signed proxy — pinned
 # automatically, no question — and the Account token with echo off. Only the
 # customer selector and START=0 are preset: neither has a prompt in this case.
 command -v expect >/dev/null 2>&1 || sudo apt-get install -y -qq expect >/dev/null
@@ -577,14 +608,14 @@ set +e
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN -u VA_API_AUTHORIZATION -u VA_API_URL -u VA_NATS_URL -u VA_CONFIG \
   INSTALL_DIR="$TTY_DIR" VA_VOIP_IMAGE=installer-ci/va-crystal:tty START=0 VA_REGISTER=1 \
   VA_CUSTOMER_NAME="TTY Customer" \
-  ARCHIVE="$ARCHIVE_DIR/va-crystal.tar.gz" MOTHERSHIP="$TLS_URL" TOKEN="$BASIC_VALUE" \
+  ARCHIVE="$ARCHIVE_DIR/va-crystal.tar.gz" MOTHERSHIP="$TLS_SELF_URL" TOKEN="$BASIC_VALUE" \
   expect "$ROOT/tests/tty-install.exp" "$ROOT/install.sh" >"$TTY_LOG" 2>&1
 tty_rc=$?
 set -e
 assert_no_secret_in_log "$TTY_LOG"
 if [[ $tty_rc -ne 0 ]]; then show_safe_log "$TTY_LOG"; die "the real-terminal install returned $tty_rc"; fi
 grep -Fq 'tty-node' "$TTY_DIR/config/va.yaml" || die 'the name typed at the wizard did not reach va.yaml'
-grep -Fq 'trusting it as presented' "$TTY_LOG" || die 'the typed mothership URL was not trusted automatically'
+grep -Fq 'pinning it as presented' "$TTY_LOG" || die 'the typed mothership URL was not pinned automatically'
 tty_uuid=$(sed -n 's/^- uuid: //p;s/^  uuid: //p' "$TTY_DIR/config/va.yaml" | head -1)
 tty_customer=$(api GET "/customers" | jq -r '.[] | select(.name == "TTY Customer") | .node_uuid')
 [[ $tty_customer == "$tty_uuid" ]] || die "the customer created from the terminal run is linked to '$tty_customer', not $tty_uuid"

@@ -188,13 +188,15 @@ the directory as it was (only the `.customer-provisioning-incomplete` marker
 is written there, deliberately, when customer creation was interrupted).
 
 Before registering, the installer probes the mothership URL. If it does not
-answer it says why and lets you correct the URL; if its certificate is not in
-the trust store it prints the certificate's subject, issuer and SHA-256
-fingerprint and trusts it as presented (saved to `config/ca-bundle.pem`); if
-it still cannot be verified — an IP-addressed mothership with a hostname
-certificate, or an incomplete chain — registration proceeds without TLS
-verification, with a warning. No flag is needed; `VA_CA_BUNDLE` remains the
-way to supply a proper CA.
+answer it says why and lets you correct the URL. If its certificate is not in
+the trust store — a self-signed mothership, or one reached by IP — the
+installer prints the certificate's subject, issuer and SHA-256 fingerprint and
+**pins** it: the chain it presented is saved as `config/ca-bundle.pem`, the
+node CLI verifies every mothership call against exactly that chain and checks
+no hostname (the pin is the identity), and any other certificate is refused.
+No flag, no question. A public certificate served without its intermediate
+cannot be pinned from what it sends; the CLI says so and `VA_CA_BUNDLE=<CA
+chain>` is the fix.
 
 The Account Basic value is passed only in the registration process environment.
 It is not written to YAML, `.env`, Docker, or installer logs.
