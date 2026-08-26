@@ -1070,8 +1070,9 @@ if [ "$START" = "1" ]; then
   FS_PASSWORD="$(fs_cmd sed -n 's/^VA_FREESWITCH_PASSWORD=//p' "$INSTALL_DIR/.env" | head -1)"
   LIC_JWT="$(fs_cmd sed -n 's/^VA_LICENSE_JWT_SECRET=//p' "$INSTALL_DIR/.env" | head -1)"
   LIC_ENC="$(fs_cmd sed -n 's/^VA_LICENSE_ENCRYPTION_KEY=//p' "$INSTALL_DIR/.env" | head -1)"
-  [ -n "$FS_PASSWORD" ] && [ -n "$LIC_JWT" ] && [ -n "$LIC_ENC" ] \
-    || die "$INSTALL_DIR/.env is missing the FreeSWITCH or licence secrets; rerun the installer"
+  if [ -z "$FS_PASSWORD" ] || [ -z "$LIC_JWT" ] || [ -z "$LIC_ENC" ]; then
+    die "$INSTALL_DIR/.env is missing the FreeSWITCH or licence secrets; rerun the installer"
+  fi
 
   # This installer owns the name `va-voip`: replacing it IS how a node is
   # upgraded, and there is no other project to conflict with now that Compose
@@ -1132,6 +1133,7 @@ if [ "$START" = "1" ]; then
     die "va-voip did not pass node health (report above); run: docker exec va-voip voipappz health"
   fi
   say "va-voip is healthy"
+  say "docker health: $(docker_cmd inspect -f '{{.State.Health.Status}}' va-voip 2>/dev/null || printf 'starting')"
 else
   say "installed but not started (START=0)"
 fi
