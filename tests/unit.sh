@@ -101,5 +101,22 @@ out=$(PATH="$FAKEBIN:$PATH" VA_API_AUTHORIZATION='Basic c2VjcmV0' docker_with_au
 check 'the container sees the authorization in its environment' '[[ $out == *"env=Basic c2VjcmV0"* ]]'
 check 'the authorization is not a docker argument'             '[[ $out != *"args=*c2VjcmV0*"* ]] && [[ $out == *"args=run --rm img node register"* ]]'
 
+
+# ── the shipped examples ─────────────────────────────────────────────────────
+printf '\n── va.yaml.example and env.example\n'
+EX="$ROOT/va.yaml.example"; : "$EX"
+check 'va.yaml.example exists'                       '[[ -f $EX ]]'
+check 'it is a node, not the app'                    'grep -q "^  type: switch" "$EX"'
+# The node's own health probes these two ports (node_env.cr constants); an
+# example on other ports produces a node that fails health on a port it never
+# bound, which is exactly how CI found this.
+check 'sofia internal port is the one health probes' 'grep -q "port_internal: \"5070\"" "$EX"'
+check 'sofia external port is the one health probes' 'grep -q "port_external: \"5090\"" "$EX"'
+check 'kamailio keeps 5060'                          'grep -q "sip_port: \"5060\"" "$EX"'
+check 'it names a mothership and a broker'           'grep -q "^mothership:" "$EX" && grep -q "^broker:" "$EX"'
+check 'it carries no customers block'                '! grep -q "^customers:" "$EX"'
+check 'env.example exists'                           '[[ -f $ROOT/env.example ]]'
+check 'env.example holds no real secret'             '! grep -Eq "^[A-Z_]*(PASSWORD|SECRET|KEY|TOKEN)=[A-Za-z0-9+/]{12,}" "$ROOT/env.example"'
+check 'env.example documents the image tag'          'grep -q "^VA_VOIP_TAG=" "$ROOT/env.example"'
 printf '\n'
 if ((fails == 0)); then printf '\033[1munit: all green\033[0m\n'; else printf '\033[1m!! %d unit failure(s)\033[0m\n' "$fails"; exit 1; fi

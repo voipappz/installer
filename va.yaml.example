@@ -1,0 +1,68 @@
+# config/va.yaml — one VoIP node's configuration.
+#
+# The installer creates this file for you (from the wizard, or with the node
+# CLI's defaults). Copy this example only when you want to describe the node
+# up front and install unattended:
+#
+#   VA_CONFIG=/absolute/path/va.yaml sh install.sh
+#
+# It lands in /opt/voipappz/config/va.yaml, which Compose mounts read-only at
+# /tmp/node.yaml inside va-voip. Edit it there and re-apply with
+# `docker exec va-voip voipappz sbc egress sync`, or restart the container.
+#
+# The node CLI owns this file: it normalizes it on every install, derives the
+# per-leg addresses below, and writes back the canonical fields the mothership
+# returns after registration. Everything not listed here it fills in itself.
+---
+organization:
+  name: ExampleOrg
+  domain: pbx.example.com          # the SIP domain phones register against
+  email: admin@example.com
+  environment: production
+
+# THIS NODE. The UUID is its identity everywhere — the mothership registers it,
+# FreeSWITCH's xml_curl URL carries it, and re-running the installer with the
+# same UUID updates the same node instead of creating a second one. Generate
+# one with `uuidgen`, or leave the file out and let the installer do it.
+nodes:
+- uuid: 00000000-0000-0000-0000-000000000002
+  name: Node1
+  type: switch                     # a voip node; `app` is the mothership
+  roles:
+  - switch
+  profile:
+    ip_address_internal: 10.0.0.10       # LAN address it binds
+    ip_address_external: 203.0.113.10    # public address it advertises
+    eventsocket_address: 10.0.0.10
+    sip_port: "5060"                     # Kamailio, the node's SIP front door
+
+# THE SIP INTERFACE. Kamailio and FreeSWITCH share one network namespace in
+# this image, so their ports must differ: Kamailio holds 5060 and sofia sits on
+# 5070 (phones) and 5090 (carriers). Those two are what the node's own health
+# checks probe — change them only if you also set VA_SOFIA_INTERNAL_PORT /
+# VA_SOFIA_EXTERNAL_PORT for the container.
+sip_interfaces:
+- uuid: 00000000-0000-0000-0000-000000000003
+  name: sofia
+  node_uuid: 00000000-0000-0000-0000-000000000002
+  profile:
+    ip_address_internal: 10.0.0.10
+    ip_address_external: 203.0.113.10
+    port_internal: "5070"          # FreeSWITCH sofia, LAN phones
+    port_external: "5090"          # FreeSWITCH sofia, carriers
+    # The eight per-leg bind/advertise addresses (…_int_sip, …_ext_rtp, …) are
+    # derived from the two above; set them by hand only for a NAT topology
+    # where a leg advertises an address the box does not hold.
+
+  # Carriers allowed to send us traffic (Kamailio address ACL group 2).
+  # STRING FORM ONLY: 'ip', 'ip/mask', or 'ip/mask|carrier-uuid'.
+  gateways:
+    - '198.51.100.0/24|00000000-0000-0000-0000-000000000004'
+
+# WHERE THE NODE REPORTS. The installer writes both when they are missing:
+# the mothership from VA_API_URL (or the prompt), the broker from the
+# mothership's host on port 4222. A value already here always wins.
+mothership:
+  url: 'https://cloud.voipappz.io'
+broker:
+  url: 'nats://cloud.voipappz.io:4222'

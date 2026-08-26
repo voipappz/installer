@@ -119,7 +119,12 @@ render_example() {
   node_name=$4
   node_type=$5
   internal_ip=$6
-  example="$MOTHERSHIP_DIR/config/va.yaml.example"
+  # THIS repository's example, not the mothership's: a node YAML, with the
+  # sofia ports the node stack actually uses. The mothership's example says
+  # port_internal 5080, and the node's health checks probe 5070 (the constant
+  # in cli/src/helpers/node_env.cr; nothing exports VA_SOFIA_INTERNAL_PORT),
+  # so a node built from that file fails health on a port it never bound.
+  example="$ROOT/va.yaml.example"
   scratch="$output.with-customer"
 
   sed \
@@ -130,7 +135,7 @@ render_example() {
     -e "s/00000000-0000-0000-0000-000000000003/$sip_uuid/g" \
     -e "s/00000000-0000-0000-0000-000000000004/$GATEWAY_UUID/g" \
     -e "s/^  name: Node1$/  name: $node_name/" \
-    -e "s/^  type: app$/  type: $node_type/" \
+    -e "s/^  type: .*$/  type: $node_type/" \
     -e "s/10\.0\.0\.10/$internal_ip/g" \
     -e "s/203\.0\.113\.10/$internal_ip/g" \
     "$example" > "$scratch"
@@ -140,13 +145,10 @@ render_example() {
   rm -f -- "$scratch"
   if [[ $node_type == switch ]]; then
     sed -i '/^  - app$/d' "$output"
-    cat >> "$output" <<YAML
-
-mothership:
-  url: '$API_URL'
-broker:
-  url: 'nats://127.0.0.1:4222'
-YAML
+    # The example already carries both sections: replace the values in place,
+    # or a second `mothership:` key would shadow the first.
+    sed -i "/^mothership:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 '$API_URL'#" "$output"
+    sed -i "/^broker:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 'nats://127.0.0.1:4222'#" "$output"
   fi
 }
 
