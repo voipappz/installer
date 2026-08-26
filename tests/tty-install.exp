@@ -1,0 +1,33 @@
+#!/usr/bin/expect -f
+# Drive install.sh through a REAL terminal: every answer typed at a prompt,
+# nothing preset in the environment except what the test cannot type (the
+# customer selector and START=0). Fails if a prompt is missing, misworded, or
+# never answered — which env-driven runs cannot catch.
+#
+#   ARCHIVE=<tar.gz> MOTHERSHIP=<https url> TOKEN=<basic key> INSTALL_DIR=... \
+#     expect tests/tty-install.exp /path/to/install.sh
+set timeout 900
+log_user 1
+set installer [lindex $argv 0]
+set archive $env(ARCHIVE)
+set mothership $env(MOTHERSHIP)
+set token $env(TOKEN)
+
+spawn sh $installer
+expect {
+  -re {Choose 1, 2 or 3 \[2\]: }                    { send "3\r"; exp_continue }
+  -re {Absolute path or http\(s\) URL of the image archive: } { send "$archive\r"; exp_continue }
+  -re {Node name \[[^\]]*\]: }                      { send "tty-node\r"; exp_continue }
+  -re {Choose internal IP \[1\]: }                  { send "\r"; exp_continue }
+  -re {Internal IP \[[^\]]*\]: }                    { send "\r"; exp_continue }
+  -re {External IP \[[^\]]*\]: }                    { send "\r"; exp_continue }
+  -re {Mothership URL \[[^\]]*\]: }                 { send "$mothership\r"; exp_continue }
+  -re {Account token \(input hidden; empty = use email \+ password\): } { send "$token\r"; exp_continue }
+  -re {Account email: }                             { puts "\n!! fell through to email/password"; exit 3 }
+  -re {Docker Hub user: }                           { puts "\n!! asked for Docker Hub although an archive was chosen"; exit 3 }
+  -re {VoIPAppz installation complete}              { exp_continue }
+  timeout                                           { puts "\n!! timed out waiting for a prompt"; exit 2 }
+  eof
+}
+catch wait result
+exit [lindex $result 3]

@@ -28,11 +28,12 @@ jobs:
           test -x install.sh
           sh -n install.sh
           dash -n install.sh
-          bash -n tests/clean-runner.sh tests/test-install.sh
-          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh
+          bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh
+          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh
           git diff --check
           test -z "$(find tests -type f -name '*.py' -print -quit)"
           ! grep -Eq 'python(3)?' install.sh
+          bash tests/unit.sh
 
   integration:
     name: Clean install + real mothership / Ubuntu ${{ matrix.ubuntu }}

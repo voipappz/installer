@@ -409,7 +409,6 @@ docker image inspect installer-ci/va-crystal:fromurl >/dev/null \
 find /tmp -maxdepth 1 -name 'voipappz-image-archive.*' -print -quit | grep -q . \
   && die 'the downloaded archive was not removed'
 docker rmi installer-ci/va-crystal:fromurl >/dev/null
-rm -rf "$ARCHIVE_DIR"
 pass 'installs from an image archive URL with sha256 verification'
 
 # A separate temporary Docker config is used only by this test environment to
@@ -564,6 +563,34 @@ run_installer success tls-persisted-bundle \
 grep -Fq "keeping $NODE_DIR/config/ca-bundle.pem" "$LAST_LOG" \
   || die 'installed CA bundle was not reused on a later run'
 pass 'installed CA bundle is reused on later runs'
+
+# THE REAL TERMINAL. Everything above preset its answers in the environment;
+# this run types them at the prompts through a pseudo-terminal (expect):
+# image source 3 + the archive path, the node wizard (name, internal and
+# external IP), the mothership URL over the untrusted TLS proxy — trusted
+# automatically, no question — and the Account token with echo off. Only the
+# customer selector and START=0 are preset: neither has a prompt in this case.
+command -v expect >/dev/null 2>&1 || sudo apt-get install -y -qq expect >/dev/null
+TTY_DIR="$RUN_ROOT/tty-node"
+TTY_LOG="$LOG_DIR/tty-install.log"
+set +e
+env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN -u VA_API_AUTHORIZATION -u VA_API_URL -u VA_NATS_URL -u VA_CONFIG \
+  INSTALL_DIR="$TTY_DIR" VA_VOIP_IMAGE=installer-ci/va-crystal:tty START=0 VA_REGISTER=1 \
+  VA_CUSTOMER_NAME="TTY Customer" \
+  ARCHIVE="$ARCHIVE_DIR/va-crystal.tar.gz" MOTHERSHIP="$TLS_URL" TOKEN="$BASIC_VALUE" \
+  expect "$ROOT/tests/tty-install.exp" "$ROOT/install.sh" >"$TTY_LOG" 2>&1
+tty_rc=$?
+set -e
+assert_no_secret_in_log "$TTY_LOG"
+if [[ $tty_rc -ne 0 ]]; then show_safe_log "$TTY_LOG"; die "the real-terminal install returned $tty_rc"; fi
+grep -Fq 'tty-node' "$TTY_DIR/config/va.yaml" || die 'the name typed at the wizard did not reach va.yaml'
+grep -Fq 'trusting it as presented' "$TTY_LOG" || die 'the typed mothership URL was not trusted automatically'
+tty_uuid=$(sed -n 's/^- uuid: //p;s/^  uuid: //p' "$TTY_DIR/config/va.yaml" | head -1)
+tty_customer=$(api GET "/customers" | jq -r '.[] | select(.name == "TTY Customer") | .node_uuid')
+[[ $tty_customer == "$tty_uuid" ]] || die "the customer created from the terminal run is linked to '$tty_customer', not $tty_uuid"
+docker rmi installer-ci/va-crystal:tty >/dev/null 2>&1 || true
+pass 'a real-terminal install: typed archive, wizard, mothership URL and token register the node'
+rm -rf "$ARCHIVE_DIR"
 
 docker rm -f installer-ci-tls >/dev/null 2>&1
 TLS_PROXY_UP=0

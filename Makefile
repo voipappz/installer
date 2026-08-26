@@ -18,7 +18,7 @@ ARCHIVE ?= $(lastword $(sort $(wildcard $(VA_CRYSTAL_DIR)/ci/build/va-crystal-no
 help:
 	@printf '$(B)voipappz/installer$(R) — one script that installs a VA-Crystal voip node\n\n'
 	@printf '  $(C)%-16s$(R) %s\n' \
-	  'check'           'what CI runs first: syntax (sh, dash, bash), shellcheck, clean diff, no python' \
+	  'check'           'what CI runs first: syntax, shellcheck, clean diff, no python, unit tests' \
 	  'install'         'run install.sh from this checkout (asks sudo, image source, node, mothership, token)' \
 	  'install-archive' 'the same, loading the newest ../va-crystal/ci/build/*.tar.gz (ARCHIVE=… to pick one)' \
 	  'test'            'the integration test: real mothership booted from the node image — DISPOSABLE HOST ONLY'
@@ -30,19 +30,20 @@ check:
 	test -x install.sh
 	sh -n install.sh
 	dash -n install.sh
-	bash -n tests/clean-runner.sh tests/test-install.sh
+	bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh
 	$(MAKE) --no-print-directory shellcheck
 	git diff --check
 	test -z "$$(find tests -type f -name '*.py' -print -quit)"
 	! grep -Eq 'python(3)?' install.sh
+	bash tests/unit.sh
 	@printf '$(B)check green$(R)\n'
 
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-	  shellcheck install.sh tests/clean-runner.sh tests/test-install.sh; \
+	  shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh; \
 	else \
 	  docker run --rm -v "$(CURDIR):/w:ro" -w /w koalaman/shellcheck:stable \
-	    install.sh tests/clean-runner.sh tests/test-install.sh; \
+	    install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh; \
 	fi
 
 install:
