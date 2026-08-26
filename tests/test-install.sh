@@ -607,7 +607,7 @@ TTY_LOG="$LOG_DIR/tty-install.log"
 set +e
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN -u VA_API_AUTHORIZATION -u VA_API_URL -u VA_NATS_URL -u VA_CONFIG \
   INSTALL_DIR="$TTY_DIR" VA_VOIP_IMAGE=installer-ci/va-crystal:tty START=0 VA_REGISTER=1 \
-  VA_CUSTOMER_NAME="TTY Customer" \
+  VA_CUSTOMER_NAME="TTY-Customer" \
   ARCHIVE="$ARCHIVE_DIR/va-crystal.tar.gz" MOTHERSHIP="$TLS_SELF_URL" TOKEN="$BASIC_VALUE" \
   expect "$ROOT/tests/tty-install.exp" "$ROOT/install.sh" >"$TTY_LOG" 2>&1
 tty_rc=$?
@@ -617,7 +617,7 @@ if [[ $tty_rc -ne 0 ]]; then show_safe_log "$TTY_LOG"; die "the real-terminal in
 grep -Fq 'tty-node' "$TTY_DIR/config/va.yaml" || die 'the name typed at the wizard did not reach va.yaml'
 grep -Fq 'pinning it as presented' "$TTY_LOG" || die 'the typed mothership URL was not pinned automatically'
 tty_uuid=$(sed -n 's/^- uuid: //p;s/^  uuid: //p' "$TTY_DIR/config/va.yaml" | head -1)
-tty_customer=$(api GET "/customers" | jq -r '.[] | select(.name == "TTY Customer") | .node_uuid')
+tty_customer=$(api GET "/customers" | jq -r '.[] | select(.name == "TTY-Customer") | .node_uuid')
 [[ $tty_customer == "$tty_uuid" ]] || die "the customer created from the terminal run is linked to '$tty_customer', not $tty_uuid"
 docker rmi installer-ci/va-crystal:tty >/dev/null 2>&1 || true
 pass 'a real-terminal install: typed archive, wizard, mothership URL and token register the node'
