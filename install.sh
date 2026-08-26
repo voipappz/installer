@@ -611,6 +611,7 @@ ensure_mothership_reachable() {
         # (sync, health) talks to this mothership the same way.
         TLS_SKIP_VERIFY=1
         set_compose_env VA_TLS_INSECURE 1
+        say "registering without TLS verification (certificate trusted as presented)"
         continue ;;
       *)
         say "cannot reach $VA_API_URL: ${_err:-curl exit $_rc}"
