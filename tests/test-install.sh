@@ -545,6 +545,13 @@ run_installer success tls-ca-bundle \
   VA_CA_BUNDLE="$RUN_ROOT/tls/bundle.pem"
 cmp -s "$RUN_ROOT/tls/bundle.pem" "$NODE_DIR/config/ca-bundle.pem" \
   || die 'CA bundle was not installed to config/ca-bundle.pem'
+# The running node calls the mothership for dialplan and SBC routing, so the
+# anchors must reach the container, not just registration.
+grep -Fq 'SSL_CERT_FILE: /etc/ssl/va-ca-bundle.pem' "$NODE_DIR/docker-compose.override.yaml" \
+  || die 'the CA bundle was not given to the running node'
+(cd "$NODE_DIR" && docker compose --profile voip config) \
+  | grep -Fq '/etc/ssl/va-ca-bundle.pem' \
+  || die 'Compose did not merge the CA bundle override into the voip service'
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
   'customer API over the CA-bundled mothership linked the node'
@@ -563,6 +570,8 @@ TLS_PROXY_UP=0
 rm -f -- "$NODE_DIR/config/ca-bundle.pem"
 run_installer success plain-http-after-tls \
   VA_API_URL="$API_URL" VA_CUSTOMER_UUID="$FIRST_UUID"
+[[ -f $NODE_DIR/docker-compose.override.yaml ]] \
+  && die 'the override outlived the CA bundle it mounts'
 pass 'a removed CA bundle leaves the plain mothership working'
 
 # A root-owned installation directory keeps .env at mode 0600, so Compose has to

@@ -953,6 +953,33 @@ elif [ -f "$WORK_DIR/config/ca-bundle.pem" ]; then
   say "keeping $INSTALL_DIR/config/ca-bundle.pem"
 fi
 
+# The bundle has to reach the RUNNING node too, not just registration: the node
+# calls the mothership for dialplan and SBC routing on every call, and without
+# these anchors those calls die with "certificate verify failed" mid-INVITE.
+# The bundled compose file belongs to the image, so extend it the way Compose
+# intends — an override file this installer owns.
+COMPOSE_OVERRIDE="$WORK_DIR/docker-compose.override.yaml"
+if [ -n "$CA_BUNDLE" ]; then
+  ENV_TEMP="$(fs_cmd mktemp "$WORK_DIR/.override.tmp.XXXXXX")" \
+    || die "could not write $INSTALL_DIR/docker-compose.override.yaml"
+  printf '%s\n' \
+    '# Written by install.sh: trust anchors for the mothership TLS chain.' \
+    'services:' \
+    '  voip:' \
+    '    environment:' \
+    '      SSL_CERT_FILE: /etc/ssl/va-ca-bundle.pem' \
+    '    volumes:' \
+    '      - ./config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro' |
+    fs_cmd tee "$ENV_TEMP" >/dev/null
+  fs_cmd chmod 0644 "$ENV_TEMP"
+  fs_cmd mv -f -- "$ENV_TEMP" "$COMPOSE_OVERRIDE"
+  ENV_TEMP=""
+  say "the running node will trust $INSTALL_DIR/config/ca-bundle.pem"
+elif [ -f "$COMPOSE_OVERRIDE" ]; then
+  # No bundle any more: leaving the override would mount a missing path.
+  fs_cmd rm -f -- "$COMPOSE_OVERRIDE"
+fi
+
 # The one thing a node must be told: where its mothership is. Asked only when
 # nothing supplied it (no VA_API_URL, no mothership in the YAML) and a terminal
 # exists; unattended installs keep the default.
