@@ -67,6 +67,19 @@ diagnostics() {
     echo "--- $container (last 80 lines)" >&2
     docker logs --tail 80 "$container" >&2 || true
   done
+  # The node's own view, when it is up: which check is red and why, what
+  # FreeSWITCH bound, and what it complained about — the three things a
+  # "did not pass node health" needs beside it to be diagnosable from a log.
+  if docker inspect va-voip >/dev/null 2>&1; then
+    echo '--- va-voip: voipappz health' >&2
+    docker exec va-voip voipappz health >&2 2>&1 || true
+    echo '--- va-voip: sofia status' >&2
+    docker exec va-voip sh -c 'fs_cli -H 127.0.0.1 -P 8021 -p "$VA_FREESWITCH_PASSWORD" -x "sofia status"' >&2 2>&1 || true
+    echo '--- va-voip: listeners' >&2
+    docker exec va-voip sh -c 'ss -lun; ss -lnt' >&2 2>&1 || true
+    echo '--- va-voip: FreeSWITCH errors' >&2
+    docker logs va-voip 2>&1 | grep -E '\[(ERR|CRIT)\]' | grep -viE 'sqldb|vpx|codec' | tail -20 >&2 || true
+  fi
 }
 
 stop_mothership() {
