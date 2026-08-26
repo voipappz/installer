@@ -812,7 +812,9 @@ pass 'an authenticated Account without node rights fails before customer work'
 # Mothership has now been used only for node/customer registration. Stop it,
 # provide an independent test broker, and verify the installed VoIP profile and
 # YAML mount without using mothership as a runtime test fixture.
-stop_mothership
+# The mothership STAYS UP: the node's health verdict includes reaching it
+# (control_mothership), as a real node must. Its NATS binds loopback; the
+# node's broker below binds the runner's address, so the two coexist.
 # Bind the broker to the runner's own address, not loopback: a real node reaches
 # NATS over the network, and the voip service maps `nats` to VA_NATS_HOST, so a
 # loopback-only test would never exercise that path.

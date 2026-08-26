@@ -1142,8 +1142,11 @@ if [ "$START" = "1" ]; then
     _attempt=$((_attempt + 1))
     sleep 3
   done
-  docker_cmd exec va-voip voipappz health >/dev/null 2>&1 \
-    || die "va-voip did not pass node health; run: docker exec va-voip voipappz health"
+  if ! docker_cmd exec va-voip voipappz health >/dev/null 2>&1; then
+    # Show the verdict itself: which check is down is the whole diagnosis.
+    docker_cmd exec va-voip voipappz health 2>&1 | sed 's/^/    /' || true
+    die "va-voip did not pass node health (report above); run: docker exec va-voip voipappz health"
+  fi
   say "va-voip is healthy"
 else
   say "installed but not started (START=0)"
