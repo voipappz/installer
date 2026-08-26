@@ -481,6 +481,11 @@ stage_work_dir() {
 commit_install_dir() {
   prepare_install_dir
   fs_cmd cp -Rf "$WORK_DIR/." "$INSTALL_DIR/" || die "could not write $INSTALL_DIR"
+  # The copy adds and replaces; it cannot remove. The one file this installer
+  # deletes on purpose is its own compose override, which must not outlive
+  # the CA bundle it mounts.
+  [ -f "$WORK_DIR/docker-compose.override.yaml" ] \
+    || fs_cmd rm -f -- "$INSTALL_DIR/docker-compose.override.yaml"
   rm -rf -- "$WORK_DIR" 2>/dev/null || root_cmd rm -rf -- "$WORK_DIR"
   WORK_DIR=""
   VA_YAML="$INSTALL_DIR/config/va.yaml"
