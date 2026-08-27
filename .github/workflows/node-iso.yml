@@ -200,6 +200,19 @@ jobs:
       # open across a build that can run for an hour: an OIDC role session is one
       # hour by default, and a session that expires mid-build fails at the very
       # last step with nothing to show for it.
+      # TWO WAYS IN, and the role is preferred when both are set. An OIDC token
+      # lives an hour and cannot be replayed; a stored key is valid until
+      # someone rotates it and is readable by anything that can add a workflow
+      # step. Both are scoped to PutObject on one prefix, so the blast radius is
+      # the same — the difference is how long a leak stays useful.
+      - name: Credentials from a stored key
+        if: ${{ vars.AWS_OIDC_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.ISO_S3_REGION || 'il-central-1' }}
+
       - name: Assume the publishing role (to mint)
         if: ${{ vars.AWS_OIDC_ROLE_ARN != '' }}
         uses: aws-actions/configure-aws-credentials@v4
@@ -369,7 +382,7 @@ jobs:
       # A SECOND, fresh session. The one taken to mint is an hour old by now and
       # the build in between can run for most of that.
       - name: Assume the publishing role (to upload)
-        if: ${{ inputs.publish && vars.AWS_OIDC_ROLE_ARN != '' }}
+        if: ${{ inputs.publish && (vars.AWS_OIDC_ROLE_ARN != '' || secrets.AWS_ACCESS_KEY_ID != '') }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
@@ -377,7 +390,7 @@ jobs:
           aws-region: ${{ vars.ISO_S3_REGION || 'il-central-1' }}
 
       - name: Publish to S3
-        if: ${{ inputs.publish && vars.AWS_OIDC_ROLE_ARN != '' }}
+        if: ${{ inputs.publish && (vars.AWS_OIDC_ROLE_ARN != '' || secrets.AWS_ACCESS_KEY_ID != '') }}
         run: |
           set -eu
           # Exactly one trailing slash, whatever the input looked like.
@@ -402,6 +415,26 @@ jobs:
             --region "$S3_REGION" \
             --content-type text/plain \
             --only-show-errors
+
+          # AND `latest`, overwritten every run — the same pair va-crystal
+          # publishes for the image (va-crystal-node-<v>.tar.gz and -latest).
+          # A SERVER-SIDE COPY, not a second upload: the bytes are already in
+          # the bucket, and re-sending 3GB to write the same object twice is
+          # bandwidth spent to no end.
+          #
+          # The versioned object stays immutable; only this name moves. Anyone
+          # who needs to know WHAT they have reads the stamp on the disc — the
+          # filename `latest` deliberately cannot answer that.
+          aws s3 cp "$dest$ISO_NAME" "${dest}voipappz-node-latest.iso" \
+            --region "$S3_REGION" \
+            --content-type application/x-iso9660-image \
+            --metadata-directive REPLACE \
+            --only-show-errors
+          aws s3 cp "packer/build/iso/$ISO_NAME.sha256" "${dest}voipappz-node-latest.iso.sha256" \
+            --region "$S3_REGION" \
+            --content-type text/plain \
+            --only-show-errors
+          echo ">> ${dest}voipappz-node-latest.iso  (overwritten)"
           {
             echo
             echo "published to \`$dest$ISO_NAME\` — RESTRICTED, no public ACL."
@@ -424,7 +457,7 @@ jobs:
       # the object is restricted, and a presigned URL is a bearer credential
       # that must never live in a public release.
       - name: Publish the release
-        if: ${{ inputs.publish && inputs.release && vars.AWS_OIDC_ROLE_ARN != '' }}
+        if: ${{ inputs.publish && inputs.release && (vars.AWS_OIDC_ROLE_ARN != '' || secrets.AWS_ACCESS_KEY_ID != '') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -462,9 +495,9 @@ jobs:
           echo "release iso-$RELEASE_VERSION published" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Say why nothing was published
-        if: ${{ inputs.publish && vars.AWS_OIDC_ROLE_ARN == '' }}
+        if: ${{ inputs.publish && vars.AWS_OIDC_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID == '' }}
         run: |
-          echo "!! AWS_OIDC_ROLE_ARN is not set, so the ISO was built but not uploaded." >&2
+          echo "!! No AWS credentials (AWS_OIDC_ROLE_ARN variable, or AWS_ACCESS_KEY_ID secret) — built, not uploaded." >&2
           echo "   Set the repository variable to the role described at the top of this workflow." >&2
 
       - name: Remove the registry credential

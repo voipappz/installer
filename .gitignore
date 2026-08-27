@@ -5,3 +5,4 @@ CLAUDE.md
 # (a saved container image and an apt repository) and the finished disc.
 packer/cache/
 packer/build/
+.claude/
