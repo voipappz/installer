@@ -143,6 +143,10 @@ on:
         required: false
         type: string
         default: ''
+      release:
+        description: "Publish a GitHub Release naming this disc (the ISO itself stays in S3)."
+        type: boolean
+        default: true
       s3_prefix:
         description: 'Key prefix in the bucket. Empty uses the ISO_S3_PREFIX repository variable, or iso/.'
         required: false
@@ -412,6 +416,50 @@ jobs:
             echo "A presigned URL is a bearer credential, so it is never minted in"
             echo "CI and never printed into a job log — this log is world-readable."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # A RELEASE THAT NAMES THE DISC WITHOUT CARRYING IT. The ISO is ~3GB and a
+      # release asset is capped at 2GB, so the artefact stays in S3 and the
+      # release is the INDEX: which node image is inside, where the object is,
+      # and its checksum. The s3:// URI is deliberately not a download link —
+      # the object is restricted, and a presigned URL is a bearer credential
+      # that must never live in a public release.
+      - name: Publish the release
+        if: ${{ inputs.publish && inputs.release && vars.AWS_OIDC_ROLE_ARN != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          prefix="${S3_PREFIX%/}/"
+          case "$prefix" in /*) prefix="${prefix#/}" ;; esac
+          sum="$(cut -d' ' -f1 < "packer/build/iso/$ISO_NAME.sha256")"
+          notes="$(mktemp)"
+          {
+            echo "Node installer ISO \`$RELEASE_VERSION\`."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| node image | \`nirlevi/va-crystal:node-$IMAGE_VERSION\` |"
+            echo "| installer commit | \`$GITHUB_SHA\` |"
+            echo "| object | \`s3://$S3_BUCKET/$prefix$ISO_NAME\` |"
+            echo "| sha256 | \`$sum\` |"
+            echo
+            echo "**Restricted media.** The disc contains the private node image, so it"
+            echo "is not attached here and the object has no public ACL. Hand it over"
+            echo "with a presigned URL minted out of band:"
+            echo
+            echo '```sh'
+            echo "packer/scripts/presign-iso.sh $RELEASE_VERSION"
+            echo '```'
+            echo
+            echo "Boot it, let it install and power off, remove the disc, boot again,"
+            echo "log in and run \`va-node-install\`. The image is offline; registration"
+            echo "still needs the mothership (\`VA_REGISTER=0\` to defer it)."
+          } > "$notes"
+          gh release create "iso-$RELEASE_VERSION" \
+            --title "Node ISO $RELEASE_VERSION" \
+            --notes-file "$notes" \
+            "packer/build/iso/$ISO_NAME.sha256#$ISO_NAME.sha256"
+          echo "release iso-$RELEASE_VERSION published" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Say why nothing was published
         if: ${{ inputs.publish && vars.AWS_OIDC_ROLE_ARN == '' }}
