@@ -711,7 +711,10 @@ node=$(api GET "/nodes/$NODE_UUID")
 assert_jq "$node" '.name == "Installer-CI-Node-Updated"' \
   'changed YAML node fields are reconciled by the CLI'
 
-run_installer success new-customer VA_CUSTOMER_NAME=Installer-CI-Secondary
+SECOND_EMAIL="owner-$RANDOM@installer-ci.test"
+SECOND_PASSWORD="Ci-Login-$RANDOM-$RANDOM"
+run_installer success new-customer VA_CUSTOMER_NAME=Installer-CI-Secondary \
+  VA_ACCOUNT_EMAIL="$SECOND_EMAIL" VA_ACCOUNT_PASSWORD="$SECOND_PASSWORD"
 customers=$(api GET /customers)
 SECOND_UUID=$(printf '%s' "$customers" | jq -r \
   '[.[] | select(.name == "Installer-CI-Secondary")][0].uuid // empty')
@@ -723,6 +726,20 @@ environment_count=$(docker exec va-postgres psql -U postgres -d voipappz -tAc \
   "SELECT COUNT(*) FROM environments WHERE customer_uuid = '$SECOND_UUID'" | tr -d '[:space:]')
 [[ $environment_count -ge 1 ]] || die 'Customer::Init created no environment for the new customer'
 pass 'new customer used the real Customer::Init environment creation'
+
+second_basic="Basic $(printf '%s:%s' "$SECOND_EMAIL" "$SECOND_PASSWORD" | base64 | tr -d '\n')"
+api_as_second() {
+  printf 'header = "Authorization: %s"\nheader = "Accept: application/json"\n' "$second_basic" |
+    curl --config - --fail-with-body --silent --show-error --connect-timeout 10 --max-time 60 \
+      "$@"
+}
+second_account_uuid=$(api_as_second --get --data-urlencode "search[email]=$SECOND_EMAIL" \
+  --url "$API_URL/api/accounts" | jq -r "[.[] | select(.email == \"$SECOND_EMAIL\")] | .[0].uuid // empty")
+[[ $second_account_uuid =~ ^[0-9a-f-]{36}$ ]] || die 'the new customer Account cannot sign in with the supplied login'
+assert_jq "$(api_as_second --url "$API_URL/api/accounts/$second_account_uuid")" \
+  ".customer_uuid == \"$SECOND_UUID\"" \
+  'the new customer Account signs in with the supplied email and password'
+grep -Fq "$SECOND_PASSWORD" "$LAST_LOG" && die 'the new Account password leaked into the installer log'
 
 before_count=$(printf '%s' "$customers" | jq 'length')
 run_installer success existing-customer-by-name VA_CUSTOMER_NAME=Installer-CI-Secondary

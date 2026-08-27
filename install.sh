@@ -51,6 +51,11 @@ VA_NATS_URL="${VA_NATS_URL:-}"
 VA_REGISTER="${VA_REGISTER:-1}"
 VA_CUSTOMER_UUID="${VA_CUSTOMER_UUID:-}"
 VA_CUSTOMER_NAME="${VA_CUSTOMER_NAME:-}"
+# The login of the Account a NEW customer gets (Customer::Init creates it).
+# Without them the mothership derives an address and generates a password it
+# never returns, a login nobody can use.
+VA_ACCOUNT_EMAIL="${VA_ACCOUNT_EMAIL:-}"
+VA_ACCOUNT_PASSWORD="${VA_ACCOUNT_PASSWORD:-}"
 START="${START:-1}"
 
 case "$VA_REGISTER" in 0|1) ;; *) printf '!! VA_REGISTER must be 0 or 1\n' >&2; exit 1 ;; esac
@@ -646,6 +651,7 @@ validate_api_url() {
   esac
 }
 
+API_STDIN_FORM=""
 api_request() {
   _method=$1
   _path=$2
@@ -656,6 +662,8 @@ api_request() {
       printf 'header = "Authorization: %s"\nheader = "Accept: application/json"\n' "$VA_API_AUTHORIZATION"
       [ -z "$CA_BUNDLE" ] || printf 'cacert = "%s"\n' "$CA_BUNDLE"
       [ "$PINNED" = "0" ] || printf 'insecure\n'
+      # Form fields that are secrets travel here, on stdin, never in argv.
+      [ -z "$API_STDIN_FORM" ] || printf 'data-urlencode = "%s"\n' "$API_STDIN_FORM"
     } |
       curl --config - --silent --show-error --connect-timeout 10 --max-time 45 \
         --request "$_method" --output "$API_BODY_FILE" --write-out '%{http_code}' \
@@ -745,18 +753,86 @@ link_customer() {
   SELECTED_CUSTOMER_UUID=$_uuid
 }
 
+# The login of the Account that Customer::Init creates for a new customer.
+# Asked only when a customer is actually being created; the password is a
+# credential and is erased right after the mothership confirmed it works.
+set_new_account_login() {
+  while [ -z "$VA_ACCOUNT_EMAIL" ]; do
+    ask "new customer's login email"
+    VA_ACCOUNT_EMAIL=$REPLY
+    [ -n "$VA_ACCOUNT_EMAIL" ] || say "email cannot be empty; try again"
+  done
+  case "$VA_ACCOUNT_EMAIL" in *@*) ;; *) die "new customer's login email must be an address" ;; esac
+  case "$VA_ACCOUNT_EMAIL" in *:*) die "new customer's login email cannot contain ':'" ;; esac
+  printf '%s' "$VA_ACCOUNT_EMAIL" | LC_ALL=C grep -q '[[:cntrl:]]' \
+    && die "new customer's login email contains a control character"
+  while [ -z "$VA_ACCOUNT_PASSWORD" ]; do
+    ask "new customer's login password (input hidden)" silent
+    VA_ACCOUNT_PASSWORD=$REPLY
+    [ -n "$VA_ACCOUNT_PASSWORD" ] || say "password cannot be empty; try again"
+  done
+  REPLY=""
+  printf '%s' "$VA_ACCOUNT_PASSWORD" | LC_ALL=C grep -q '[[:cntrl:]]' \
+    && die "new customer's login password contains a control character"
+  return 0
+}
+
+# The new login must work: a customer whose Account cannot sign in is the
+# failure this exists to prevent. Reads the Account's own record with the new
+# Basic key, then forgets the password.
+verify_new_account_login() {
+  _customer_uuid=$1
+  _saved_authorization=$VA_API_AUTHORIZATION
+  VA_API_AUTHORIZATION="Basic $(
+    printf '%s:%s' "$VA_ACCOUNT_EMAIL" "$VA_ACCOUNT_PASSWORD" | base64 | tr -d '\n'
+  )"
+  _status=0
+  _account=""
+  if api_request GET "/accounts" --get --data-urlencode "search[email]=$VA_ACCOUNT_EMAIL" \
+    && [ "$API_STATUS" = "200" ]
+  then
+    _account="$(printf '%s' "$API_BODY" | jq -r --arg email "$VA_ACCOUNT_EMAIL" \
+      'if type == "array" then map(select(.email == $email)) else [] end
+       | if length == 1 then .[0].uuid else empty end')" || _status=1
+    if [ -n "$_account" ]; then
+      api_request GET "/accounts/$_account" && [ "$API_STATUS" = "200" ] || _status=1
+    fi
+  else
+    _status=1
+  fi
+  VA_API_AUTHORIZATION=$_saved_authorization
+  _saved_authorization=""
+  VA_ACCOUNT_PASSWORD=""
+  unset VA_ACCOUNT_PASSWORD 2>/dev/null
+  [ "$_status" -eq 0 ] \
+    || die "customer $_customer_uuid was created, but its Account $VA_ACCOUNT_EMAIL cannot sign in (HTTP ${API_STATUS:-none}); the mothership must accept account_email/account_password"
+  [ -n "$_account" ] \
+    || die "customer $_customer_uuid was created, but $VA_ACCOUNT_EMAIL is not one of its Accounts"
+  printf '%s' "$API_BODY" | jq -e --arg customer "$_customer_uuid" \
+    'type == "object" and .customer_uuid == $customer' >/dev/null \
+    || die "customer $_customer_uuid was created, but $VA_ACCOUNT_EMAIL belongs to another customer"
+  say "Account $VA_ACCOUNT_EMAIL signs in to customer $_customer_uuid"
+}
+
 create_customer() {
   _name=$1
   [ -n "$_name" ] || die "new customer name cannot be empty"
   printf '%s' "$_name" | LC_ALL=C grep -q '[[:cntrl:]]' \
     && die "new customer name contains a control character"
 
+  set_new_account_login
   say "creating customer $_name"
   prepare_install_dir
   printf '%s\n' "$_name" | fs_cmd tee "$PROVISIONING_GUARD" >/dev/null
   fs_cmd chmod 0600 "$PROVISIONING_GUARD"
-  api_request POST "/customers" --data-urlencode "name=$_name" \
+  # curl config quoting: backslash and double quote are the only escapes.
+  API_STDIN_FORM="account_password=$(printf '%s' "$VA_ACCOUNT_PASSWORD" | sed 's/[\\"]/\\&/g')"
+  if api_request POST "/customers" --data-urlencode "name=$_name" \
     --data-urlencode "enabled=true" --data-urlencode "node_uuid=$NODE_UUID" \
+    --data-urlencode "account_email=$VA_ACCOUNT_EMAIL"
+  then _status=0; else _status=$?; fi
+  API_STDIN_FORM=""
+  [ "$_status" -eq 0 ] \
     || die "new-customer result is unknown; re-run with the same VA_CUSTOMER_NAME"
 
   case "$API_STATUS" in
@@ -772,6 +848,7 @@ create_customer() {
         || die "customer $_uuid was created, but Customer::Init failed: $_init_error"
       [ "$_linked_node" = "$NODE_UUID" ] \
         || die "customer $_uuid was created without the requested node link"
+      verify_new_account_login "$_uuid"
       fs_cmd rm -f -- "$PROVISIONING_GUARD" \
         || die "customer $_uuid is ready, but the local initialization marker could not be cleared"
       SELECTED_CUSTOMER_UUID=$_uuid
