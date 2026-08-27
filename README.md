@@ -80,7 +80,7 @@ Two files describe the node, and this repository ships an example of each:
 | File | What it is |
 |---|---|
 | `/opt/voipappz/config/va.yaml` | the node: uuid, addresses, ports, gateways, mothership, broker — see [`va.yaml.example`](va.yaml.example) |
-| `/opt/voipappz/.env` | the three secrets `docker run` passes in, and the image it runs — see [`env.example`](env.example) |
+| `/opt/voipappz/.env` | written by the installer: the three generated secrets `docker run` passes in, and the image it runs |
 
 The YAML is the only source. The container turns it into its own environment at
 boot (`voipappz env --export`, the `va-env` step), which is how Kamailio learns
@@ -124,7 +124,11 @@ a node is upgraded. The archives come from va-crystal's `make s3-archive` /
 
 ## Unattended
 
-The installer takes no arguments; every setting is an environment variable.
+The installer takes no arguments; every setting is an environment variable —
+or a line in a real `.env` file beside `install.sh` (or `VA_ENV_FILE=…`). Copy
+[`.env.example`](.env.example), fill in the mothership and your Account
+login, keep it mode 0600, and run `sh install.sh`: whatever the file answers
+is not asked. Variables already in the environment win over the file.
 
 ```sh
 export VA_REGISTRY_USER='<docker-hub-user>' VA_REGISTRY_TOKEN='<docker-hub-token>'

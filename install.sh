@@ -6,6 +6,30 @@
 # The script is public. The platform image and every credential stay private.
 set -eu
 
+# THE ANSWER FILE. Every setting the installer takes is an environment
+# variable; a real .env file is the same thing written down: KEY=VALUE lines,
+# read before anything else. VA_ENV_FILE names it, else ./.env when one is
+# beside the caller. A variable already in the environment wins over the
+# file, so `VA_API_URL=… sh install.sh` still overrides for one run. The file
+# may hold the Account login (VA_API_EMAIL / VA_API_PASSWORD or
+# VA_API_AUTHORIZATION) and the Docker Hub token; keep it mode 0600, and it is
+# never copied into the installation.
+VA_ENV_FILE="${VA_ENV_FILE:-}"
+[ -n "$VA_ENV_FILE" ] || { [ -f ./.env ] && VA_ENV_FILE=./.env; } || true
+if [ -n "$VA_ENV_FILE" ]; then
+  [ -r "$VA_ENV_FILE" ] || { printf '!! cannot read %s\n' "$VA_ENV_FILE" >&2; exit 1; }
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in ''|'#'*) continue ;; esac
+    _key=${_line%%=*}; _val=${_line#*=}
+    case "$_key" in *[!A-Za-z0-9_]*|'') printf '!! %s: not KEY=VALUE: %s\n' "$VA_ENV_FILE" "$_line" >&2; exit 1 ;; esac
+    # strip one layer of matching quotes
+    case "$_val" in \"*\") _val=${_val#\"}; _val=${_val%\"} ;; \'*\') _val=${_val#\'}; _val=${_val%\'} ;; esac
+    eval "[ -n \"\${$_key+x}\" ]" && continue   # the environment wins
+    eval "$_key=\$_val; export $_key"
+  done < "$VA_ENV_FILE"
+  _line=""; _key=""; _val=""
+fi
+
 VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}"
 VA_IMAGE_ARCHIVE="${VA_IMAGE_ARCHIVE:-}"
 # Where `make s3-publish` in va-crystal puts the newest proven image archive.
@@ -421,6 +445,10 @@ set_account_authorization() {
     printf '%s:%s' "$ACCOUNT_EMAIL_INPUT" "$ACCOUNT_PASSWORD_INPUT" | base64 | tr -d '\n'
   )"
   VA_API_AUTHORIZATION="Basic $ACCOUNT_BASIC_INPUT"
+  # The email is kept — it is not a credential, and it is the only handle on
+  # the Account's own record once the password is gone. resolve_customer needs
+  # it to read account.customer_uuid.
+  ACCOUNT_EMAIL=$ACCOUNT_EMAIL_INPUT
   ACCOUNT_EMAIL_INPUT=""
   ACCOUNT_PASSWORD_INPUT=""
   ACCOUNT_BASIC_INPUT=""
@@ -655,6 +683,30 @@ load_customers() {
   CUSTOMERS_JSON=$API_BODY
 }
 
+# The Account's OWN customer, from account.customer_uuid.
+#
+# A root Account (VA_ROOT) is shown every customer in the deployment, so the
+# list alone cannot say which one belongs to this operator — Account#customer_uuid
+# is the only record that does, and GET /customers does not carry it. Two reads:
+# find the account by its email, then read that account.
+#
+# Best-effort: an Account token instead of email + password leaves nothing to
+# search by, and an older mothership may not answer at all. Both fall through
+# to the explicit VA_CUSTOMER_* selection below.
+account_customer_uuid() {
+  [ -n "$ACCOUNT_EMAIL" ] || return 1
+  api_request GET "/accounts" --get --data-urlencode "search[email]=$ACCOUNT_EMAIL" || return 1
+  [ "$API_STATUS" = "200" ] || return 1
+  # The search matches substrings, so only an exact, unambiguous email counts.
+  _account="$(printf '%s' "$API_BODY" | jq -r --arg email "$ACCOUNT_EMAIL" \
+    'if type == "array" then map(select(.email == $email)) else [] end
+     | if length == 1 then .[0].uuid else empty end')" || return 1
+  [ -n "$_account" ] || return 1
+  api_request GET "/accounts/$_account" || return 1
+  [ "$API_STATUS" = "200" ] || return 1
+  printf '%s' "$API_BODY" | jq -r 'if type == "object" then (.customer_uuid // empty) else empty end'
+}
+
 customer_by_uuid() {
   printf '%s' "$CUSTOMERS_JSON" |
     jq -c --arg value "$1" '[.[] | select(.uuid == $value)] | if length == 1 then .[0] else empty end'
@@ -752,6 +804,17 @@ resolve_customer() {
     _customer="$(customer_by_name "$VA_CUSTOMER_NAME")"
     if [ -n "$_customer" ]; then link_customer "$_customer"; else create_customer "$VA_CUSTOMER_NAME"; fi
     return
+  fi
+
+  # Nothing was named, so ask the Account which customer is its own.
+  _own="$(account_customer_uuid || true)"
+  if [ -n "$_own" ]; then
+    _customer="$(customer_by_uuid "$_own")"
+    if [ -n "$_customer" ]; then
+      say "the Account's own customer is $_own"
+      link_customer "$_customer"
+      return
+    fi
   fi
 
   _count="$(printf '%s' "$CUSTOMERS_JSON" | jq 'length')"
@@ -1017,6 +1080,7 @@ fi
 
 step "5/6  Registration"
 SELECTED_CUSTOMER_UUID=""
+ACCOUNT_EMAIL=""
 if [ "$VA_REGISTER" = "1" ]; then
   if [ -z "${VA_API_AUTHORIZATION:-}" ]; then
     set_account_authorization
