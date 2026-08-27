@@ -397,7 +397,7 @@ jobs:
           prefix="${S3_PREFIX%/}/"
           case "$prefix" in /*) prefix="${prefix#/}" ;; esac
           dest="s3://$S3_BUCKET/$prefix"
-          echo ">> $dest$ISO_NAME"
+          echo ">> ${dest}voipappz-node-latest.iso  (from $ISO_NAME)"
           # NO --acl. The disc carries a private image, so it inherits the
           # bucket's Block Public Access and stays owner-only; the role assumed
           # above cannot set an ACL even if this line asked it to. Customers get
@@ -407,34 +407,31 @@ jobs:
           # name already belongs to va-crystal's image tarballs in this same
           # bucket, versioned by a different repository. One namespace, two
           # meanings, is how an operator downloads the wrong thing.
-          aws s3 cp "packer/build/iso/$ISO_NAME" "$dest$ISO_NAME" \
-            --region "$S3_REGION" \
-            --content-type application/x-iso9660-image \
-            --only-show-errors
-          aws s3 cp "packer/build/iso/$ISO_NAME.sha256" "$dest$ISO_NAME.sha256" \
-            --region "$S3_REGION" \
-            --content-type text/plain \
-            --only-show-errors
-
-          # AND `latest`, overwritten every run — the same pair va-crystal
-          # publishes for the image (va-crystal-node-<v>.tar.gz and -latest).
-          # A SERVER-SIDE COPY, not a second upload: the bytes are already in
-          # the bucket, and re-sending 3GB to write the same object twice is
-          # bandwidth spent to no end.
+          # ONE OBJECT, OVERWRITTEN. Not a versioned disc plus a `latest` copy:
+          # S3 has no symlink, so that pair costs ~9GB per release and the
+          # versioned halves are immutable, which means the prefix grows without
+          # end. The disc still KNOWS what it is — the stamp at its root carries
+          # the iso release, the node image tag and its digest — so the version
+          # lives in the artefact rather than in the filename.
           #
-          # The versioned object stays immutable; only this name moves. Anyone
-          # who needs to know WHAT they have reads the stamp on the disc — the
-          # filename `latest` deliberately cannot answer that.
-          aws s3 cp "$dest$ISO_NAME" "${dest}voipappz-node-latest.iso" \
+          # voipappz-node-latest.iso, deliberately NOT va-crystal-node-: that
+          # name already belongs to va-crystal's image tarballs in this same
+          # bucket, versioned by a different repository. One namespace, two
+          # meanings, is how an operator downloads the wrong thing.
+          #
+          # NO --acl. The disc carries a private image, so it inherits the
+          # bucket's Block Public Access and stays owner-only; the role assumed
+          # above cannot set an ACL even if this line asked it to. Customers get
+          # a presigned URL, minted by hand — packer/scripts/presign-iso.sh.
+          aws s3 cp "packer/build/iso/$ISO_NAME" "${dest}voipappz-node-latest.iso" \
             --region "$S3_REGION" \
             --content-type application/x-iso9660-image \
-            --metadata-directive REPLACE \
             --only-show-errors
           aws s3 cp "packer/build/iso/$ISO_NAME.sha256" "${dest}voipappz-node-latest.iso.sha256" \
             --region "$S3_REGION" \
             --content-type text/plain \
             --only-show-errors
-          echo ">> ${dest}voipappz-node-latest.iso  (overwritten)"
+          echo ">> ${dest}voipappz-node-latest.iso  (overwritten; release $RELEASE_VERSION)"
           {
             echo
             echo "published to \`$dest$ISO_NAME\` — RESTRICTED, no public ACL."
@@ -473,7 +470,7 @@ jobs:
             echo "|---|---|"
             echo "| node image | \`nirlevi/va-crystal:node-$IMAGE_VERSION\` |"
             echo "| installer commit | \`$GITHUB_SHA\` |"
-            echo "| object | \`s3://$S3_BUCKET/$prefix$ISO_NAME\` |"
+            echo "| object | \`s3://$S3_BUCKET/${prefix}voipappz-node-latest.iso\` (overwritten each release) |"
             echo "| sha256 | \`$sum\` |"
             echo
             echo "**Restricted media.** The disc contains the private node image, so it"
