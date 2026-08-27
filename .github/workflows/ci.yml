@@ -30,6 +30,20 @@ jobs:
           dash -n install.sh
           bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh
           shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh
+          # The ISO pipeline. POSIX like install.sh, and held to the same gate:
+          # these scripts run on a workstation, on a GitHub runner, and (as
+          # va-node-install) on an offline node where nothing can be fixed.
+          # `sh -n` takes one script and treats the rest as its arguments, so
+          # this is a loop rather than one call.
+          for f in packer/build.sh packer/make-node-iso.sh \
+                   packer/scripts/fetch-base-iso.sh packer/scripts/stage-payload.sh \
+                   packer/scripts/presign-iso.sh packer/files/va-node-install; do
+            test -x "$f"
+            sh -n "$f"
+            dash -n "$f"
+          done
+          shellcheck packer/build.sh packer/make-node-iso.sh packer/scripts/*.sh \
+                     packer/files/va-node-install
           git diff --check
           test -z "$(find tests -type f -name '*.py' -print -quit)"
           ! grep -Eq 'python(3)?' install.sh

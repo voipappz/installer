@@ -157,6 +157,26 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `START=0` | Install and register, do not start the container. |
 | `VA_REGISTER=0` | Install and start, do not register. |
 
+## No internet at all: the installer ISO
+
+For a machine with no route out, there is a bootable disc. It carries Ubuntu
+24.04, Docker Engine, the node image and this `install.sh`, and it installs the
+*machine* — the operator then runs one command, which is this installer again,
+loading the image off the local disk:
+
+```console
+$ va-node-install
+```
+
+That is `VA_IMAGE_SOURCE=archive` with `VA_IMAGE_ARCHIVE` pointing at the disc's
+copy of the image; nothing about installation is reimplemented on the disc. The
+image is offline, **registration is not** — that step still has to reach your
+mothership, or run with `VA_REGISTER=0` and register later.
+
+The disc is restricted media: it holds a private container image in the clear,
+so it is distributed by presigned link and must not be re-hosted.
+See [packer/README.md](packer/README.md) to cut or publish one.
+
 ## What it guarantees
 
 - **Nothing is written to `/opt/voipappz` until registration succeeded.** The
