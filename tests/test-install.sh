@@ -613,16 +613,19 @@ pass 'installed CA bundle is reused on later runs'
 # this run types them at the prompts through a pseudo-terminal (expect):
 # image source 3 + the archive path, the node wizard (name, internal and
 # external IP), the mothership URL of the self-signed proxy — pinned
-# automatically, no question — and the Account token with echo off. Only the
+# automatically, no question — the Account token with echo off, and the new
+# customer's login (email, then its password with echo off). Only the
 # customer selector and START=0 are preset: neither has a prompt in this case.
 command -v expect >/dev/null 2>&1 || sudo apt-get install -y -qq expect >/dev/null
 TTY_DIR="$RUN_ROOT/tty-node"
 TTY_LOG="$LOG_DIR/tty-install.log"
+TTY_PASSWORD="Tty-Login-$RANDOM-$RANDOM"
 set +e
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN -u VA_API_AUTHORIZATION -u VA_API_URL -u VA_NATS_URL -u VA_CONFIG \
   INSTALL_DIR="$TTY_DIR" VA_VOIP_IMAGE=installer-ci/va-crystal:tty START=0 VA_REGISTER=1 \
   VA_CUSTOMER_NAME="TTY-Customer" \
   ARCHIVE="$ARCHIVE_DIR/va-crystal.tar.gz" MOTHERSHIP="$TLS_SELF_URL" TOKEN="$BASIC_VALUE" \
+  TTY_PASSWORD="$TTY_PASSWORD" \
   expect "$ROOT/tests/tty-install.exp" "$ROOT/install.sh" >"$TTY_LOG" 2>&1
 tty_rc=$?
 set -e
@@ -633,6 +636,9 @@ grep -Fq 'pinning it as presented' "$TTY_LOG" || die 'the typed mothership URL w
 tty_uuid=$(sed -n 's/^- uuid: //p;s/^  uuid: //p' "$TTY_DIR/config/va.yaml" | head -1)
 tty_customer=$(api GET "/customers" | jq -r '.[] | select(.name == "TTY-Customer") | .node_uuid')
 [[ $tty_customer == "$tty_uuid" ]] || die "the customer created from the terminal run is linked to '$tty_customer', not $tty_uuid"
+grep -Fq "$TTY_PASSWORD" "$TTY_LOG" && die 'the login password typed with echo off reached the terminal log'
+grep -Fq 'Account tty-owner@installer-ci.test signs in to customer' "$TTY_LOG" \
+  || die 'the login typed at the terminal was not proven'
 docker rmi installer-ci/va-crystal:tty >/dev/null 2>&1 || true
 pass 'a real-terminal install: typed archive, wizard, mothership URL and token register the node'
 rm -rf "$ARCHIVE_DIR"

@@ -14,7 +14,7 @@ set -Eeuo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 INSTALLER="$ROOT/install.sh"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+trap '[ -n "${UNIT_KEEP:-}" ] || rm -rf "$TMP"' EXIT
 fails=0
 ok()   { printf '  ok   %s\n' "$*"; }
 bad()  { printf '  FAIL %s\n' "$*"; fails=$((fails + 1)); }
@@ -155,6 +155,8 @@ API_LIB="$TMP/api-lib.sh"
   printf '%s\n' ': "${NODE_UUID:=11111111-1111-4111-8111-111111111111}"'
   printf '%s\n' ': "${ACCOUNT_EMAIL:=}" "${VA_CUSTOMER_UUID:=}" "${VA_CUSTOMER_NAME:=}"'
   printf '%s\n' ': "${CA_BUNDLE:=}" "${PINNED:=0}" "${SELECTED_CUSTOMER_UUID:=}"'
+  printf '%s\n' ': "${VA_ACCOUNT_EMAIL:=}" "${VA_ACCOUNT_PASSWORD:=}" "${API_STDIN_FORM:=}"'
+  lift set_new_account_login; lift verify_new_account_login
   lift api_request; lift api_error; lift load_customers; lift account_customer_uuid
   lift customer_by_uuid; lift customer_by_name; lift link_customer
   lift create_customer; lift resolve_customer
@@ -174,6 +176,7 @@ OWN=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
 OTHER=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
 THIRD=cccccccc-cccc-4ccc-8ccc-cccccccccccc
 ACCOUNT=dddddddd-dddd-4ddd-8ddd-dddddddddddd
+LOGIN=eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee
 api_n=0
 api_reset() { api_n=$((api_n + 1)); FAKE_API="$TMP/api.$api_n"; mkdir -p "$FAKE_API"; : > "$FAKE_API/requests.log"; }
 route() {  # METHOD PATH STATUS, body on stdin
@@ -404,9 +407,51 @@ J
 route POST /customers 201 <<J
 {"uuid":"$THIRD","name":"Fresh","enabled":true,"node_uuid":"$NODE"}
 J
-resolve ACCOUNT_EMAIL=ops@acme.test FAKE_REPLY=Fresh
+route GET /accounts 200 <<J
+[{"uuid":"$LOGIN","email":"owner@fresh.test"}]
+J
+route GET "/accounts/$LOGIN" 200 <<J
+{"uuid":"$LOGIN","email":"owner@fresh.test","customer_uuid":"$THIRD"}
+J
+resolve ACCOUNT_EMAIL=ops@acme.test FAKE_REPLY=Fresh \
+  VA_ACCOUNT_EMAIL=owner@fresh.test VA_ACCOUNT_PASSWORD='Fr"esh\1'
 check 'an empty customer list still creates one' \
   '[[ $CASE_STATUS == 0 ]] && [[ $CASE_OUT == *"SELECTED=$THIRD"* ]] && grep -Fq "POST /customers name=Fresh" "$FAKE_API/requests.log"'
+check 'the new customer carries its Account login' \
+  'grep -Fq "account_email=owner@fresh.test" "$FAKE_API/requests.log"'
+# shellcheck disable=SC2034  # read by the check expression below
+PW_LINE='data-urlencode = "account_password=Fr\"esh\\1"'   # curl config escaping of Fr"esh\1
+check 'the login password travels on curl stdin, escaped, never in argv' \
+  '! grep -Fq "account_password" "$FAKE_API/requests.log" && grep -Fq "$PW_LINE" "$FAKE_API/config.log"'
+check 'the new login is proven by signing in as it' \
+  'grep -Fq "GET /accounts search[email]=owner@fresh.test" "$FAKE_API/requests.log" && grep -Fq "GET /accounts/$LOGIN" "$FAKE_API/requests.log"'
+check 'the new login signs in with its own key, then the Account key is restored' \
+  '[[ $(grep -c "Authorization: Basic b3duZXJAZnJlc2gudGVzdDpGciJlc2hcMQ==" "$FAKE_API/config.log") == 2 ]]'
+
+# The mothership ignored the login (an older API): the customer exists but
+# nobody can sign in — that is a failed install, and the marker stays.
+api_reset
+route GET /customers 200 <<'J'
+[]
+J
+route POST /customers 201 <<J
+{"uuid":"$THIRD","name":"Fresh","enabled":true,"node_uuid":"$NODE"}
+J
+route GET /accounts 401 <<'J'
+{"id":"unauthorized"}
+J
+resolve ACCOUNT_EMAIL=ops@acme.test FAKE_REPLY=Fresh \
+  VA_ACCOUNT_EMAIL=owner@fresh.test VA_ACCOUNT_PASSWORD=Fresh-1
+check 'a new customer whose login cannot sign in fails the install' \
+  '[[ $CASE_STATUS != 0 ]] && [[ $CASE_OUT == *"cannot sign in (HTTP 401)"* ]] && [[ -f $FAKE_API/.customer-provisioning-incomplete ]]'
+
+api_reset
+route GET /customers 200 <<'J'
+[]
+J
+resolve ACCOUNT_EMAIL=ops@acme.test FAKE_REPLY=Fresh VA_ACCOUNT_EMAIL=not-an-address VA_ACCOUNT_PASSWORD=x
+check 'a login that is not an address is refused before the customer is created' \
+  '[[ $CASE_STATUS != 0 ]] && [[ $CASE_OUT == *"must be an address"* ]] && ! grep -q "^POST" "$FAKE_API/requests.log"'
 
 # ── the Account email survives; the password does not ────────────────────────
 printf '\n── set_account_authorization\n'

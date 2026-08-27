@@ -4,8 +4,9 @@
 # customer selector and START=0). Fails if a prompt is missing, misworded, or
 # never answered — which env-driven runs cannot catch.
 #
-#   ARCHIVE=<tar.gz> MOTHERSHIP=<https url> TOKEN=<basic key> INSTALL_DIR=... \
-#     expect tests/tty-install.exp /path/to/install.sh
+#   ARCHIVE=<tar.gz> MOTHERSHIP=<https url> TOKEN=<basic key> TTY_PASSWORD=... \
+#     INSTALL_DIR=... expect tests/tty-install.exp /path/to/install.sh
+# TTY_PASSWORD is typed at the new customer's login password prompt (hidden).
 set timeout 600
 log_user 1
 set installer [lindex $argv 0]
@@ -23,6 +24,8 @@ expect {
   -re {External IP \[[^\]]*\]\S*: }                    { send "\r"; exp_continue }
   -re {Mothership URL \[[^\]]*\]\S*: }                 { send "$mothership\r"; exp_continue }
   -re {Account token \(input hidden; empty = use email \+ password\)\S*: } { send "$token\r"; exp_continue }
+  -re {new customer's login email\S*: }                { send "tty-owner@installer-ci.test\r"; exp_continue }
+  -re {new customer's login password \(input hidden\)\S*: } { send "$env(TTY_PASSWORD)\r"; exp_continue }
   -re {Account email\S*: }                             { puts "\n!! fell through to email/password"; exit 3 }
   -re {Docker Hub user\S*: }                           { puts "\n!! asked for Docker Hub although an archive was chosen"; exit 3 }
   -re {VoIPAppz installation complete}              { exp_continue }
