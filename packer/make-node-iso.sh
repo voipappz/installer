@@ -104,8 +104,12 @@ command -v xorriso >/dev/null 2>&1 || die "xorriso is not installed — sudo apt
   exit 1
 }
 
-[ -d "$PAYLOAD/debs" ] && [ -s "$PAYLOAD/debs/Packages.gz" ] \
-  || die "no apt repository in $PAYLOAD/debs — run packer/scripts/stage-payload.sh debs"
+# if/else rather than `A && B || C`: the runners' shellcheck reads that as
+# SC2015 and fails the shell job, even though the container image used locally
+# passes it. Same reason as b65459c.
+if [ ! -d "$PAYLOAD/debs" ] || [ ! -s "$PAYLOAD/debs/Packages.gz" ]; then
+  die "no apt repository in $PAYLOAD/debs — run packer/scripts/stage-payload.sh debs"
+fi
 
 : "${OS_PACKAGES:=}"
 if [ -z "$OS_PACKAGES" ]; then
