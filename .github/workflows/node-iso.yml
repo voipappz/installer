@@ -219,19 +219,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.ISO_S3_REGION || 'il-central-1' }}
 
-      - name: Assume the publishing role (to mint)
-        if: ${{ vars.AWS_OIDC_ROLE_ARN != '' }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
-          role-session-name: node-iso-mint-${{ github.run_id }}
-          aws-region: ${{ vars.ISO_S3_REGION || 'il-central-1' }}
-
       - name: Mint the release version
         id: mint
         env:
           OVERRIDE: ${{ inputs.release_version }}
-          HAVE_ROLE: ${{ vars.AWS_OIDC_ROLE_ARN != '' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           if [ -n "$OVERRIDE" ]; then
@@ -241,41 +233,31 @@ jobs:
             esac
             version="$OVERRIDE"
             echo "release $version (explicit override — re-cut)"
-          elif [ "$HAVE_ROLE" != "true" ]; then
-            echo "!! nothing to mint from: AWS_OIDC_ROLE_ARN is unset, so the" >&2
-            echo "   bucket cannot be listed. Pass release_version explicitly." >&2
-            exit 1
           else
-            # Today's date, then the first serial the bucket does not already
-            # carry — the same shape and the same reasoning as va-crystal's
-            # scripts/release.sh, with S3 standing in for the registry.
+            # MINTED FROM THE RELEASES, NOT THE BUCKET. Only one ISO object
+            # exists at a time — voipappz-node-latest.iso, overwritten — so
+            # listing S3 for voipappz-node-<today>-* can only ever come back
+            # empty and every run would mint serial 1. The releases are what
+            # persist, one per disc ever cut, so they are the record of which
+            # serials are taken.
             #
-            # ONE list-objects call, not a head-object per candidate: listing
-            # needs only s3:ListBucket, which returns key NAMES, while
-            # head-object would need s3:GetObject on the disc itself — a much
-            # broader grant for a question about names.
+            # It also means minting needs no AWS at all: a build-only run
+            # (publish: false) can name itself without credentials it is not
+            # going to use, which is how this was found.
             #
-            # Nothing is written here and nothing is committed, so a run that
-            # dies after this point leaves the serial free for the next one. A
-            # serial is consumed only by an object actually landing in S3.
-            prefix="${S3_PREFIX%/}/"
-            case "$prefix" in /*) prefix="${prefix#/}" ;; esac
+            # Nothing is written here, so a run that dies after this point
+            # leaves the serial free. A serial is consumed only by a release.
             today="$(date -u +%Y.%m.%d)"
-            # Fatal if the listing fails: an unanswered bucket must not be read
-            # as an empty one, or the run mints a serial that already exists and
-            # overwrites a published disc.
-            taken="$(aws s3api list-objects-v2 \
-                       --bucket "$S3_BUCKET" \
-                       --prefix "${prefix}voipappz-node-${today}-" \
-                       --query 'Contents[].Key' --output text \
-                       --region "$S3_REGION" | tr '\t' '\n')" \
-              || { echo "!! could not list s3://$S3_BUCKET/$prefix" >&2; exit 1; }
+            # Fatal if the listing fails: an unanswered API must not be read as
+            # "no releases", or the run mints a serial that already exists.
+            taken="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 \
+                       --json tagName --jq '.[].tagName')" \
+              || { echo "!! could not list releases for $GITHUB_REPOSITORY" >&2; exit 1; }
             serial=1
-            while printf '%s\n' "$taken" \
-                  | grep -qx "${prefix}voipappz-node-${today}-${serial}.iso"; do
+            while printf '%s\n' "$taken" | grep -qx "iso-${today}-${serial}"; do
               serial=$((serial + 1))
               if [ "$serial" -ge 100 ]; then
-                echo "!! 100 releases today? check s3://$S3_BUCKET/$prefix" >&2
+                echo "!! 100 releases today? check the releases of $GITHUB_REPOSITORY" >&2
                 exit 1
               fi
             done
