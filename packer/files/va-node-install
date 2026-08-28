@@ -24,9 +24,15 @@
 # Every other setting is install.sh's own. Put them in an answer file and the
 # installer reads it before anything else:
 #
-#   sudo install -m 0600 /dev/null /opt/va-crystal/.env
+#   sudo install -m 0600 -o "$USER" /dev/null /opt/va-crystal/.env
 #   sudo nano /opt/va-crystal/.env      # VA_API_URL=…, VA_CUSTOMER_NAME=…, …
 #   va-node-install
+#
+# `-o "$USER"` is not decoration. install.sh runs as YOU and sudos for the
+# parts that need root, so a root-owned 0600 answer file is present but
+# unreadable to it: `[ -f ./.env ]` is true, `[ -r ./.env ]` is false, and the
+# run dies with "cannot read ./.env" before doing anything. Found by following
+# these instructions on a booted disc, 2026-08-28.
 #
 # Registration still needs to reach the mothership — the disc makes the IMAGE
 # offline, not the API. On a machine that cannot reach one, install the node
@@ -35,6 +41,16 @@ set -eu
 
 INSTALLER=/opt/va-crystal/install.sh
 ARCHIVE=/var/lib/va-crystal/node-image.tar.gz
+
+# A present-but-unreadable answer file is the one failure whose message does
+# not explain itself, so name the cause here instead of letting install.sh say
+# only "cannot read".
+if [ -f /opt/va-crystal/.env ] && [ ! -r /opt/va-crystal/.env ]; then
+  printf '!! /opt/va-crystal/.env exists but this user cannot read it.\n' >&2
+  printf '   install.sh runs as %s and sudos only where it must.\n' "$(id -un)" >&2
+  printf '   sudo chown %s /opt/va-crystal/.env\n' "$(id -un)" >&2
+  exit 1
+fi
 
 [ -f "$INSTALLER" ] || {
   printf '!! %s is missing — this machine was not built from a VA-Crystal node disc\n' "$INSTALLER" >&2
