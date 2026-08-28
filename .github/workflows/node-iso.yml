@@ -179,6 +179,12 @@ jobs:
 
     env:
       IMAGE_VERSION: ${{ inputs.image_version }}
+      # Mapped to env because the `secrets` context is NOT available in a step's
+      # `if:` — GitHub rejects the WHOLE workflow at dispatch time, which is how
+      # this was found. va-crystal's ci.yml carries the same note for the same
+      # reason. Only emptiness is tested here; the value itself goes to
+      # configure-aws-credentials, which may read secrets directly.
+      HAVE_AWS_KEY: ${{ env.HAVE_AWS_KEY == 'true' }}
       S3_BUCKET: ${{ vars.ISO_S3_BUCKET || 'voipappz-assets-il' }}
       S3_REGION: ${{ vars.ISO_S3_REGION || 'il-central-1' }}
       S3_PREFIX: ${{ inputs.s3_prefix != '' && inputs.s3_prefix || (vars.ISO_S3_PREFIX || 'iso/') }}
@@ -206,7 +212,7 @@ jobs:
       # step. Both are scoped to PutObject on one prefix, so the blast radius is
       # the same — the difference is how long a leak stays useful.
       - name: Credentials from a stored key
-        if: ${{ vars.AWS_OIDC_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID != '' }}
+        if: ${{ vars.AWS_OIDC_ROLE_ARN == '' && env.HAVE_AWS_KEY == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -382,7 +388,7 @@ jobs:
       # A SECOND, fresh session. The one taken to mint is an hour old by now and
       # the build in between can run for most of that.
       - name: Assume the publishing role (to upload)
-        if: ${{ inputs.publish && (vars.AWS_OIDC_ROLE_ARN != '' || secrets.AWS_ACCESS_KEY_ID != '') }}
+        if: ${{ inputs.publish && (vars.AWS_OIDC_ROLE_ARN != '' || env.HAVE_AWS_KEY == 'true') }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
@@ -390,7 +396,7 @@ jobs:
           aws-region: ${{ vars.ISO_S3_REGION || 'il-central-1' }}
 
       - name: Publish to S3
-        if: ${{ inputs.publish && (vars.AWS_OIDC_ROLE_ARN != '' || secrets.AWS_ACCESS_KEY_ID != '') }}
+        if: ${{ inputs.publish && (vars.AWS_OIDC_ROLE_ARN != '' || env.HAVE_AWS_KEY == 'true') }}
         run: |
           set -eu
           # Exactly one trailing slash, whatever the input looked like.
@@ -454,7 +460,7 @@ jobs:
       # the object is restricted, and a presigned URL is a bearer credential
       # that must never live in a public release.
       - name: Publish the release
-        if: ${{ inputs.publish && inputs.release && (vars.AWS_OIDC_ROLE_ARN != '' || secrets.AWS_ACCESS_KEY_ID != '') }}
+        if: ${{ inputs.publish && inputs.release && (vars.AWS_OIDC_ROLE_ARN != '' || env.HAVE_AWS_KEY == 'true') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -492,7 +498,7 @@ jobs:
           echo "release iso-$RELEASE_VERSION published" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Say why nothing was published
-        if: ${{ inputs.publish && vars.AWS_OIDC_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID == '' }}
+        if: ${{ inputs.publish && vars.AWS_OIDC_ROLE_ARN == '' && env.HAVE_AWS_KEY != 'true' }}
         run: |
           echo "!! No AWS credentials (AWS_OIDC_ROLE_ARN variable, or AWS_ACCESS_KEY_ID secret) — built, not uploaded." >&2
           echo "   Set the repository variable to the role described at the top of this workflow." >&2
