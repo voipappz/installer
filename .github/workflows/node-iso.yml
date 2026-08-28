@@ -184,7 +184,7 @@ jobs:
       # this was found. va-crystal's ci.yml carries the same note for the same
       # reason. Only emptiness is tested here; the value itself goes to
       # configure-aws-credentials, which may read secrets directly.
-      HAVE_AWS_KEY: ${{ env.HAVE_AWS_KEY == 'true' }}
+      HAVE_AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
       S3_BUCKET: ${{ vars.ISO_S3_BUCKET || 'voipappz-assets-il' }}
       S3_REGION: ${{ vars.ISO_S3_REGION || 'il-central-1' }}
       S3_PREFIX: ${{ inputs.s3_prefix != '' && inputs.s3_prefix || (vars.ISO_S3_PREFIX || 'iso/') }}
