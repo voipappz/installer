@@ -63,6 +63,83 @@ jobs:
             make -n "$t" >/dev/null 2>&1 || echo "note: help lists '$t'"
           done
 
+  # A NODE ON A CLEAN HOST, WITH NOTHING ELSE. The integration job below proves
+  # registration against a real mothership; this one proves the thing that job
+  # cannot isolate — that `docker run` gets the capabilities and ulimits a
+  # real-time SIP plane needs. They can only come from the runtime: nothing
+  # inside the image can raise its own rtprio or memlock, so if this script
+  # stops passing them, FreeSWITCH loses real-time scheduling silently and only
+  # under load. Nothing else in CI looks at the container's HostConfig.
+  #
+  # No mothership is checked out or booted. The node needs two things to reach
+  # health, and both are stood up here in three lines:
+  #   * a broker — fatal without one; the node exits(1) and s6 restarts it
+  #   * a mothership that ANSWERS — a 200 on /health is enough, and
+  #     install.sh permits plain HTTP on loopback (validate_api_url), which is
+  #     what makes a static file server a legitimate stand-in rather than a
+  #     hole poked in the rules.
+  container:
+    name: Node starts with real-time limits / Ubuntu ${{ matrix.ubuntu }}
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['22.04', '24.04']
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: A broker and a mothership that answers
+        run: |
+          set -eu
+          docker run -d --name ci-nats --network host nats:2-alpine >/dev/null
+          mkdir -p stub && : > stub/health
+          nohup python3 -m http.server 5000 --bind 127.0.0.1 --directory stub \
+            >/dev/null 2>&1 &
+          for _ in $(seq 1 20); do
+            curl -fsS -o /dev/null -m 2 http://127.0.0.1:5000/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null -m 2 http://127.0.0.1:5000/health
+
+      - name: Install a node, no registration
+        env:
+          VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          VA_REGISTER: '0'
+          VA_API_URL: http://127.0.0.1:5000
+          VA_NATS_URL: nats://127.0.0.1:4222
+        run: sh install.sh
+
+      - name: The container has the limits only the runtime can give it
+        run: |
+          set -eu
+          inspect() { docker inspect va-voip --format "$1"; }
+          echo "--- HostConfig ---"
+          docker inspect va-voip --format \
+            'caps={{.HostConfig.CapAdd}}{{"\n"}}ulimits={{json .HostConfig.Ulimits}}'
+          for cap in NET_ADMIN NET_RAW SYS_RESOURCE SYS_NICE IPC_LOCK; do
+            inspect '{{.HostConfig.CapAdd}}' | grep -q "$cap" \
+              || { echo "!! missing capability $cap" >&2; exit 1; }
+          done
+          for lim in rtprio nice memlock nofile; do
+            inspect '{{json .HostConfig.Ulimits}}' | grep -q "\"$lim\"" \
+              || { echo "!! missing ulimit $lim" >&2; exit 1; }
+          done
+          # And that they REACHED the process, not just the config: FreeSWITCH
+          # is what needs them, so ask inside the container.
+          echo "--- as the node sees them ---"
+          docker exec va-voip sh -c 'echo "rtprio=$(ulimit -r) memlock=$(ulimit -l) nofile=$(ulimit -n)"'
+          docker exec va-voip sh -c '[ "$(ulimit -r)" = 99 ]' \
+            || { echo "!! rtprio is not 99 inside the container" >&2; exit 1; }
+
+      - name: What the node says about itself
+        if: always()
+        run: |
+          docker exec va-voip voipappz health || true
+          docker ps -a --format '{{.Names}}\t{{.Status}}'
+
   integration:
     name: Clean install + real mothership / Ubuntu ${{ matrix.ubuntu }}
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
