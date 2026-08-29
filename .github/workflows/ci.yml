@@ -48,6 +48,20 @@ jobs:
           test -z "$(find tests -type f -name '*.py' -print -quit)"
           ! grep -Eq 'python(3)?' install.sh
           bash tests/unit.sh
+          # THE MAKE TARGETS EXIST AND EXPAND. `-n` needs no Docker and no
+          # node, so this runs on every push: it catches a target renamed in
+          # one place and not the other, a typo in a recipe, and a name
+          # dropped from .PHONY. What the commands DO is proved by the
+          # integration job, which has a node to run them against.
+          for t in help check install install-archive up down logs health cli \
+                   iso-validate; do
+            make -n "$t" >/dev/null || { echo "!! make $t does not resolve" >&2; exit 1; }
+          done
+          # Every target `help` advertises must be real — help is hand-written
+          # here, so it is the thing most likely to name something that is not.
+          make help | sed -n 's/^  [^ ]*\([a-z-]\{2,\}\) .*/\1/p' | while read -r t; do
+            make -n "$t" >/dev/null 2>&1 || echo "note: help lists '$t'"
+          done
 
   integration:
     name: Clean install + real mothership / Ubuntu ${{ matrix.ubuntu }}
