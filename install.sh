@@ -1246,6 +1246,23 @@ if [ "$START" = "1" ]; then
     set -- "$@" -v "$INSTALL_DIR/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
       -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem
   fi
+  # SHOW THE COMMAND. An operator who cannot see how their container was made
+  # cannot reproduce it, cannot tell whether it got the real-time limits, and
+  # has to read this script to find out. The three secrets are masked — their
+  # NAMES matter (they are what the image cannot derive), their values never
+  # appear anywhere, including here.
+  printf '  $ '
+  for _a in "$@" "$VA_VOIP_IMAGE"; do
+    case "$_a" in
+      docker_cmd) printf 'docker ' ;;
+      FREESWITCH_PASSWORD=*|VA_FREESWITCH_PASSWORD=*|LICENSE_JWT_SECRET=*|LICENSE_ENCRYPTION_KEY=*)
+        printf '%s=<generated> ' "${_a%%=*}" ;;
+      *) printf '%s ' "$_a" ;;
+    esac
+  done
+  printf '\n'
+  _a=""
+
   "$@" "$VA_VOIP_IMAGE" >/dev/null || die "could not start the node container"
   FS_PASSWORD=""; LIC_JWT=""; LIC_ENC=""
   say "started va-voip from $VA_VOIP_IMAGE"

@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help check install install-archive test shellcheck iso iso-validate \
-	up down logs health cli
+	up down start stop logs health cli
 
 # Every shell script in the ISO pipeline. POSIX, like install.sh, and held to
 # the same gate — one of them (va-node-install) runs on an offline node where
@@ -81,6 +81,11 @@ up: ## Start the installed node (it is already restart-unless-stopped)
 
 down: ## Stop it, keeping its identity and its kamailio volume
 	docker stop $(NODE)
+
+# Docker's own verbs, because that is what fingers type. `up`/`down` match
+# ../va-crystal, so both names exist rather than one being right.
+start: up
+stop: down
 
 logs: ## Follow it (kamailio + FreeSWITCH + node, interleaved)
 	docker logs -f --tail 100 $(NODE)
