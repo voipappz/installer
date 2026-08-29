@@ -1219,11 +1219,22 @@ if [ "$START" = "1" ]; then
   # wide port range; a bridge would rewrite neither. The capabilities are what
   # FreeSWITCH needs to set thread priorities and lock memory, and kamailio to
   # manage its own sockets.
+  #
+  # THE ULIMITS CAN ONLY COME FROM HERE. Nothing inside the image can raise its
+  # own rtprio or memlock, so a node installed without them runs FreeSWITCH with
+  # no real-time scheduling and no locked memory — fine while idle, jitter under
+  # load, and nothing names the cause. This set is va-crystal's
+  # scripts/run-node.sh, which calls itself "the one way a node runs" and is
+  # what its CI proof boots; until 2026-08-29 the thing that installs real nodes
+  # quietly used a smaller one. KEEP THE TWO IN STEP.
   set -- docker_cmd run -d --name va-voip \
     --network host \
     --restart unless-stopped \
-    --cap-add NET_ADMIN --cap-add SYS_NICE --cap-add IPC_LOCK \
+    --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_RESOURCE \
+    --cap-add SYS_NICE --cap-add IPC_LOCK \
     --security-opt seccomp=unconfined \
+    --ulimit rtprio=99 --ulimit nice=-19 \
+    --ulimit memlock=-1:-1 --ulimit nofile=999999:999999 \
     -v "$INSTALL_DIR/config/va.yaml:/tmp/node.yaml:ro" \
     -v voipappz-kamailio:/var/lib/kamailio \
     -e VA_PATH=/tmp/node.yaml \

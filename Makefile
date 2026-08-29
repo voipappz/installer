@@ -3,7 +3,8 @@
 # check it, run it, and test it the way GitHub Actions does.
 
 .DEFAULT_GOAL := help
-.PHONY: help check install install-archive test shellcheck iso iso-validate
+.PHONY: help check install install-archive test shellcheck iso iso-validate \
+	node-up node-down node-logs node-health node-cli
 
 # Every shell script in the ISO pipeline. POSIX, like install.sh, and held to
 # the same gate — one of them (va-node-install) runs on an offline node where
@@ -28,9 +29,14 @@ help:
 	  'check'           'what CI runs first: syntax, shellcheck, clean diff, no python, unit tests' \
 	  'install'         'run install.sh from this checkout (asks sudo, image source, node, mothership, token)' \
 	  'install-archive' 'the same, loading the newest ../va-crystal/ci/build/*.tar.gz (ARCHIVE=… to pick one)' \
-	  'test'            'the integration test: real mothership booted from the node image — DISPOSABLE HOST ONLY' \
+	  'test'            'the integration test: a real mothership, downloaded as its public tarball — DISPOSABLE HOST ONLY' \
 	  'iso-validate'    'packer validate the offline installer ISO template (no packer needed)' \
-	  'iso'             'cut the offline installer ISO: make iso IMAGE_VERSION=… RELEASE_VERSION=… (packer + xorriso)'
+	  'iso'             'cut the offline installer ISO: make iso IMAGE_VERSION=… RELEASE_VERSION=… (packer + xorriso)' \
+	  'node-up'         'start the installed node' \
+	  'node-down'       'stop it, keeping its identity and kamailio volume' \
+	  'node-health'     'the 16-check verdict' \
+	  'node-logs'       'follow kamailio + FreeSWITCH + node' \
+	  'node-cli'        'the in-image CLI: make node-cli ARGS="sbc egress status"'
 	@printf '\n  $(D)docs: README.md (operators)  DEVELOPMENT.md (developers)  CLAUDE.md (engineering notes)$(R)\n\n'
 
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from
@@ -65,9 +71,33 @@ install-archive:
 	@test -n "$(ARCHIVE)" || { printf '$(B)no archive found$(R) — in ../va-crystal run: make s3-archive   (or pass ARCHIVE=/path/file.tar.gz)\n'; exit 1; }
 	VA_IMAGE_ARCHIVE="$(ARCHIVE)" sh install.sh
 
+# The installed node, once install.sh has run. Thin on purpose: each is the
+# docker command an operator would type, so nothing here can drift from what
+# the node actually does. Lifecycle is Docker's (`--restart unless-stopped`),
+# and every node operation is the CLI's, inside the image.
+NODE ?= va-voip
+node-up: ## Start the installed node (it is already restart-unless-stopped)
+	docker start $(NODE)
+
+node-down: ## Stop it, keeping its identity and its kamailio volume
+	docker stop $(NODE)
+
+node-logs: ## Follow it (kamailio + FreeSWITCH + node, interleaved)
+	docker logs -f --tail 100 $(NODE)
+
+node-health: ## The 16-check verdict
+	docker exec $(NODE) voipappz health
+
+node-cli: ## The in-image CLI: make node-cli ARGS="sbc egress status"
+	@docker inspect -f '{{.State.Running}}' $(NODE) >/dev/null 2>&1 \
+	  || { echo "$(NODE) is not running — start it with: make node-up"; exit 1; }
+	docker exec -it $(NODE) voipappz $(ARGS)
+
 # The "Clean install + real mothership" job, minus tests/clean-runner.sh
 # (which purges Docker and refuses to run outside GitHub Actions). The
-# mothership is booted from the /stack inside the node image — nothing is
+# mothership is DOWNLOADED as the public tarball of voipappz/mothership, the
+# way its own installer fetches it — it used to come from a /stack inside the
+# node image, which va-crystal dropped on 2026-08-26. Nothing is
 # cloned; pass MOTHERSHIP_DIR=… only to test against a local checkout. It
 # creates a system user and writes /opt/voipappz-ci — run it on a throwaway
 # VM, never on a workstation you care about.
