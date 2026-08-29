@@ -53,8 +53,8 @@ jobs:
           # one place and not the other, a typo in a recipe, and a name
           # dropped from .PHONY. What the commands DO is proved by the
           # integration job, which has a node to run them against.
-          for t in help check install install-archive up down logs health cli \
-                   iso-validate; do
+          for t in help check install install-archive install-no-register \
+                   up down start stop logs health cli iso-validate; do
             make -n "$t" >/dev/null || { echo "!! make $t does not resolve" >&2; exit 1; }
           done
           # Every target `help` advertises must be real — help is hand-written

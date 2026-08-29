@@ -3,7 +3,7 @@
 # check it, run it, and test it the way GitHub Actions does.
 
 .DEFAULT_GOAL := help
-.PHONY: help check install install-archive test shellcheck iso iso-validate \
+.PHONY: help check install install-archive install-no-register test shellcheck iso iso-validate \
 	up down start stop logs health cli
 
 # Every shell script in the ISO pipeline. POSIX, like install.sh, and held to
@@ -25,10 +25,11 @@ ARCHIVE ?= $(lastword $(sort $(wildcard $(VA_CRYSTAL_DIR)/ci/build/va-crystal-no
 
 help:
 	@printf '$(B)voipappz/installer$(R) — one script that installs a VA-Crystal voip node\n\n'
-	@printf '  $(C)%-16s$(R) %s\n' \
+	@printf '  $(C)%-19s$(R) %s\n' \
 	  'check'           'what CI runs first: syntax, shellcheck, clean diff, no python, unit tests' \
 	  'install'         'run install.sh from this checkout (asks sudo, image source, node, mothership, token)' \
 	  'install-archive' 'the same, loading the newest ../va-crystal/ci/build/*.tar.gz (ARCHIVE=… to pick one)' \
+	  'install-no-register' 'install and start the node without a mothership (VA_REGISTER=0) — register it later' \
 	  'test'            'the integration test: a real mothership, downloaded as its public tarball — DISPOSABLE HOST ONLY' \
 	  'iso-validate'    'packer validate the offline installer ISO template (no packer needed)' \
 	  'iso'             'cut the offline installer ISO: make iso IMAGE_VERSION=… RELEASE_VERSION=… (packer + xorriso)' \
@@ -70,6 +71,18 @@ install:
 install-archive:
 	@test -n "$(ARCHIVE)" || { printf '$(B)no archive found$(R) — in ../va-crystal run: make s3-archive   (or pass ARCHIVE=/path/file.tar.gz)\n'; exit 1; }
 	VA_IMAGE_ARCHIVE="$(ARCHIVE)" sh install.sh
+
+# Install and START the node, but do not touch a mothership: no Account
+# credential, no registration, no customer. What install.sh's step 5 does, and
+# only that, is skipped — the image, va.yaml, the secrets, the container and
+# the full 16-check health gate all still happen.
+#
+# For a machine that cannot reach a mothership yet (the offline disc says the
+# same: "the disc makes the IMAGE offline, not the API"), or when the Account
+# credential belongs to someone else. The node runs; the platform does not know
+# it exists, so phones can register and calls cannot route until it does.
+install-no-register:
+	VA_REGISTER=0 sh install.sh
 
 # The installed node, once install.sh has run. Thin on purpose: each is the
 # docker command an operator would type, so nothing here can drift from what
