@@ -129,10 +129,19 @@ jobs:
           done
           # And that they REACHED the process, not just the config: FreeSWITCH
           # is what needs them, so ask inside the container.
+          #
+          # /proc/self/limits, not `ulimit -r`: that flag is a bash extension
+          # and the image's /bin/sh is dash, where it prints nothing and the
+          # test passes an empty string around. The kernel's own view cannot be
+          # shell-dependent.
           echo "--- as the node sees them ---"
-          docker exec va-voip sh -c 'echo "rtprio=$(ulimit -r) memlock=$(ulimit -l) nofile=$(ulimit -n)"'
-          docker exec va-voip sh -c '[ "$(ulimit -r)" = 99 ]' \
-            || { echo "!! rtprio is not 99 inside the container" >&2; exit 1; }
+          docker exec va-voip sh -c 'grep -E "^Max (realtime priority|locked memory|open files)" /proc/self/limits'
+          docker exec va-voip sh -c \
+            'grep -q "^Max realtime priority *99 *99" /proc/self/limits' \
+            || { echo "!! rtprio did not reach the process" >&2; exit 1; }
+          docker exec va-voip sh -c \
+            'grep -q "^Max locked memory *unlimited *unlimited" /proc/self/limits' \
+            || { echo "!! memlock did not reach the process" >&2; exit 1; }
 
       - name: What the node says about itself
         if: always()
