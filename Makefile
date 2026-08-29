@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help check install install-archive test shellcheck iso iso-validate \
-	node-up node-down node-logs node-health node-cli
+	up down logs health cli
 
 # Every shell script in the ISO pipeline. POSIX, like install.sh, and held to
 # the same gate — one of them (va-node-install) runs on an offline node where
@@ -32,11 +32,11 @@ help:
 	  'test'            'the integration test: a real mothership, downloaded as its public tarball — DISPOSABLE HOST ONLY' \
 	  'iso-validate'    'packer validate the offline installer ISO template (no packer needed)' \
 	  'iso'             'cut the offline installer ISO: make iso IMAGE_VERSION=… RELEASE_VERSION=… (packer + xorriso)' \
-	  'node-up'         'start the installed node' \
-	  'node-down'       'stop it, keeping its identity and kamailio volume' \
-	  'node-health'     'the 16-check verdict' \
-	  'node-logs'       'follow kamailio + FreeSWITCH + node' \
-	  'node-cli'        'the in-image CLI: make node-cli ARGS="sbc egress status"'
+	  'up'         'start the installed node' \
+	  'down'       'stop it, keeping its identity and kamailio volume' \
+	  'health'     'the 16-check verdict' \
+	  'logs'       'follow kamailio + FreeSWITCH + node' \
+	  'cli'        'the in-image CLI: make cli ARGS="sbc egress status"'
 	@printf '\n  $(D)docs: README.md (operators)  DEVELOPMENT.md (developers)  CLAUDE.md (engineering notes)$(R)\n\n'
 
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from
@@ -76,21 +76,21 @@ install-archive:
 # the node actually does. Lifecycle is Docker's (`--restart unless-stopped`),
 # and every node operation is the CLI's, inside the image.
 NODE ?= va-voip
-node-up: ## Start the installed node (it is already restart-unless-stopped)
+up: ## Start the installed node (it is already restart-unless-stopped)
 	docker start $(NODE)
 
-node-down: ## Stop it, keeping its identity and its kamailio volume
+down: ## Stop it, keeping its identity and its kamailio volume
 	docker stop $(NODE)
 
-node-logs: ## Follow it (kamailio + FreeSWITCH + node, interleaved)
+logs: ## Follow it (kamailio + FreeSWITCH + node, interleaved)
 	docker logs -f --tail 100 $(NODE)
 
-node-health: ## The 16-check verdict
+health: ## The 16-check verdict
 	docker exec $(NODE) voipappz health
 
-node-cli: ## The in-image CLI: make node-cli ARGS="sbc egress status"
+cli: ## The in-image CLI: make cli ARGS="sbc egress status"
 	@docker inspect -f '{{.State.Running}}' $(NODE) >/dev/null 2>&1 \
-	  || { echo "$(NODE) is not running — start it with: make node-up"; exit 1; }
+	  || { echo "$(NODE) is not running — start it with: make up"; exit 1; }
 	docker exec -it $(NODE) voipappz $(ARGS)
 
 # The "Clean install + real mothership" job, minus tests/clean-runner.sh
