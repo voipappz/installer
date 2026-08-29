@@ -173,6 +173,16 @@ docker_with_authorization() {
 
 register_node_cli() {
   if [ -n "$CA_BUNDLE" ]; then _ssl_cert=/work/config/ca-bundle.pem; else _ssl_cert=""; fi
+  # The registration command, for the same reason as the api_request trace and
+  # the `docker run` above: a failed registration should be reproducible from
+  # what the installer printed. `-e VA_API_AUTHORIZATION` with no value is the
+  # real flag — the value crosses the sudo boundary on stdin, never argv (see
+  # docker_with_authorization), so there is nothing here to mask.
+  printf '  $ docker run --rm --network host%s --entrypoint voipappz \\\n' \
+    "$([ "$FS_AS_ROOT" = "1" ] || printf ' --user %s:%s' "$(id -u)" "$(id -g)")" >&2
+  printf '      -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \\\n' >&2
+  printf '      -e VA_API_AUTHORIZATION -e SSL_CERT_FILE=%s \\\n' "$_ssl_cert" >&2
+  printf '      -v %s:/work -w /work %s node register\n' "$WORK_DIR" "$VA_VOIP_IMAGE" >&2
   if [ "$FS_AS_ROOT" = "1" ]; then
     docker_with_authorization run --rm --network host \
       --entrypoint voipappz \
@@ -657,6 +667,19 @@ api_request() {
   _path=$2
   shift 2
   : > "$API_BODY_FILE"
+  # SHOW THE CALL. An operator watching a registration fail should be able to
+  # see which request failed without reading this script or turning on a proxy.
+  # argv is safe to print BY CONSTRUCTION: the Authorization header and any
+  # secret form field go in on stdin (--config -), which is why they are not
+  # here to leak. The header is named, not shown, so the line is honest about
+  # what was sent.
+  printf '  $ curl -H "Authorization: <account>" --request %s' "$_method" >&2
+  for _arg in "$@"; do printf ' %s' "$_arg" >&2; done
+  if [ -n "$API_STDIN_FORM" ]; then
+    printf ' --data-urlencode "%s=<secret>"' "${API_STDIN_FORM%%=*}" >&2
+  fi
+  printf ' --url %s%s\n' "$API_ROOT" "$_path" >&2
+  _arg=""
   if ! API_STATUS="$(
     {
       printf 'header = "Authorization: %s"\nheader = "Accept: application/json"\n' "$VA_API_AUTHORIZATION"
