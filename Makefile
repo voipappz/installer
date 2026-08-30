@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help check install install-archive install-no-register test shellcheck iso iso-validate \
-	up down start stop logs health cli
+	up down start stop logs health cli node-preflight
 
 # Every shell script in the ISO pipeline. POSIX, like install.sh, and held to
 # the same gate — one of them (va-node-install) runs on an offline node where
@@ -103,7 +103,21 @@ NODE ?= va-voip
 # is shell, not make, so the recipe echoes the NAMES and the values never reach
 # the terminal.
 INSTALL_DIR ?= /opt/voipappz
-up: ## Recreate and start the node, showing the whole command (alias: start)
+
+# Checked BEFORE anything destructive. `up` removes the container to recreate
+# it; discovering only afterwards that the .env is unreadable leaves the host
+# with no node at all. That happened once — it does not happen again.
+#
+# install.sh writes .env mode 0600 owned by root, on purpose (it holds the
+# FreeSWITCH and licence secrets), so `make up` on a real /opt/voipappz install
+# needs sudo. Say so instead of failing halfway.
+node-preflight:
+	@test -r $(INSTALL_DIR)/.env || { \
+	  printf 'cannot read $(B)$(INSTALL_DIR)/.env$(R) — install.sh writes it 0600, owned by root.\n  run: $(B)sudo make up INSTALL_DIR=$(INSTALL_DIR)$(R)\n'; exit 1; }
+	@test -r $(INSTALL_DIR)/config/va.yaml || { \
+	  printf 'no $(B)$(INSTALL_DIR)/config/va.yaml$(R) — nothing is installed there. run: $(B)make install$(R)\n'; exit 1; }
+
+up: node-preflight ## Recreate and start the node, showing the whole command (alias: start)
 	-docker rm -f $(NODE)
 	set -a && . $(INSTALL_DIR)/.env && set +a && docker run -d --name $(NODE) \
 	  --network host --restart unless-stopped \

@@ -55,7 +55,8 @@ jobs:
           # integration job, which has a node to run them against.
           for t in help check install install-archive install-no-register \
                    up down start stop logs health cli iso-validate; do
-            make -n "$t" >/dev/null || { echo "!! make $t does not resolve" >&2; exit 1; }
+            echo "=== make $t ==="
+            make -n "$t" || { echo "!! make $t does not resolve" >&2; exit 1; }
           done
           # Every target `help` advertises must be real — help is hand-written
           # here, so it is the thing most likely to name something that is not.
@@ -142,6 +143,33 @@ jobs:
           docker exec va-voip sh -c \
             'grep -q "^Max locked memory *unlimited *unlimited" /proc/self/limits' \
             || { echo "!! memlock did not reach the process" >&2; exit 1; }
+
+      # THE MAKE TARGETS, RUN FOR REAL. The shell job proves they expand;
+      # only here is there a node to point them at. `up` recreates the
+      # container, so its guard matters more than the recipe: install.sh
+      # writes .env 0600 root-owned, and an unprivileged `make up` must refuse
+      # BEFORE `docker rm -f` — a guard that fires afterwards leaves the host
+      # with no node, which is exactly the bug this step exists to catch.
+      - name: make up / down / health drive the installed node
+        run: |
+          set -eu
+          test ! -r /opt/voipappz/.env \
+            || { echo "!! .env is readable unprivileged; the guard proves nothing" >&2; exit 1; }
+          echo "=== make up, unprivileged: must refuse ==="
+          if make up; then echo "!! make up should have refused" >&2; exit 1; fi
+          docker inspect -f '{{.State.Running}}' va-voip | grep -qx true \
+            || { echo "!! the refusal destroyed the container" >&2; exit 1; }
+
+          echo "=== sudo make down ==="
+          sudo make down
+          echo "=== sudo make up ==="
+          sudo make up
+          for _ in $(seq 1 90); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' va-voip)" = healthy ] && break
+            sleep 2
+          done
+          echo "=== sudo make health ==="
+          sudo make health
 
       - name: What the node says about itself
         if: always()
