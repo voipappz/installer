@@ -226,8 +226,16 @@ assert_jq() {
   json=$1
   filter=$2
   label=$3
-  printf '%s' "$json" | jq -e "$filter" >/dev/null || die "$label"
-  pass "$label"
+  if printf '%s' "$json" | jq -e "$filter" >/dev/null 2>&1; then
+    pass "$label"
+    return
+  fi
+  # THE PAYLOAD, ALWAYS. A bare "not ok - <label>" costs a whole CI cycle to
+  # turn into a fact; these are node and customer records, which carry no
+  # credential (assert_no_secret_in_log guards the installer logs separately).
+  printf '\n--- the filter that failed:  %s\n--- on this payload:\n%s\n' \
+    "$filter" "${json:-<empty body>}" >&2
+  die "$label"
 }
 
 assert_full_mothership() {
@@ -539,7 +547,14 @@ pass 'explicit mothership URL overrides the existing YAML'
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" ".node_uuid == \"$NODE_UUID\"" \
   'existing customer is linked to this node'
-node=$(api GET "/nodes/$NODE_UUID")
+# A 404 here is the interesting case, and `set -e` would kill the run with no
+# explanation at all — so catch it and print what the mothership DOES hold.
+if ! node=$(api GET "/nodes/$NODE_UUID" 2>&1); then
+  printf '\n--- GET /nodes/%s failed with:\n%s\n--- the whole node index:\n%s\n--- the installer run that should have registered it:\n' \
+    "$NODE_UUID" "$node" "$(api GET /nodes 2>&1 || true)" >&2
+  show_safe_log "$LAST_LOG"
+  die 'existing CLI registered only the YAML node'
+fi
 assert_jq "$node" ".uuid == \"$NODE_UUID\" and .type == \"switch\"" \
   'existing CLI registered only the YAML node'
 
