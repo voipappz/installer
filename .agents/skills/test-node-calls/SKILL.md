@@ -156,6 +156,39 @@ against the node's 5060, 7099 waits as `uas-answer.xml`.
 | inbound: call connects, hangup gets `404 Not here` | peer's BYE carried no Route (`sipp -sn uac` ignores Record-Route) | use `call.xml`, which honours `[routes]` |
 | every dialplan request hangs, `:4000` stops answering, `health` says NOT ANSWERING | node logged `NATS disconnected` and never recovered | `docker restart va-voip` (node bug: a dead broker should fail fast) |
 
+### Two PBXs on one host, each the other's provider (proven 2026-08-30)
+
+Nothing new is needed: each PBX is a plain `type=sip` provider of the other,
+the caller's tariff prefix picks the trunk (LCR), and the call ENTERS the peer
+as a public call that its DID maps to an extension. No dial prefix is cut, no
+kamailio dialplan module, no change on the nodes beyond `gateways:`.
+
+| | PBX A (`va-voip`, `.202`) | PBX B (`va-voip-b`, `.203`) |
+|---|---|---|
+| provider on the cloud | `trunk-to-lab-b` → `.203:5060` | `trunk-to-a` → `.202:5060` |
+| own number (rate prefix `05`) | `0507000001` | `0508000001` |
+| DID → extension | `0507000001` → 7099 (provider `trunk-to-lab-b`) | `0508000001` → 8001 (provider `trunk-to-a`) |
+| `va.yaml gateways:` | `'.203/32\|<trunk-to-lab-b uuid>'` | `'.202/32\|<trunk-to-a uuid>'` |
+
+Second node on the same host: give it its own IP (`ip addr add <ip>/32` — a
+`/21` makes the kernel source LAN traffic from it and NAT breaks), and override
+what the image hard-codes: kamailio cfg (`listen` on its IP, RPC `8092`, HEP
+`9062`), `xml_curl.conf.xml` gateway-url → its node port (`4002`; the default
+`localhost:4000` makes its FreeSWITCH load the OTHER node's profiles), node/FS
+ports in `env:`. Its CLI then needs
+`-e VA_NODE_PORT=4002 -e VA_FREESWITCH_PORT=8023 -e VA_KAMAILIO_RPC_URL=http://127.0.0.1:8092/RPC -e VA_KAMAILIO_TCP_PORT=8092`.
+
+Call: 8001 registers on B and waits as `uas-answer.xml`; 7100 registers on A
+and dials `0508000001` with `call.xml`. Pass = caller `Successful call | 1`,
+A logs `200 POST /sbc/outgoing`, B logs `Dialplan request - dst:0508000001`
+then `destination … 8001` and `answer`. Then the mirror (8002 → `0507000001`
+→ 7099).
+
+Known: the callee sees `caller_id_number: 0` — the originating rtjson has an
+empty `effective_caller_id_number` (mothership side, where the rtjson is
+built). A `Mothership timed out on crystal.request.dialplan.resolve` (2 s) is
+the cloud path, not the trunk: retry.
+
 ## Do not
 
 - Do not create extensions, subscribers or domains on the node by hand as the
