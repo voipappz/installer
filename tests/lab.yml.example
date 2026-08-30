@@ -1,0 +1,30 @@
+# A two-PBX lab on one host: each node is the other's SIP trunk provider.
+# tests/two-pbx.sh reads this file. Flat by design — one fact per line.
+#
+# Prereqs: both nodes installed (install.sh) and running, and both host IPs
+# present (a second node needs its own /32). Each node names its customer's
+# own Account — the login install.sh created the customer with — as a
+# mode-0600 curl config file holding:  user = "email:password"
+# The credential reaches curl as a file, never argv. SIP passwords come from
+# VA_LAB_SIP_PASSWORD_<ext>, defaulting to SipTest<ext> (lab peers on a
+# private host, not production secrets).
+mothership: https://cloud.voipappz.io
+nodes:
+  - name: a
+    container: va-voip
+    yaml: ~/va-cloudnode/config/va.yaml
+    account: ~/va-cloudnode/lab-account.curl
+    ip: 10.26.226.202
+    customer: installer-test-2026-08-30
+    number: "0507000001"
+    extensions: 7099 7100
+    did_extension: 7099
+  - name: b
+    container: va-voip-b
+    yaml: ~/va-lab-b/config/va.yaml
+    account: ~/va-lab-b/lab-account.curl
+    ip: 10.26.226.203
+    customer: installer-lab-b
+    number: "0508000001"
+    extensions: 8001 8002
+    did_extension: 8001

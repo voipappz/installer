@@ -1,6 +1,9 @@
 CLAUDE.md
 .env
 
+# The real lab file names local paths and customers; the example is the doc.
+tests/lab.yml
+
 # ISO build scratch. cache/ holds the 3GB Ubuntu ISO; build/ holds the payload
 # (a saved container image and an apt repository) and the finished disc.
 packer/cache/

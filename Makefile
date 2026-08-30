@@ -46,7 +46,7 @@ check:
 	test -x install.sh
 	sh -n install.sh
 	dash -n install.sh
-	bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh
+	bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
 	@for f in $(ISO_SCRIPTS); do test -x "$$f" && sh -n "$$f" && dash -n "$$f" || exit 1; done
 	$(MAKE) --no-print-directory shellcheck
 	git diff --check
@@ -55,7 +55,7 @@ check:
 	bash tests/unit.sh
 	@printf '$(B)check green$(R)\n'
 
-SHELLCHECK_FILES = install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh $(ISO_SCRIPTS)
+SHELLCHECK_FILES = install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh $(ISO_SCRIPTS)
 
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \

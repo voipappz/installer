@@ -28,8 +28,8 @@ jobs:
           test -x install.sh
           sh -n install.sh
           dash -n install.sh
-          bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh
-          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh
+          bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
           # The ISO pipeline. POSIX like install.sh, and held to the same gate:
           # these scripts run on a workstation, on a GitHub runner, and (as
           # va-node-install) on an offline node where nothing can be fixed.
