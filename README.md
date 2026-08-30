@@ -70,10 +70,44 @@ docker stop va-voip                       # stop it (config and data stay)
 docker start va-voip                      # start it again
 ```
 
-Kamailio, FreeSWITCH and the node agent run together in it, on the host network:
-SIP `5060` (Kamailio), `5070`/`5090` (FreeSWITCH phones/carriers),
-health `127.0.0.1:4000`, Kamailio RPC `127.0.0.1:8090`, FreeSWITCH ESL
-`127.0.0.1:8021`.
+### Ports
+
+Kamailio, FreeSWITCH and the node agent run together in the container **on the
+host network**, so these are the host's own ports. Open the public ones to your
+carriers and phones; the loopback ones need no firewall rule.
+
+| Port | | Used by | Reachable on |
+|---|---|---|---|
+| `5060` | UDP | Kamailio — carriers and phones | all interfaces |
+| `5070` | UDP+TCP | FreeSWITCH, phones | the node's address |
+| `5061` | TCP | FreeSWITCH, phones over **TLS** | the node's address |
+| `5066` | TCP | FreeSWITCH, WebRTC over WebSocket | the node's address |
+| `5090` | UDP+TCP | FreeSWITCH, carriers | the node's address |
+| `5081` | TCP | FreeSWITCH, carriers over **TLS** | the node's address |
+| `8443` | TCP | FreeSWITCH, WebRTC over secure WebSocket | the node's address |
+| `16384`–`32768` | UDP | **RTP — the audio itself** | the node's address |
+| `4000` | TCP | node health and API | all interfaces |
+| `9060` | UDP | SIP capture (HEP) collector | all interfaces |
+| `8021` | TCP | FreeSWITCH ESL | `127.0.0.1` only |
+| `8090` | TCP | Kamailio RPC | `127.0.0.1` only |
+
+Two that surprise people: **the RTP range carries every call**, so a firewall
+that passes SIP and blocks 16384–32768 gives calls that connect and have no
+audio; and `4000` binds every interface, not just loopback, so restrict it if
+the node sits on an untrusted network.
+
+**Putting the node on the same machine as other VoIP software?** The node claims
+that whole SIP set. Anything else already holding one of them wins the bind and
+the node loses that leg silently — a FreeSWITCH profile that cannot bind its TLS
+port does not start at all, so phones simply never register. Check before
+installing:
+
+```sh
+ss -lntup | grep -E ':(5060|5061|5066|5070|5081|5090)\b'   # anything listed is a clash
+```
+
+The VoIPAppz mothership already accounts for this and keeps its own SIP ingress
+on `5160`/`5161`, so a node and a mothership can share one machine.
 
 Two files describe the node, and this repository ships an example of each:
 
@@ -207,6 +241,8 @@ See [packer/README.md](packer/README.md) to cut or publish one.
 | Container will not start | `docker logs va-voip` — the boot preflight names what is wrong in the YAML |
 | Registration failed on TLS | pass the mothership's CA: `VA_CA_BUNDLE=/path/chain.pem` |
 | Calls do not route | `docker exec va-voip voipappz sbc egress sync`, then `voipappz health` |
+| Calls connect but there is **no audio** | the RTP range is blocked — open UDP `16384`–`32768` to the node |
+| Phones never register, health shows a FreeSWITCH profile down | something else on the machine holds one of the node's SIP ports — see [Ports](#ports); `ss -lntup \| grep -E ':(5060\|5061\|5066\|5070\|5081\|5090)'` names it |
 | Wrong mothership | rerun with `VA_API_URL=https://…` (it is persisted to `va.yaml`) |
 
 ## More
