@@ -122,12 +122,39 @@ docker logs --since 2m va-voip 2>&1 | grep -aiE 'Dialplan|refused|DIALING|REGIST
 | kamailio `sanity … request uri [sip:7099@$D]` | the CSV has a literal `$D` (quoting) | write the domain literally |
 | REGISTER 401 then nothing | kamailio egress gates on its `domain` table — a defect (that check is the mothership INGRESS's job) | `voipappz sbc domain add --domain <domain>` as a workaround |
 
-## 4. A call to a real number / from the PSTN
+## 4. A SIP trunk — to a carrier, or between two PBXs
 
-Needs a provider on the customer (`POST /api/providers`, `name` + `type` in
-`sip did sms gateway …`), an outbound gateway, and for inbound a DID pointed at
-the node's public 5060. Carrier credentials go in a 0600 file, not on argv or
-in chat.
+The trunk is defined in two places and nowhere else:
+
+- **mothership**: a provider on the customer, `POST /api/providers name=… type=sip
+  tariff_uuid=<the customer's Init tariff> profile[address]=<peer ip> profile[port]=5060
+  profile[transport]=udp` (type `sip` is the only one the call path reads).
+  Outbound needs a `POST /api/numbers number=… environment_uuid=…` matching a
+  rate prefix of that tariff (Init gives `0`/`05`/`972`); inbound needs
+  `POST /api/dids number=… type=dst bridge_type=extension bridge_uuid=<ext>
+  environment_uuid=… provider_uuid=<provider>` (`number` is globally unique).
+- **node**: `sip_interfaces[0].gateways: ['<peer ip>/32|<provider uuid>']` in
+  `config/va.yaml`, then `voipappz sbc egress sync` → kamailio `address` grp 2,
+  tag = provider uuid. Nothing pushes this automatically; the YAML is the source.
+
+Outbound needs NOTHING else on the node: FS bridges to `sofia/gateway/SBC`,
+kamailio asks the node `/sbc/outgoing`, the mothership picks the provider by
+LCR from its own DB and answers the destination. No dispatcher row, no FS
+gateway, no credentials on the node (IP trunks only; `register=true` gateways
+are not generated).
+
+Prove it with a fake peer on its OWN IP (a container on a bridge network,
+`va-crystal:local` has sipp): outbound = 7100 dials the number, the peer runs
+`sipp -sf /etc/sipp/uas-answer.xml -i <peer ip> -p 5060`; inbound = the peer runs
+`sipp -sf /etc/sipp/call.xml -inf in.csv` with csv `<peer ip>;carrier;x;<did>`
+against the node's 5060, 7099 waits as `uas-answer.xml`.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| outbound: peer gets INVITE/200/ACK then immediate BYE; caller gets 480 `NORMAL_CLEARING` | peer answered PCMU to a PCMA offer (`sipp -sn uas` does) — bridge codec mismatch | answer PCMA (`uas-answer.xml`) |
+| inbound: 503 within ~200 ms, node logs `refused (404): domain_not_found` | the app identifies the provider by the **From host**, not the source IP; a From host that is not the provider address finds nothing | csv domain = the provider's ip; properly, kamailio should name the admitting address row (`X-VA-Gateway`, branch `dev-kamailio-x-va-gateway`) |
+| inbound: call connects, hangup gets `404 Not here` | peer's BYE carried no Route (`sipp -sn uac` ignores Record-Route) | use `call.xml`, which honours `[routes]` |
+| every dialplan request hangs, `:4000` stops answering, `health` says NOT ANSWERING | node logged `NATS disconnected` and never recovered | `docker restart va-voip` (node bug: a dead broker should fail fast) |
 
 ## Do not
 
