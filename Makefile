@@ -33,7 +33,7 @@ help:
 	  'test'            'the integration test: a real mothership, downloaded as its public tarball — DISPOSABLE HOST ONLY' \
 	  'iso-validate'    'packer validate the offline installer ISO template (no packer needed)' \
 	  'iso'             'cut the offline installer ISO: make iso IMAGE_VERSION=… RELEASE_VERSION=… (packer + xorriso)' \
-	  'up'         'docker start $(NODE)                       (alias: start)' \
+	  'up'         'recreate the node with the full docker run  (alias: start)' \
 	  'down'       'docker stop $(NODE)                        (alias: stop)' \
 	  'health'     'docker exec $(NODE) voipappz health        — the 16-check verdict' \
 	  'logs'       'docker logs -f --tail 100 $(NODE)' \
@@ -89,8 +89,37 @@ install-no-register:
 # the node actually does. Lifecycle is Docker's (`--restart unless-stopped`),
 # and every node operation is the CLI's, inside the image.
 NODE ?= va-voip
-up: ## Start the installed node (alias: start)
-	docker start $(NODE)
+# THE WHOLE COMMAND, because a wrapper that hides how a node is started is a
+# wrapper you have to trust. This recreates the container rather than
+# restarting it, so what you read is what ran.
+#
+# It DUPLICATES install.sh's docker run, which is a real cost: two copies drift,
+# and the divergence between this repo's run and ../va-crystal's is exactly the
+# bug that left every installed node without real-time limits. KEEP THIS IN
+# STEP WITH install.sh's step 6 — the CI job "Node starts with real-time
+# limits" checks the installer's copy, not this one.
+#
+# The three secrets are read from the installation's .env at run time. `$$VAR`
+# is shell, not make, so the recipe echoes the NAMES and the values never reach
+# the terminal.
+INSTALL_DIR ?= /opt/voipappz
+up: ## Recreate and start the node, showing the whole command (alias: start)
+	-docker rm -f $(NODE)
+	set -a && . $(INSTALL_DIR)/.env && set +a && docker run -d --name $(NODE) \
+	  --network host --restart unless-stopped \
+	  --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_RESOURCE \
+	  --cap-add SYS_NICE --cap-add IPC_LOCK \
+	  --security-opt seccomp=unconfined \
+	  --ulimit rtprio=99 --ulimit nice=-19 \
+	  --ulimit memlock=-1:-1 --ulimit nofile=999999:999999 \
+	  -v $(INSTALL_DIR)/config/va.yaml:/tmp/node.yaml:ro \
+	  -v voipappz-kamailio:/var/lib/kamailio \
+	  -e VA_PATH=/tmp/node.yaml \
+	  -e FREESWITCH_PASSWORD="$$VA_FREESWITCH_PASSWORD" \
+	  -e VA_FREESWITCH_PASSWORD="$$VA_FREESWITCH_PASSWORD" \
+	  -e LICENSE_JWT_SECRET="$$VA_LICENSE_JWT_SECRET" \
+	  -e LICENSE_ENCRYPTION_KEY="$$VA_LICENSE_ENCRYPTION_KEY" \
+	  "$$VA_VOIP_IMAGE"
 
 down: ## Stop it, keeping its identity and its kamailio volume
 	docker stop $(NODE)
