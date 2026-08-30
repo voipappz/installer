@@ -37,22 +37,9 @@ OTHER_NODE_UUID=33333333-3333-4333-8333-333333333333
 GATEWAY_UUID=44444444-4444-4444-8444-444444444444
 API_URL=http://127.0.0.1:5000
 
-# THE MOTHERSHIP'S INGRESS KAMAILIO MOVES OFF THE NODE'S SIP PLANE.
-#
-# The mothership stays up while the node runs (its health verdict includes
-# reaching it), and BOTH are host-networked, so they share one port space. The
-# mothership's ingress defaults to 5061/5062 — deliberately, to dodge the
-# node's kamailio on 5060 — but that reasoning only counted the two kamailios.
-# The node's FreeSWITCH takes 5061 for sofia_internal's TLS bind, so whichever
-# starts second loses it, and a sofia profile whose TLS bind fails does not
-# start AT ALL: sofia 1/2, no SIP reply on udp/<ip>:5070, no dispatcher target.
-# That is three red health checks and a failed install, from a port.
-#
-# The node's plane is 5060 5061 5066 5070 5081 5090. 5160/5161 is clear of it.
-# This is a real collision on any combined box, not a CI artifact — see
-# docker-compose.yaml's own "combined box" comment in voipappz/mothership.
-export VA_INGRESS_SIP_PORT=5160
-export VA_INGRESS_TLS_PORT=5161
+# The node's whole SIP plane, checked against the mothership fixture below.
+# Not a setting: nothing here overrides a port. See node_sip_plane_is_clear.
+NODE_SIP_PLANE='5060 5061 5066 5070 5081 5090'
 
 ACCOUNT_EMAIL=installer-ci@example.invalid
 ACCOUNT_PASSWORD='Vpz-Installer-CI-2026!'
@@ -409,6 +396,37 @@ if [[ -z $MOTHERSHIP_DIR ]]; then
   done
   pass 'mothership fixture downloaded (nothing cloned)'
 fi
+
+# THE MOTHERSHIP'S INGRESS MUST NOT SIT ON THE NODE'S SIP PLANE.
+#
+# The mothership stays up while the node runs (the node's health verdict
+# includes reaching it) and BOTH are host-networked, so they share one port
+# space. Its ingress kamailio used to default to 5061/5062 — chosen to dodge
+# the node's kamailio on 5060, which counted the two kamailios and nothing
+# else. 5061 is FreeSWITCH's stock internal TLS port, whichever bound second
+# lost it, and a sofia profile that cannot bind its TLS port does not start AT
+# ALL: sofia 1/2, no SIP reply on udp/<ip>:5070, no dispatcher target. Three
+# red health checks and a failed install, several steps from the cause.
+#
+# Fixed where it belongs, in voipappz/mothership (the ingress moved to
+# 5160/5161), so this OVERRIDES NOTHING — it reads the fixture's shipped
+# defaults and fails loudly if one lands back on the plane. A workaround here
+# would have hidden the regression on every real combined box.
+node_sip_plane_is_clear() {
+  local var port taken
+  for var in VA_INGRESS_SIP_PORT VA_INGRESS_TLS_PORT; do
+    port=$(sed -n "s/.*\${$var:-\([0-9]\+\)}.*/\1/p" \
+      "$MOTHERSHIP_DIR/docker-compose.yaml" | head -1)
+    [[ -n $port ]] || die "the mothership compose no longer defaults $var"
+    for taken in $NODE_SIP_PLANE; do
+      [[ $port == "$taken" ]] && die \
+        "mothership ingress $var=$port collides with the node's SIP plane ($NODE_SIP_PLANE)"
+    done
+    echo "    $var=$port"
+  done
+}
+node_sip_plane_is_clear
+pass 'mothership ingress is clear of the node SIP plane'
 render_example "$BOOT_CONFIG" "$NODE_UUID" "$NODE_SIP_UUID" Installer-CI-Node switch "$INTERNAL_IP"
 
 # The rest of the test talks about THIS node: a supplied YAML replaces the
@@ -986,10 +1004,35 @@ mount_source=$(docker inspect va-voip --format \
   '{{range .Mounts}}{{if eq .Destination "/tmp/node.yaml"}}{{.Source}}{{end}}{{end}}')
 [[ $(readlink -f "$mount_source") == $(readlink -f "$NODE_DIR/config/va.yaml") ]] \
   || die 'va.yaml is not mounted at /tmp/node.yaml in va-voip'
-[[ $(docker exec va-voip printenv VA_NODE_UUID) == "$NODE_UUID" ]] \
-  || die 'running node did not load the mounted YAML UUID'
+# THE NODE'S ENVIRONMENT IS S6'S, NOT THE CONTAINER'S.
+#
+# `docker exec` starts a process from the container's ORIGINAL environment —
+# the image's ENV plus what `docker run -e` passed, which here is VA_PATH and
+# the three secrets. The node's own variables do not live there: the va-env
+# step reads the mounted YAML at boot and writes one file per variable under
+# /run/s6/container_environment, which s6 puts into each SERVICE. So
+# `docker exec va-voip printenv VA_NODE_UUID` prints nothing on a perfectly
+# healthy node — verified against a running one — and asserting on it could
+# only ever fail. Read the files s6 actually wrote.
+node_env() { docker exec va-voip cat "/run/s6/container_environment/$1" 2>/dev/null; }
+
+[[ $(node_env VA_NODE_UUID) == "$NODE_UUID" ]] \
+  || die "running node did not load the mounted YAML UUID (s6 has '$(node_env VA_NODE_UUID)')"
+
+# THE CREDENTIAL BOUNDARY, IN ALL THREE PLACES IT COULD BE CROSSED.
+#
+# This used to be `docker exec ... env | grep`, which for the reason above
+# cannot see the node's environment at all: it passed whether or not the
+# authorization had leaked, so the repository's hardest rule was guarded by a
+# check that could not fail. Look where the value would actually land —
+# what docker was told to set, and what s6 gave the services.
+docker inspect va-voip --format '{{json .Config.Env}}' \
+  | grep -q 'VA_API_AUTHORIZATION' \
+  && die 'Account authorization was passed to docker run'
 docker exec va-voip sh -c '! env | grep -q "^VA_API_AUTHORIZATION="' \
   || die 'Account authorization reached the running node environment'
+docker exec va-voip sh -c '! test -e /run/s6/container_environment/VA_API_AUTHORIZATION' \
+  || die 'Account authorization reached the node service environment'
 pass 'VoIP profile is healthy and loads va.yaml from /tmp/node.yaml'
 
 printf '\nAll real installer checks passed.\n'
