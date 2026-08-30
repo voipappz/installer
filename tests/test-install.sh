@@ -36,6 +36,24 @@ APP_SIP_UUID=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
 OTHER_NODE_UUID=33333333-3333-4333-8333-333333333333
 GATEWAY_UUID=44444444-4444-4444-8444-444444444444
 API_URL=http://127.0.0.1:5000
+
+# THE MOTHERSHIP'S INGRESS KAMAILIO MOVES OFF THE NODE'S SIP PLANE.
+#
+# The mothership stays up while the node runs (its health verdict includes
+# reaching it), and BOTH are host-networked, so they share one port space. The
+# mothership's ingress defaults to 5061/5062 — deliberately, to dodge the
+# node's kamailio on 5060 — but that reasoning only counted the two kamailios.
+# The node's FreeSWITCH takes 5061 for sofia_internal's TLS bind, so whichever
+# starts second loses it, and a sofia profile whose TLS bind fails does not
+# start AT ALL: sofia 1/2, no SIP reply on udp/<ip>:5070, no dispatcher target.
+# That is three red health checks and a failed install, from a port.
+#
+# The node's plane is 5060 5061 5066 5070 5081 5090. 5160/5161 is clear of it.
+# This is a real collision on any combined box, not a CI artifact — see
+# docker-compose.yaml's own "combined box" comment in voipappz/mothership.
+export VA_INGRESS_SIP_PORT=5160
+export VA_INGRESS_TLS_PORT=5161
+
 ACCOUNT_EMAIL=installer-ci@example.invalid
 ACCOUNT_PASSWORD='Vpz-Installer-CI-2026!'
 BASIC_VALUE=""
@@ -65,7 +83,15 @@ diagnostics() {
   for container in va-postgres va-db-init va-app va-nats va-minio va-kong va-ingress va-voip; do
     docker inspect "$container" >/dev/null 2>&1 || continue
     echo "--- $container (last 80 lines)" >&2
-    docker logs --tail 80 "$container" >&2 || true
+    # mod_amqp retries three times a second and logs CRIT every time, with no
+    # broker to reach in this test. Unfiltered it is 100% of an 80-line tail
+    # and hides the failure that matters — it hid a sofia bind error for a
+    # whole CI cycle. Drop it from the node's tail only.
+    if [[ $container == va-voip ]]; then
+      docker logs --tail 400 "$container" 2>&1 | grep -avi 'amqp' | tail -80 >&2 || true
+    else
+      docker logs --tail 80 "$container" >&2 || true
+    fi
   done
   # The node's own view, when it is up: which check is red and why, what
   # FreeSWITCH bound, and what it complained about — the three things a
@@ -78,7 +104,12 @@ diagnostics() {
     echo '--- va-voip: listeners' >&2
     docker exec va-voip sh -c 'ss -lun; ss -lnt' >&2 2>&1 || true
     echo '--- va-voip: FreeSWITCH errors' >&2
-    docker logs va-voip 2>&1 | grep -E '\[(ERR|CRIT)\]' | grep -viE 'sqldb|vpx|codec' | tail -20 >&2 || true
+    docker logs va-voip 2>&1 | grep -E '\[(ERR|CRIT)\]' \
+      | grep -viE 'sqldb|vpx|codec|amqp' | tail -20 >&2 || true
+    # A profile that failed to bind says so once, early, and never again.
+    echo '--- va-voip: sofia profile starts' >&2
+    docker logs va-voip 2>&1 | grep -iE 'sofia|Address already in use|bind' \
+      | grep -viE 'amqp' | tail -30 >&2 || true
   fi
 }
 
