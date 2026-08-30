@@ -33,11 +33,11 @@ help:
 	  'test'            'the integration test: a real mothership, downloaded as its public tarball — DISPOSABLE HOST ONLY' \
 	  'iso-validate'    'packer validate the offline installer ISO template (no packer needed)' \
 	  'iso'             'cut the offline installer ISO: make iso IMAGE_VERSION=… RELEASE_VERSION=… (packer + xorriso)' \
-	  'up'         'start the installed node (alias: start)' \
-	  'down'       'stop it, keeping its identity and kamailio volume (alias: stop)' \
-	  'health'     'the 16-check verdict' \
-	  'logs'       'follow kamailio + FreeSWITCH + node' \
-	  'cli'        'the in-image CLI: make cli ARGS="sbc egress status"'
+	  'up'         'docker start $(NODE)                       (alias: start)' \
+	  'down'       'docker stop $(NODE)                        (alias: stop)' \
+	  'health'     'docker exec $(NODE) voipappz health        — the 16-check verdict' \
+	  'logs'       'docker logs -f --tail 100 $(NODE)' \
+	  'cli'        'docker exec -it $(NODE) voipappz $$ARGS     — make cli ARGS="sbc egress status"'
 	@printf '\n  $(D)docs: README.md (operators)  DEVELOPMENT.md (developers)  CLAUDE.md (engineering notes)$(R)\n\n'
 
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from
