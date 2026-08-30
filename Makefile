@@ -97,15 +97,8 @@ NODE ?= va-voip
 # when the node is actually usable.
 up: ## Start the installed node and wait for it (alias: start)
 	docker start $(NODE)
-	@printf 'waiting for %s' "$(NODE)"
-	@i=0; while [ $$i -lt 60 ]; do \
-	  case "$$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' $(NODE))" in \
-	    healthy) printf ' ok\n'; break ;; \
-	    none) printf '\n!! the image declares no HEALTHCHECK\n' >&2; exit 1 ;; \
-	    *) printf '.'; sleep 2; i=$$((i + 1)) ;; \
-	  esac; \
-	done; \
-	[ $$i -lt 60 ] || { printf '\n!! still not healthy after 120s\n' >&2; exit 1; }
+	timeout 120 sh -c 'until [ "$$(docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{end}}" $(NODE))" = healthy ]; do sleep 2; done' \
+	  || { printf '!! %s did not become healthy in 120s — docker logs %s\n' "$(NODE)" "$(NODE)" >&2; exit 1; }
 	docker exec $(NODE) voipappz health
 
 down: ## Stop it, keeping its identity and its kamailio volume
