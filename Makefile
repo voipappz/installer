@@ -33,7 +33,7 @@ help:
 	  'test'            'the integration test: a real mothership, downloaded as its public tarball — DISPOSABLE HOST ONLY' \
 	  'iso-validate'    'packer validate the offline installer ISO template (no packer needed)' \
 	  'iso'             'cut the offline installer ISO: make iso IMAGE_VERSION=… RELEASE_VERSION=… (packer + xorriso)' \
-	  'up'         'start the installed node, wait for it, print the verdict (alias: start)' \
+	  'up'         'start the installed node (alias: start)' \
 	  'down'       'stop it, keeping its identity and kamailio volume (alias: stop)' \
 	  'health'     'the 16-check verdict' \
 	  'logs'       'follow kamailio + FreeSWITCH + node' \
@@ -89,17 +89,8 @@ install-no-register:
 # the node actually does. Lifecycle is Docker's (`--restart unless-stopped`),
 # and every node operation is the CLI's, inside the image.
 NODE ?= va-voip
-# WAITS. `docker start` returns as soon as the container exists, but kamailio,
-# FreeSWITCH and the node take about half a minute to come up — so a health
-# check run straight after `up` reports failures that are only the boot not
-# having finished, which reads exactly like a broken node. Waiting for the
-# image's own HEALTHCHECK and then printing the verdict means `up` finishes
-# when the node is actually usable.
-up: ## Start the installed node and wait for it (alias: start)
+up: ## Start the installed node (alias: start)
 	docker start $(NODE)
-	timeout 120 sh -c 'until [ "$$(docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{end}}" $(NODE))" = healthy ]; do sleep 2; done' \
-	  || { printf '!! %s did not become healthy in 120s — docker logs %s\n' "$(NODE)" "$(NODE)" >&2; exit 1; }
-	docker exec $(NODE) voipappz health
 
 down: ## Stop it, keeping its identity and its kamailio volume
 	docker stop $(NODE)
