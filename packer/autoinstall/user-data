@@ -57,14 +57,45 @@ autoinstall:
   identity:
     hostname: va-crystal-node
     username: voipappz
-    # "voipappz" — a first-login credential only, expired on first boot
-    # (`chage -d 0` below) so the shipped media has no usable default password
-    # while staying administrable from the console.
+    # "voipappz" — a CONSOLE credential, expired on first boot (`chage -d 0`
+    # below) so the operator must set a real one before the machine is usable.
+    #
+    # It is written in this file, in a PUBLIC repository, so treat it as known
+    # to everyone. That is survivable at a keyboard and was not survivable over
+    # the network — see the ssh block below.
     password: "$6$packerbake$f0YbX2Ce8MZlxHNQLX8oH3XD4R4GdxY1DSvx3MD4NHMFXed.J4rAjxjSC2HJxMbHUocmVULssJ6Mxg6O/C.RX/"
 
   ssh:
-    install-server: true
-    allow-pw: true
+    # NO SSH SERVER ON SHIPPED MEDIA.
+    #
+    # This was `install-server: true` with `allow-pw: true`, and the comment
+    # above the password claimed expiry meant "no usable default password".
+    # It did not. `chage -d 0` forces a password CHANGE at first login; it does
+    # not prevent logging IN, and the password needed to get that far is the
+    # one printed above in a public repository.
+    #
+    # So every machine built from this disc answered port 22, from first boot
+    # until an operator reached the console, with a login anyone could read off
+    # GitHub — and that account carries NOPASSWD:ALL sudo. The attacker is the
+    # one who satisfies the change prompt, sets a password of their own, and
+    # owns the box; the real operator is then locked out by their own media.
+    # A node ships to a customer LAN, so this was not theoretical.
+    #
+    # The disc installs a machine that is administered AT THE CONSOLE, which is
+    # what the account was always for. Add sshd afterwards, with a key, when
+    # there is an operator to decide who may log in. NOT from
+    # /var/lib/va-crystal/debs — that repository is the closure of the packages
+    # this autoinstall installs, and openssh-server is deliberately not one of
+    # them. Offline, it comes off the disc's own Ubuntu pool:
+    #
+    #   sudo mount /dev/sr0 /mnt
+    #   sudo apt-get install -y /mnt/pool/main/o/openssh/openssh-server_*.deb
+    #
+    # or, on a machine that can reach the archive, plain
+    # `sudo apt-get install -y openssh-server`. Then authorise a key
+    # (`ssh-copy-id voipappz@<node>`) rather than re-enabling password login.
+    install-server: false
+    allow-pw: false
 
   # Empty on purpose. `packages:` fetches from the archive mirror, which does
   # not exist here — everything comes from the local repository in
