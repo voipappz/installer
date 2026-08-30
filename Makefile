@@ -29,7 +29,7 @@ help:
 	  'check'           'what CI runs first: syntax, shellcheck, clean diff, no python, unit tests' \
 	  'install'         'run install.sh from this checkout (asks sudo, image source, node, mothership, token)' \
 	  'install-archive' 'the same, loading the newest ../va-crystal/ci/build/*.tar.gz (ARCHIVE=… to pick one)' \
-	  'install-no-register' 'install and start the node without a mothership (VA_REGISTER=0) — register it later' \
+	  'install-no-register' 'sh install.sh --no-register — a node with no mothership; register it later' \
 	  'test'            'the integration test: a real mothership, downloaded as its public tarball — DISPOSABLE HOST ONLY' \
 	  'iso-validate'    'packer validate the offline installer ISO template (no packer needed)' \
 	  'iso'             'cut the offline installer ISO: make iso IMAGE_VERSION=… RELEASE_VERSION=… (packer + xorriso)' \
@@ -82,7 +82,7 @@ install-archive:
 # credential belongs to someone else. The node runs; the platform does not know
 # it exists, so phones can register and calls cannot route until it does.
 install-no-register:
-	VA_REGISTER=0 sh install.sh
+	sh install.sh --no-register
 
 # The installed node, once install.sh has run. Thin on purpose: each is the
 # docker command an operator would type, so nothing here can drift from what

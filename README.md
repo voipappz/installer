@@ -155,7 +155,11 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_CA_BUNDLE=/path/chain.pem` | Trust anchors for a mothership whose chain the node cannot verify. |
 | `INSTALL_DIR=/path` | Where the stack lands (default `/opt/voipappz`). |
 | `START=0` | Install and register, do not start the container. |
-| `VA_REGISTER=0` | Install and start, do not register. |
+
+Two of those are decisions, not settings, so they are also options:
+`sh install.sh --no-register` installs and starts a node without touching a
+mothership (register it later); `--no-start` is `START=0`. Through the
+one-liner: `curl -fsSL … | sh -s -- --no-register`.
 
 ## No internet at all: the installer ISO
 
@@ -171,7 +175,7 @@ $ va-node-install
 That is `VA_IMAGE_SOURCE=archive` with `VA_IMAGE_ARCHIVE` pointing at the disc's
 copy of the image; nothing about installation is reimplemented on the disc. The
 image is offline, **registration is not** — that step still has to reach your
-mothership, or run with `VA_REGISTER=0` and register later.
+mothership, or run `va-node-install --no-register` and register later.
 
 The disc is restricted media: it holds a private container image in the clear,
 so it is distributed by presigned link and must not be re-hosted.

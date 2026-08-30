@@ -36,7 +36,7 @@
 #
 # Registration still needs to reach the mothership — the disc makes the IMAGE
 # offline, not the API. On a machine that cannot reach one, install the node
-# alone with VA_REGISTER=0 and register it later.
+# alone with `va-node-install --no-register` and register it later.
 set -eu
 
 INSTALLER=/opt/va-crystal/install.sh
@@ -83,4 +83,4 @@ export VA_IMAGE_SOURCE VA_IMAGE_ARCHIVE
 # cd first: install.sh reads ./.env when one is beside the caller, and
 # /opt/va-crystal is where an operator would put it.
 cd /opt/va-crystal
-exec sh "$INSTALLER"
+exec sh "$INSTALLER" "$@"

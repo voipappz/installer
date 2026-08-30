@@ -75,7 +75,7 @@ va-node-install
 
 The image is offline; **registration is not**. `install.sh` still has to reach
 the mothership to register the node and resolve its customer. On a machine that
-genuinely cannot, install the node alone with `VA_REGISTER=0` and register it
+genuinely cannot, install the node alone with `va-node-install --no-register` and register it
 when there is a route.
 
 ## Cutting a disc

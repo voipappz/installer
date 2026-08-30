@@ -471,7 +471,7 @@ jobs:
             echo
             echo "Boot it, let it install and power off, remove the disc, boot again,"
             echo "log in and run \`va-node-install\`. The image is offline; registration"
-            echo "still needs the mothership (\`VA_REGISTER=0\` to defer it)."
+            echo "still needs the mothership (\`--no-register\` to defer it)."
           } > "$notes"
           gh release create "iso-$RELEASE_VERSION" \
             --title "Node ISO $RELEASE_VERSION" \

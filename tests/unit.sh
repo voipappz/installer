@@ -8,7 +8,7 @@
 # Functions are lifted out of install.sh by name (awk between `name() {` and
 # the closing `}`), so they are the real code, not a copy.
 # The checks are deliberately single-quoted expressions handed to eval.
-# shellcheck disable=SC2016
+# shellcheck disable=SC2016,SC2034  # values are read inside the single-quoted checks
 set -Eeuo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -37,6 +37,19 @@ refuses 'VA_IMAGE_SOURCE must be a known source'  'VA_IMAGE_SOURCE must be docke
 refuses 'VA_IMAGE_SOURCE=archive needs an archive' 'needs VA_IMAGE_ARCHIVE'              VA_IMAGE_SOURCE=archive
 refuses 'VA_IMAGE_ARCHIVE must be absolute or a URL' 'absolute path or an http(s) URL'   VA_IMAGE_ARCHIVE=rel.tar.gz
 refuses 'VA_IMAGE_ARCHIVE must be readable'       'not a readable file'                  VA_IMAGE_ARCHIVE=/nonexistent/x.tar.gz
+
+# ── the options: the two decisions an operator types rather than files away ──
+printf '\n── options\n'
+opt_out=$(sh "$INSTALLER" --nope </dev/null 2>&1 || true)
+check 'an unknown option is refused' '[[ $opt_out == *"unknown option: --nope"* ]]'
+opt_out=$(sh "$INSTALLER" --help </dev/null 2>&1 || true)
+check '--help names --no-register'   '[[ $opt_out == *"--no-register"* ]]'
+check '--help names --no-start'      '[[ $opt_out == *"--no-start"*    ]]'
+# The option wins over the answer file and the environment, because it is later.
+opt_out=$(env VA_REGISTER=1 START=1 INSTALL_DIR=relative/dir \
+  sh "$INSTALLER" --no-register --no-start </dev/null 2>&1 || true)
+check 'options parse before the settings are validated' \
+  '[[ $opt_out == *"INSTALL_DIR must be an absolute"* ]]'
 
 # ── the lifted functions ─────────────────────────────────────────────────────
 printf '\n── registry_of\n'

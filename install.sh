@@ -58,6 +58,29 @@ VA_ACCOUNT_EMAIL="${VA_ACCOUNT_EMAIL:-}"
 VA_ACCOUNT_PASSWORD="${VA_ACCOUNT_PASSWORD:-}"
 START="${START:-1}"
 
+# THE OPTIONS. Everything else is a setting and lives in the answer file;
+# these two are a DECISION an operator makes for one run, so they are typed on
+# the command line where they are visible in the shell history:
+#
+#   sh install.sh --no-register        (curl: sh -s -- --no-register)
+#
+# They win over the environment and the answer file, because they are later.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-register) VA_REGISTER=0 ;;
+    --no-start)    START=0 ;;
+    -h|--help)
+      printf 'usage: install.sh [--no-register] [--no-start]\n'
+      printf '  --no-register  install and start the node, do not register it with a mothership\n'
+      printf '  --no-start     install and register, do not start the container\n'
+      printf '  settings (mothership URL, image source, credentials) come from the\n'
+      printf '  environment or an .env answer file — see README.md\n'
+      exit 0 ;;
+    *) printf '!! unknown option: %s (try --help)\n' "$1" >&2; exit 1 ;;
+  esac
+  shift
+done
+
 case "$VA_REGISTER" in 0|1) ;; *) printf '!! VA_REGISTER must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$START" in 0|1) ;; *) printf '!! START must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$INSTALL_DIR" in
@@ -931,7 +954,7 @@ resolve_customer() {
 }
 
 # Validate an explicit mothership URL before anything is written to disk;
-# step 4 persists it to va.yaml and .env, and VA_REGISTER=0 never reaches
+# step 4 persists it to va.yaml and .env, and --no-register never reaches
 # the registration-time check.
 [ "$VA_API_URL_EXPLICIT" = "0" ] || validate_api_url
 
@@ -1209,7 +1232,7 @@ if [ "$VA_REGISTER" = "1" ]; then
   rm -f -- "$API_BODY_FILE"
   API_BODY_FILE=""
 else
-  say "skipped (VA_REGISTER=0)"
+  say "skipped (--no-register)"
 fi
 VA_API_AUTHORIZATION=""
 unset VA_API_AUTHORIZATION 2>/dev/null

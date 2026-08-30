@@ -108,10 +108,9 @@ jobs:
         env:
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          VA_REGISTER: '0'
           VA_API_URL: http://127.0.0.1:5000
           VA_NATS_URL: nats://127.0.0.1:4222
-        run: sh install.sh
+        run: sh install.sh --no-register
 
       - name: The container has the limits only the runtime can give it
         run: |

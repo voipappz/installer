@@ -55,7 +55,7 @@ full list is the "Useful controls" table in README.md). The ones you will
 reach for while developing:
 
 ```sh
-INSTALL_DIR=/tmp/node-a START=0 VA_REGISTER=0 make install     # no registration, nothing started
+INSTALL_DIR=/tmp/node-a sh install.sh --no-register --no-start  # no registration, nothing started
 VA_API_URL=https://mothership.local VA_CONFIG=./va.yaml make install
 VA_IMAGE_SOURCE=archive VA_IMAGE_ARCHIVE=/path/img.tar.gz make install
 ```
