@@ -15,7 +15,7 @@ It carries exactly four things:
 | --- | --- |
 | `/autoinstall.yaml` + Ubuntu | the OS, installed unattended from the disc's own pool |
 | `/va-crystal/debs/` | a real local apt repository: Docker Engine, `curl`, `ca-certificates`, `jq`, `openssl` |
-| `/va-crystal/node-image.tar.gz` | **one** image, `docker save`d and gzipped: `nirlevi/va-crystal:node-<version>` |
+| `/va-crystal/node-image.tar.gz` | **one** image, `docker save`d and gzipped: `nirlevi/va-crystal:<version>` |
 | `/va-crystal/install.sh` | this repository's installer, unmodified |
 
 And, at the root of the disc in plain text, `/va-crystal-node.txt` — the image
@@ -46,7 +46,7 @@ VoIPAppz VoIP node installer
   present (Docker version 27.x)
 2/6  Platform image
   loading /var/lib/va-crystal/node-image.tar.gz
-  tagged sha256:… as nirlevi/va-crystal:node
+  tagged sha256:… as nirlevi/va-crystal:latest
 …
 ```
 
@@ -94,7 +94,7 @@ them — they fall back to the `hashicorp/packer` container.
 
 | | owned by | what it is |
 | --- | --- | --- |
-| `image_version` | **va-crystal** | the published node image tag this disc bakes: `nirlevi/va-crystal:node-<image_version>` |
+| `image_version` | **va-crystal** | the published node image tag this disc bakes: `nirlevi/va-crystal:<image_version>` |
 | `release_version` | **this repository** | the disc's own release. The ISO is named `voipappz-node-<release_version>.iso` |
 
 A disc can be re-cut around an *unchanged* image — a fixed autoinstall, a newer
@@ -119,7 +119,7 @@ Useful variables:
 
 | `-var` | default | |
 | --- | --- | --- |
-| `image_version` | *(required)* | the tag suffix; the image is `nirlevi/va-crystal:node-<image_version>` |
+| `image_version` | *(required)* | the tag suffix; the image is `nirlevi/va-crystal:<image_version>` |
 | `release_version` | *(required)* | the disc's own release; names the ISO |
 | `with_image` | `true` | `false` cuts a small disc whose installer must reach a registry or S3 |
 | `refresh_packages` | `true` | `false` re-cuts from an unchanged payload without touching the network |

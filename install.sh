@@ -30,7 +30,7 @@ if [ -n "$VA_ENV_FILE" ]; then
   _line=""; _key=""; _val=""
 fi
 
-VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}"
+VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:latest}"
 VA_IMAGE_ARCHIVE="${VA_IMAGE_ARCHIVE:-}"
 # Where `make s3-publish` in va-crystal puts the newest proven image archive.
 VA_IMAGE_URL="${VA_IMAGE_URL:-https://voipappz-assets-il.s3.il-central-1.amazonaws.com/images/va-crystal-node-latest.tar.gz}"

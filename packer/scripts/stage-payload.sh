@@ -74,7 +74,7 @@ hostpath() {
 # The pinned image. node-iso.pkr.hcl passes it; a hand run must name it.
 NODE_IMAGE="${NODE_IMAGE:-}"
 case "$NODE_IMAGE" in
-  '') die "NODE_IMAGE is not set — run this through packer/build.sh, or export NODE_IMAGE=nirlevi/va-crystal:node-<version>" ;;
+  '') die "NODE_IMAGE is not set — run this through packer/build.sh, or export NODE_IMAGE=nirlevi/va-crystal:<version>" ;;
   *:latest) die "NODE_IMAGE must be a pinned tag, never :latest — media must install the same thing next year" ;;
   *:*) ;;
   *) die "NODE_IMAGE must carry an explicit tag: $NODE_IMAGE" ;;

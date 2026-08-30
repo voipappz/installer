@@ -21,7 +21,7 @@
 #
 #   * Ubuntu Server 24.04, Docker Engine, and the four tools install.sh uses
 #     (curl, ca-certificates, jq, openssl) — see os-packages.txt.
-#   * ONE image, nirlevi/va-crystal:node-<version>, `docker save`d and gzipped.
+#   * ONE image, nirlevi/va-crystal:<version>, `docker save`d and gzipped.
 #     The mothership's ISO stages seventeen; there is no Postgres here, no Kong,
 #     no admin, no API, and nothing on this disc can run `voipappz bootstrap`.
 #   * install.sh, unmodified, from this checkout.
@@ -76,7 +76,7 @@ variable "image_version" {
   # `latest` moves — two discs cut a week apart would install different
   # software while claiming to be the same media. Rejected rather than
   # defaulted, so a build cannot forget.
-  description = "The node image version to bake, e.g. 2026.08.27-2. Becomes nirlevi/va-crystal:node-<image_version>."
+  description = "The node image version to bake, e.g. 2026.08.27-2. Becomes nirlevi/va-crystal:<image_version>."
 
   validation {
     condition = (

@@ -16,7 +16,7 @@
 # Cut the bootable, OFFLINE VA-Crystal NODE installer ISO.
 #
 #   packer/scripts/fetch-base-iso.sh              # once — the Ubuntu ISO
-#   NODE_IMAGE=nirlevi/va-crystal:node-2026.08.27-2 \
+#   NODE_IMAGE=nirlevi/va-crystal:2026.08.30-1 \
 #     packer/scripts/stage-payload.sh all         # the offline payload
 #   IMAGE_VERSION=2026.08.27-2 RELEASE_VERSION=2026.08.27-1 packer/make-node-iso.sh
 #
@@ -26,7 +26,7 @@
 # What comes out is Ubuntu Server 24.04 remastered so that booting it installs,
 # with no network at all: Ubuntu, Docker Engine, the four tools install.sh uses,
 # install.sh itself, and ONE `docker save` archive of
-# nirlevi/va-crystal:node-<version>.
+# nirlevi/va-crystal:<version>.
 #
 # It does NOT install the node, and it carries nothing of the mothership. The
 # operator runs the installer afterwards, against the archive that came with the
@@ -86,7 +86,7 @@ RELEASE_VERSION="${RELEASE_VERSION:-}"
 [ "$IMAGE_VERSION" != "latest" ] || die "IMAGE_VERSION must be pinned, never 'latest'"
 [ -n "$RELEASE_VERSION" ] || die "RELEASE_VERSION is not set — media must name its own release"
 [ "$RELEASE_VERSION" != "latest" ] || die "RELEASE_VERSION must be pinned, never 'latest'"
-NODE_IMAGE="${NODE_IMAGE:-nirlevi/va-crystal:node-$IMAGE_VERSION}"
+NODE_IMAGE="${NODE_IMAGE:-nirlevi/va-crystal:$IMAGE_VERSION}"
 # `voipappz-node-`, deliberately NOT `va-crystal-node-`: that name already
 # belongs to va-crystal's image tarballs in the same bucket, and two different
 # artifacts versioned by two different repositories must not share a namespace.

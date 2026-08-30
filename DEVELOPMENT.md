@@ -3,7 +3,7 @@
 This repository is one product: `install.sh`, a POSIX shell script that
 installs a single VA-Crystal VoIP node and registers it with a mothership.
 There is no build step and no runtime of its own — the node's software is the
-private `nirlevi/va-crystal:node` image, and the CLI inside that image does the
+private `nirlevi/va-crystal:latest` image, and the CLI inside that image does the
 real work. This guide is for people changing the script or its tests.
 
 If you only want to *install a node*, use [README.md](README.md).

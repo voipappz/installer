@@ -366,8 +366,8 @@ env \
   }
 assert_no_secret_in_log "$FIRST_LOG"
 docker info >/dev/null
-docker image inspect nirlevi/va-crystal:node >/dev/null
-docker run --rm --entrypoint voipappz nirlevi/va-crystal:node node --help >/dev/null \
+docker image inspect nirlevi/va-crystal:latest >/dev/null
+docker run --rm --entrypoint voipappz nirlevi/va-crystal:latest node --help >/dev/null \
   || die 'node image CLI is unavailable'
 # The image is the whole node: no compose scaffold to extract, and none left
 # behind. An installation directory holds this node's files and nothing else.
@@ -442,7 +442,7 @@ pass 'a supplied va.yaml replaces the unattended default'
 ARCHIVE_DIR="$(mktemp -d)"
 chmod 0755 "$ARCHIVE_DIR"   # nginx (below) serves it as an unprivileged worker
 ARCHIVE_LOG="$LOG_DIR/archive-install.log"
-docker tag nirlevi/va-crystal:node installer-ci/va-crystal:archive
+docker tag nirlevi/va-crystal:latest installer-ci/va-crystal:archive
 docker save installer-ci/va-crystal:archive | gzip -1 >"$ARCHIVE_DIR/va-crystal.tar.gz"
 docker rmi installer-ci/va-crystal:archive >/dev/null
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN \
@@ -517,7 +517,7 @@ docker run --rm --network host \
   --entrypoint voipappz \
   -e VA_PROJECT_DIR=/work -e VA_PATH= -e "VA_API_URL=$API_URL" \
   -v "$MOTHERSHIP_DIR:/work" -w /work \
-  nirlevi/va-crystal:node setup --ci \
+  nirlevi/va-crystal:latest setup --ci \
   >"$LOG_DIR/mothership-setup.log" 2>&1
 MOTHERSHIP_UP=1
 (

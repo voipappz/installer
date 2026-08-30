@@ -61,7 +61,7 @@ LIB="$TMP/lib.sh"
 } > "$LIB"
 # shellcheck disable=SC1090
 source "$LIB"
-check 'Docker Hub reference has no registry'         '[[ $(registry_of nirlevi/va-crystal:node) == "" ]]'
+check 'Docker Hub reference has no registry'         '[[ $(registry_of nirlevi/va-crystal:latest) == "" ]]'
 check 'bare name has no registry'                    '[[ $(registry_of alpine) == "" ]]'
 check 'host with a dot is a registry'                '[[ $(registry_of ghcr.io/kamailio/kamailio:6) == ghcr.io ]]'
 check 'host with a port is a registry'               '[[ $(registry_of localhost:5001/va/stack:test) == localhost:5001 ]]'

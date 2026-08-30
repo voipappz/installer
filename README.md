@@ -19,7 +19,7 @@ VoIPAppz VoIP node installer
 
 2/6  Platform image
   Image source:
-    1) pull nirlevi/va-crystal:node from Docker Hub (needs a Docker Hub user + token)
+    1) pull nirlevi/va-crystal:latest from Docker Hub (needs a Docker Hub user + token)
     2) download the latest image archive from Amazon S3
     3) load a docker-save archive (.tar or .tar.gz) from a local path or URL
   Choose 1, 2 or 3 [2]: 2          ← Enter is enough
@@ -185,7 +185,7 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_IMAGE_SOURCE=dockerhub\|s3\|archive` | Image source without the menu. |
 | `VA_IMAGE_ARCHIVE=<path or URL>` | The archive to load (`.tar`/`.tar.gz`); a URL is checked against its `.sha256`. |
 | `VA_IMAGE_URL=https://…` | Override the S3 archive URL used by `s3`. |
-| `VA_VOIP_IMAGE=<ref>` | Image to run (default `nirlevi/va-crystal:node`). |
+| `VA_VOIP_IMAGE=<ref>` | Image to run (default `nirlevi/va-crystal:latest`). |
 | `VA_CA_BUNDLE=/path/chain.pem` | Trust anchors for a mothership whose chain the node cannot verify. |
 | `INSTALL_DIR=/path` | Where the stack lands (default `/opt/voipappz`). |
 | `START=0` | Install and register, do not start the container. |

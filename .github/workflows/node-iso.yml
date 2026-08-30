@@ -7,7 +7,7 @@ name: Node ISO
 # They are different numbers and this repository owns exactly one of them.
 #
 #   image_version    INPUT, required, pinned. The va-crystal node image tag to
-#                    bake: nirlevi/va-crystal:node-<image_version>. That version
+#                    bake: nirlevi/va-crystal:<image_version>. That version
 #                    space belongs to va-crystal; this repository consumes it and
 #                    never invents it. `latest` is rejected here and again by
 #                    node-iso.pkr.hcl's own validation — a disc cut today must
@@ -135,7 +135,7 @@ on:
   workflow_dispatch:
     inputs:
       image_version:
-        description: 'Node image version to BAKE, pinned — e.g. 2026.08.27-2. Becomes nirlevi/va-crystal:node-<image_version>. va-crystal owns this number.'
+        description: 'Node image version to BAKE, pinned — e.g. 2026.08.27-2. Becomes nirlevi/va-crystal:<image_version>. va-crystal owns this number.'
         required: true
         type: string
       release_version:
@@ -199,7 +199,7 @@ jobs:
             latest|'') echo "!! the image must be pinned, never 'latest'" >&2; exit 1 ;;
             *[!A-Za-z0-9._-]*) echo "!! version may only hold A-Z a-z 0-9 . _ -" >&2; exit 1 ;;
           esac
-          echo "baking nirlevi/va-crystal:node-$IMAGE_VERSION"
+          echo "baking nirlevi/va-crystal:$IMAGE_VERSION"
 
       # Minting reads the bucket, so the role is assumed here — and again, in a
       # fresh session, before the upload. Two short sessions rather than one held
@@ -343,7 +343,7 @@ jobs:
             echo "### \`$ISO_NAME\`"
             echo
             echo "iso release \`$RELEASE_VERSION\` carrying node image"
-            echo "\`nirlevi/va-crystal:node-$IMAGE_VERSION\` — two different numbers,"
+            echo "\`nirlevi/va-crystal:$IMAGE_VERSION\` — two different numbers,"
             echo "both recorded on the disc."
             echo
             echo '```'
@@ -456,7 +456,7 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| node image | \`nirlevi/va-crystal:node-$IMAGE_VERSION\` |"
+            echo "| node image | \`nirlevi/va-crystal:$IMAGE_VERSION\` |"
             echo "| installer commit | \`$GITHUB_SHA\` |"
             echo "| object | \`s3://$S3_BUCKET/${prefix}voipappz-node-latest.iso\` (overwritten each release) |"
             echo "| sha256 | \`$sum\` |"
