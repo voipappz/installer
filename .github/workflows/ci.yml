@@ -152,10 +152,23 @@ jobs:
       - name: make up / down / health drive the installed node
         run: |
           set -eu
-          test ! -r /opt/voipappz/.env \
-            || { echo "!! .env is readable unprivileged; the guard proves nothing" >&2; exit 1; }
-          echo "=== make up, unprivileged: must refuse ==="
-          if make up; then echo "!! make up should have refused" >&2; exit 1; fi
+          # NOTHING INSTALLED THERE. The guard must refuse, and must not have
+          # touched the running node to find that out.
+          echo "=== make up INSTALL_DIR=/tmp/not-installed: must refuse ==="
+          if make up INSTALL_DIR=/tmp/not-installed; then
+            echo "!! make up should have refused" >&2; exit 1
+          fi
+          docker inspect -f '{{.State.Running}}' va-voip | grep -qx true \
+            || { echo "!! the refusal destroyed the container" >&2; exit 1; }
+
+          # THE LAYOUT AN OPERATOR ACTUALLY HAS. install.sh writes .env 0600
+          # owned by root whenever it had to elevate — but GitHub runners ship
+          # /opt world-writable, so here it correctly stayed unelevated and the
+          # file is the runner's. Make it root's to get the real thing.
+          sudo chown root:root /opt/voipappz/.env
+          sudo chmod 600 /opt/voipappz/.env
+          echo "=== make up, unprivileged, root-owned .env: must refuse ==="
+          if make up; then echo "!! make up read a root-only .env" >&2; exit 1; fi
           docker inspect -f '{{.State.Running}}' va-voip | grep -qx true \
             || { echo "!! the refusal destroyed the container" >&2; exit 1; }
 
