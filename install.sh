@@ -1159,9 +1159,26 @@ if [ -z "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
   _api_host=${VA_API_URL#*://}; _api_host=${_api_host%%/*}; _api_host=${_api_host%%:*}
   [ -n "$_api_host" ] && VA_NATS_URL="nats://$_api_host:4222" && say "broker derived from the mothership host: $VA_NATS_URL"
 fi
+# CREDENTIALS NEVER LAND IN va.yaml (it is 0644 by design). A VA_NATS_URL
+# carrying userinfo — nats://default:<token>@host:4222, the form an
+# authenticated broker needs — is split: the BARE url goes to the YAML, the
+# credentialed one to the mode-0600 install .env, and the container gets it
+# as -e NATS_URL, which the image lets outrank the YAML-derived value.
+NATS_URL_WITH_CREDENTIALS=""
+case "$VA_NATS_URL" in
+  *://*@*)
+    NATS_URL_WITH_CREDENTIALS="$VA_NATS_URL"
+    VA_NATS_URL="$(printf '%s' "$VA_NATS_URL" | sed 's|//[^@/]*@|//|')"
+    say "broker credential kept out of va.yaml (goes to .env + container env)"
+    ;;
+esac
+case "$(yaml_broker_url)" in
+  *://*@*) die "va.yaml broker.url carries a credential — move it out (rerun with VA_NATS_URL='<credentialed url>' after removing it from the YAML); va.yaml is world-readable" ;;
+esac
 if [ -n "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
   set_yaml_broker_url "$VA_NATS_URL"
 fi
+[ -z "$NATS_URL_WITH_CREDENTIALS" ] || set_env_value VA_NATS_URL_CREDENTIALED "$NATS_URL_WITH_CREDENTIALS"
 if [ -z "$(yaml_broker_url)" ]; then
   [ "$START" = "0" ] || die "va.yaml has no broker; add broker.url or set VA_NATS_URL"
   say "WARNING: va.yaml has no broker; it must be configured before the node starts"
@@ -1270,6 +1287,9 @@ if [ "$START" = "1" ]; then
   # The service flags, recorded at install time (or by an earlier run).
   NODE_KAMAILIO="$(fs_cmd sed -n 's/^VA_KAMAILIO=//p' "$INSTALL_DIR/.env" | head -1)"
   NODE_FREESWITCH="$(fs_cmd sed -n 's/^VA_FREESWITCH=//p' "$INSTALL_DIR/.env" | head -1)"
+  # A credentialed broker URL, if the install recorded one (the bare URL is in
+  # va.yaml; the credential exists only here and in the container env).
+  NODE_NATS_URL="$(fs_cmd sed -n 's/^VA_NATS_URL_CREDENTIALED=//p' "$INSTALL_DIR/.env" | head -1)"
   if [ -z "$FS_PASSWORD" ] || [ -z "$LIC_JWT" ] || [ -z "$LIC_ENC" ]; then
     die "$INSTALL_DIR/.env is missing the FreeSWITCH or licence secrets; rerun the installer"
   fi
@@ -1311,6 +1331,7 @@ if [ "$START" = "1" ]; then
     -e "LICENSE_ENCRYPTION_KEY=$LIC_ENC"
   [ -n "${NODE_KAMAILIO:-}" ] && set -- "$@" -e "VA_KAMAILIO=$NODE_KAMAILIO"
   [ -n "${NODE_FREESWITCH:-}" ] && set -- "$@" -e "VA_FREESWITCH=$NODE_FREESWITCH"
+  [ -n "${NODE_NATS_URL:-}" ] && set -- "$@" -e "NATS_URL=$NODE_NATS_URL"
   if [ -n "$CA_BUNDLE" ]; then
     set -- "$@" -v "$INSTALL_DIR/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
       -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem

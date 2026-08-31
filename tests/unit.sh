@@ -503,6 +503,13 @@ check 'sofia external port is the one health probes' 'grep -q "port_external: \"
 check 'kamailio keeps 5060'                          'grep -q "sip_port: \"5060\"" "$EX"'
 check 'it names a mothership and a broker'           'grep -q "^mothership:" "$EX" && grep -q "^broker:" "$EX"'
 check 'it carries no customers block'                '! grep -q "^customers:" "$EX"'
+printf '\n── broker credentials never land in va.yaml\n'
+check 'the credentialed url is split before the yaml write' 'grep -q "NATS_URL_WITH_CREDENTIALS=\"\$VA_NATS_URL\"" "$ROOT/install.sh"'
+check 'userinfo is stripped for the yaml'      '[[ $(printf %s "nats://default:s3cr3t@ms.example:4222" | sed "s|//[^@/]*@|//|") == "nats://ms.example:4222" ]]'
+check 'a bare url passes through unchanged'    '[[ $(printf %s "nats://ms.example:4222" | sed "s|//[^@/]*@|//|") == "nats://ms.example:4222" ]]'
+check 'an existing credentialed yaml url dies' 'grep -q "va.yaml broker.url carries a credential" "$ROOT/install.sh"'
+check 'docker run gets the credentialed env'   'grep -q "NATS_URL=\$NODE_NATS_URL" "$ROOT/install.sh"'
+
 printf '\n── service flags into the install .env\n'
 {
   echo 'WORK_DIR=$TMP'; echo 'fs_cmd() { "$@"; }'; echo 'die() { echo "$*" >&2; exit 1; }'

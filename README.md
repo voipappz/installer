@@ -179,7 +179,7 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_CONFIG=/path/va.yaml` | Install this node YAML instead of answering the wizard. |
 | `VA_API_URL=https://…` | Mothership URL; persisted to `va.yaml`. |
 | `VA_API_AUTHORIZATION='Basic …'` | Account key, instead of the prompt. |
-| `VA_NATS_URL=nats://…` | Broker, when the YAML has none. |
+| `VA_NATS_URL=nats://…` | Broker, when the YAML has none. May carry credentials (`nats://user:token@host:4222`): they go to the mode-0600 `.env` and the container environment only — the YAML gets the bare URL. ALL secrets live in env, never in `va.yaml`. |
 | `VA_CUSTOMER_UUID` / `VA_CUSTOMER_NAME` | Pick (or create) the customer. |
 | `VA_ACCOUNT_EMAIL` / `VA_ACCOUNT_PASSWORD` | The login of the Account a *new* customer gets; asked when a customer is created. The installer signs in with it once to prove it works, then forgets the password. |
 | `VA_IMAGE_SOURCE=dockerhub\|s3\|archive` | Image source without the menu. |
