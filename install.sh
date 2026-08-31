@@ -338,6 +338,32 @@ set_yaml_section_url() {
   ENV_TEMP=""
 }
 
+# Set one KEY under va.yaml's env: block — the service flags (VA_KAMAILIO=off,
+# VA_FREESWITCH=off) travel this way; the image's va-env exports the block at
+# boot. An existing key in the file wins, like every other YAML value.
+set_yaml_env_key() {
+  _key=$1
+  _value=$2
+  validate_scalar "$_key" "$_value"
+  fs_cmd grep -q "^[[:space:]]\{1,\}$_key:" "$VA_YAML" 2>/dev/null && return 0
+  ENV_TEMP="$(fs_cmd mktemp "$WORK_DIR/config/.va.yaml.tmp.XXXXXX")" \
+    || die "could not update $VA_YAML"
+  fs_cmd awk -v key="$_key" -v value="$_value" '
+    function emit() { print "  " key ": \047" value "\047"; wrote = 1 }
+    /^env:[[:space:]]*(#.*)?$/ { in_env = 1; saw_env = 1; print; next }
+    in_env && /^[^[:space:]#]/ { if (!wrote) emit(); in_env = 0 }
+    /^env:[[:space:]]*\{[[:space:]]*\}[[:space:]]*$/ { print "env:"; emit(); saw_env = 1; next }
+    { print }
+    END {
+      if (in_env && !wrote) emit()
+      if (!saw_env) { print ""; print "env:"; emit() }
+    }
+  ' "$VA_YAML" | fs_cmd tee "$ENV_TEMP" >/dev/null
+  fs_cmd chmod 0644 "$ENV_TEMP"
+  fs_cmd mv -f -- "$ENV_TEMP" "$VA_YAML"
+  ENV_TEMP=""
+}
+
 set_yaml_api_url() { set_yaml_section_url mothership VA_API_URL "$1"; }
 set_yaml_broker_url() { set_yaml_section_url broker VA_NATS_URL "$1"; }
 
@@ -1166,6 +1192,23 @@ if [ -z "$(yaml_broker_url)" ]; then
   [ "$START" = "0" ] || die "va.yaml has no broker; add broker.url or set VA_NATS_URL"
   say "WARNING: va.yaml has no broker; it must be configured before the node starts"
 fi
+
+# Service flags: VA_KAMAILIO=off installs a node that relies on an external
+# kamailio (the mothership ingress, a shared SBC) — no duplicate SBC on the
+# node; VA_FREESWITCH=off installs a proxy/agent-only node. Written into
+# va.yaml env: so the running image reads them at every boot; an existing
+# value in the file is preserved.
+_flag_value=""
+for _flag in VA_KAMAILIO VA_FREESWITCH; do
+  # shellcheck disable=SC2154  # assigned by the eval on the next line
+  eval "_flag_value=\${$_flag:-}"
+  case "$_flag_value" in
+    '') ;;
+    on|off) set_yaml_env_key "$_flag" "$_flag_value"
+            [ "$_flag_value" = off ] && say "$_flag=off — this node runs without its own ${_flag#VA_}" ;;
+    *) die "$_flag must be 'on' or 'off' (got: $_flag_value)" ;;
+  esac
+done
 
 # Run the existing setup implementation in the image. This normalizes the
 # supplied YAML and creates the Compose .env without installing a second CLI.
