@@ -338,32 +338,6 @@ set_yaml_section_url() {
   ENV_TEMP=""
 }
 
-# Set one KEY under va.yaml's env: block — the service flags (VA_KAMAILIO=off,
-# VA_FREESWITCH=off) travel this way; the image's va-env exports the block at
-# boot. An existing key in the file wins, like every other YAML value.
-set_yaml_env_key() {
-  _key=$1
-  _value=$2
-  validate_scalar "$_key" "$_value"
-  fs_cmd grep -q "^[[:space:]]\{1,\}$_key:" "$VA_YAML" 2>/dev/null && return 0
-  ENV_TEMP="$(fs_cmd mktemp "$WORK_DIR/config/.va.yaml.tmp.XXXXXX")" \
-    || die "could not update $VA_YAML"
-  fs_cmd awk -v key="$_key" -v value="$_value" '
-    function emit() { print "  " key ": \047" value "\047"; wrote = 1 }
-    /^env:[[:space:]]*(#.*)?$/ { in_env = 1; saw_env = 1; print; next }
-    in_env && /^[^[:space:]#]/ { if (!wrote) emit(); in_env = 0 }
-    /^env:[[:space:]]*\{[[:space:]]*\}[[:space:]]*$/ { print "env:"; emit(); saw_env = 1; next }
-    { print }
-    END {
-      if (in_env && !wrote) emit()
-      if (!saw_env) { print ""; print "env:"; emit() }
-    }
-  ' "$VA_YAML" | fs_cmd tee "$ENV_TEMP" >/dev/null
-  fs_cmd chmod 0644 "$ENV_TEMP"
-  fs_cmd mv -f -- "$ENV_TEMP" "$VA_YAML"
-  ENV_TEMP=""
-}
-
 set_yaml_api_url() { set_yaml_section_url mothership VA_API_URL "$1"; }
 set_yaml_broker_url() { set_yaml_section_url broker VA_NATS_URL "$1"; }
 
@@ -1195,16 +1169,17 @@ fi
 
 # Service flags: VA_KAMAILIO=off installs a node that relies on an external
 # kamailio (the mothership ingress, a shared SBC) — no duplicate SBC on the
-# node; VA_FREESWITCH=off installs a proxy/agent-only node. Written into
-# va.yaml env: so the running image reads them at every boot; an existing
-# value in the file is preserved.
+# node; VA_FREESWITCH=off installs a proxy/agent-only node. TOPOLOGY, not
+# application config — so they live in the container environment (recorded in
+# the install .env, passed with docker -e), never in va.yaml: the YAML is the
+# application's file, and container env outranks it in the image anyway.
 _flag_value=""
 for _flag in VA_KAMAILIO VA_FREESWITCH; do
   # shellcheck disable=SC2154  # assigned by the eval on the next line
   eval "_flag_value=\${$_flag:-}"
   case "$_flag_value" in
     '') ;;
-    on|off) set_yaml_env_key "$_flag" "$_flag_value"
+    on|off) set_env_value "$_flag" "$_flag_value"
             [ "$_flag_value" = off ] && say "$_flag=off — this node runs without its own ${_flag#VA_}" ;;
     *) die "$_flag must be 'on' or 'off' (got: $_flag_value)" ;;
   esac
@@ -1292,6 +1267,9 @@ if [ "$START" = "1" ]; then
   FS_PASSWORD="$(fs_cmd sed -n 's/^VA_FREESWITCH_PASSWORD=//p' "$INSTALL_DIR/.env" | head -1)"
   LIC_JWT="$(fs_cmd sed -n 's/^VA_LICENSE_JWT_SECRET=//p' "$INSTALL_DIR/.env" | head -1)"
   LIC_ENC="$(fs_cmd sed -n 's/^VA_LICENSE_ENCRYPTION_KEY=//p' "$INSTALL_DIR/.env" | head -1)"
+  # The service flags, recorded at install time (or by an earlier run).
+  NODE_KAMAILIO="$(fs_cmd sed -n 's/^VA_KAMAILIO=//p' "$INSTALL_DIR/.env" | head -1)"
+  NODE_FREESWITCH="$(fs_cmd sed -n 's/^VA_FREESWITCH=//p' "$INSTALL_DIR/.env" | head -1)"
   if [ -z "$FS_PASSWORD" ] || [ -z "$LIC_JWT" ] || [ -z "$LIC_ENC" ]; then
     die "$INSTALL_DIR/.env is missing the FreeSWITCH or licence secrets; rerun the installer"
   fi
@@ -1331,6 +1309,8 @@ if [ "$START" = "1" ]; then
     -e "VA_FREESWITCH_PASSWORD=$FS_PASSWORD" \
     -e "LICENSE_JWT_SECRET=$LIC_JWT" \
     -e "LICENSE_ENCRYPTION_KEY=$LIC_ENC"
+  [ -n "${NODE_KAMAILIO:-}" ] && set -- "$@" -e "VA_KAMAILIO=$NODE_KAMAILIO"
+  [ -n "${NODE_FREESWITCH:-}" ] && set -- "$@" -e "VA_FREESWITCH=$NODE_FREESWITCH"
   if [ -n "$CA_BUNDLE" ]; then
     set -- "$@" -v "$INSTALL_DIR/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
       -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem

@@ -503,17 +503,19 @@ check 'sofia external port is the one health probes' 'grep -q "port_external: \"
 check 'kamailio keeps 5060'                          'grep -q "sip_port: \"5060\"" "$EX"'
 check 'it names a mothership and a broker'           'grep -q "^mothership:" "$EX" && grep -q "^broker:" "$EX"'
 check 'it carries no customers block'                '! grep -q "^customers:" "$EX"'
-printf '\n── service flags into va.yaml env:\n'
+printf '\n── service flags into the install .env\n'
 {
   echo 'WORK_DIR=$TMP'; echo 'fs_cmd() { "$@"; }'; echo 'die() { echo "$*" >&2; exit 1; }'
-  lift validate_scalar; lift set_yaml_env_key
+  lift validate_scalar; lift set_env_value
 } > "$TMP/envkey.sh"
-env_yaml() { VA_YAML="$TMP/env-$1.yaml"; printf '%b' "$2" > "$VA_YAML"; ( export TMP VA_YAML; sh -c ". '$TMP/envkey.sh'; set_yaml_env_key VA_KAMAILIO off" ); cat "$VA_YAML"; }
-check 'flag appended when env: is missing'    '[[ $(env_yaml none "node:\n  uuid: x\n") == *"env:"* && $(cat "$TMP/env-none.yaml") == *"VA_KAMAILIO: '\''off'\''"* ]]'
-check 'flag appended under an existing env:'  '[[ $(env_yaml has "env:\n  PORT: \"4002\"\n") == *"PORT"* && $(cat "$TMP/env-has.yaml") == *"VA_KAMAILIO"* ]]'
-check 'an empty env: {} is replaced'          '[[ $(env_yaml empty "env: {}\n") == *"VA_KAMAILIO: '\''off'\''"* && $(cat "$TMP/env-empty.yaml") != *"{}"* ]]'
-check 'an existing value is preserved'        '[[ $(env_yaml keep "env:\n  VA_KAMAILIO: on\n") == *"VA_KAMAILIO: on"* && $(grep -c VA_KAMAILIO "$TMP/env-keep.yaml") == 1 ]]'
+: > "$TMP/.env"
+( export TMP; sh -c ". '$TMP/envkey.sh'; set_env_value VA_KAMAILIO off" )
+check 'flag recorded in .env'                 'grep -qx "VA_KAMAILIO=off" "$TMP/.env"'
+( export TMP; sh -c ". '$TMP/envkey.sh'; set_env_value VA_KAMAILIO on" )
+check 'a rerun replaces, never duplicates'    '[[ $(grep -c "^VA_KAMAILIO=" "$TMP/.env") == 1 && $(grep -x "VA_KAMAILIO=on" "$TMP/.env") ]]'
 check 'the installer validates the flag'      'grep -q "must be .on. or .off." "$ROOT/install.sh"'
+check 'docker run carries the flag'           'grep -q "VA_KAMAILIO=\$NODE_KAMAILIO" "$ROOT/install.sh"'
+check 'the flag never lands in va.yaml'       '! grep -q "set_yaml_env_key" "$ROOT/install.sh"'
 
 check '.env.example exists'                          '[[ -f $ROOT/.env.example ]]'
 check '.env.example holds no real secret'            '! grep -Eq "^[A-Z_]*(PASSWORD|SECRET|KEY|TOKEN)=[A-Za-z0-9+/]{12,}" "$ROOT/.env.example"'

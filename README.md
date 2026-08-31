@@ -186,7 +186,7 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_IMAGE_ARCHIVE=<path or URL>` | The archive to load (`.tar`/`.tar.gz`); a URL is checked against its `.sha256`. |
 | `VA_IMAGE_URL=https://…` | Override the S3 archive URL used by `s3`. |
 | `VA_VOIP_IMAGE=<ref>` | Image to run (default `nirlevi/va-crystal:latest`). |
-| `VA_KAMAILIO=off` | Install a node without its own kamailio — it relies on an external SBC (the mothership ingress). Written to `va.yaml env:`; health reports the kamailio checks as "off by config". |
+| `VA_KAMAILIO=off` | Install a node without its own kamailio — it relies on an external SBC (the mothership ingress). Topology, so it lives in the container environment (recorded in the install `.env`, passed with `docker -e`); health reports the kamailio checks as "off by config". |
 | `VA_FREESWITCH=off` | Install a proxy/agent-only node without media. |
 | `VA_CA_BUNDLE=/path/chain.pem` | Trust anchors for a mothership whose chain the node cannot verify. |
 | `INSTALL_DIR=/path` | Where the stack lands (default `/opt/voipappz`). |
