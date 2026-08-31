@@ -156,6 +156,14 @@ for i in 0 1; do
     api "$i" POST /numbers --data-urlencode "number=$number" \
       --data-urlencode "environment_uuid=$env_uuid" >/dev/null
 
+  # The customer's number is also its outbound caller ID — without this the
+  # environment profile has none, the leg vars render empty and the callee
+  # sees caller "0" (GenerateCallerIdNumber falls through to nothing).
+  api "$i" GET "/environments/$env_uuid" | jq -e --arg n "$number" \
+    '.profile.caller_id_number == $n' >/dev/null ||
+    api "$i" PATCH "/environments/$env_uuid" \
+      --data-urlencode "profile[caller_id_number]=$number" >/dev/null
+
   ext_uuid=$(api "$i" GET /extensions | jq -r --arg u "$did_ext" --arg e "$env_uuid" \
     '[.[] | select((.environment_uuid // $e) == $e and (.username | startswith($u)))] | .[0].uuid // empty')
   api "$i" GET /dids | jq -e --arg n "$number" --arg e "$env_uuid" \
