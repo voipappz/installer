@@ -30,7 +30,16 @@ if [ -n "$VA_ENV_FILE" ]; then
   _line=""; _key=""; _val=""
 fi
 
-VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:latest}"
+# :node, not :latest. Everything else this platform installs is pinned — the
+# CLI by ci/CLI_VERSION + ci/CLI_SHA256, SIPp by version and sha256, the base
+# ISO by checksum, kamailio by suite — and the node image was the one thing
+# that moved underneath a running node. It also disagreed with the two places
+# that DO name a tag: the stack's compose used ${VA_VOIP_TAG:-node} and the
+# ISO payload carries :node, so a node installed by this script ran a
+# different build from the one the media shipped. `docker inspect` could no
+# longer answer "which build is that node running?", which is the whole point
+# of the io.voipappz.cli.version label.
+VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}"
 VA_IMAGE_ARCHIVE="${VA_IMAGE_ARCHIVE:-}"
 # Where `make s3-publish` in va-crystal puts the newest proven image archive.
 VA_IMAGE_URL="${VA_IMAGE_URL:-https://voipappz-assets-il.s3.il-central-1.amazonaws.com/images/va-crystal-node-latest.tar.gz}"
