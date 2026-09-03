@@ -1,0 +1,22 @@
+version: 2.0
+shards:
+  admiral:
+    git: https://github.com/jwaldrip/admiral.cr.git
+    version: 1.12.1
+
+  base32:
+    git: https://github.com/jgaskins/base32.git
+    version: 0.1.1+git.commit.18f5647c42dae4de654e3003825fab43dc95b029
+
+  mcp:
+    git: https://github.com/spider-gazelle/mcp.cr.git
+    version: 0.2.0+git.commit.d6ca3e5a3ad37e394af7cf91a2c0717f73cd232f
+
+  nats:
+    git: https://github.com/jgaskins/nats.git
+    version: 1.6.0
+
+  openssl_ext:
+    git: https://github.com/spider-gazelle/openssl_ext.git
+    version: 2.8.5
+

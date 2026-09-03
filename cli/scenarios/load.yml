@@ -1,0 +1,33 @@
+# Sustained call load with media, ramping the rate while it runs.
+#
+#   voipappz test scenario load
+#
+# This is what `voipappz test --level heavy` cannot be: that loop spawns one
+# sipexer process per call and so has no call rate, no concurrency ceiling and
+# no media. Here SIPp holds 50 calls open, climbs from 5 to 25 calls/second in
+# steps of 5 every 30s, and writes a CSV of what happened.
+name: load
+destination: 127.0.0.1:5160
+to: echo
+from_user: loadtest
+
+max_concurrent: 50
+number_of_calls: 1000
+calls_per_second: 5
+calls_per_second_max: 25
+calls_per_second_incr: 5
+calls_per_second_interval: 30
+
+stats_file: sipp-load-stats.csv
+stats_interval: 1
+
+steps:
+  - invite
+  - wait_for_answer
+  - ack_answer
+  - sleep 10
+  - hangup
+  # Where the answers landed, in 100ms buckets — the number that tells you the
+  # proxy is degrading before the failure count does.
+  - response_time_repartition 100 2000 100
+  - call_length_repartition 5000 20000 1000

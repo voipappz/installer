@@ -109,13 +109,22 @@ secrets automatically.
 `.github/workflows/ci.yml`:
 
 - **Shell / Ubuntu 22.04, 24.04** — `make check`, on every push and PR.
+- **cli · specs + static link + SIPp round-trip** — `make cli-test`, `make
+  build`, `make cli-node-build`, the node-surface check, and a real SIPp
+  round trip through `voipappz test scenario`. The binary is kept as an
+  artifact for a day; the mothership's CI builds its own from a clone of
+  this repo.
 - **Clean install + real mothership / Ubuntu 22.04, 24.04** — the
   integration test, on pushes and manual dispatch only (fork PRs cannot
   receive the registry secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`).
   It checks out only this repository.
 
 Watch a run: `gh run list --limit 1` then `gh run watch <id>`. A change is
-"done" when all four jobs are green.
+"done" when every job is green.
+
+`.github/workflows/release.yml` runs on a `v*` tag and publishes the CLI
+binaries and checksums. Nothing in `install.sh` consumes them; va-crystal and
+`scripts/install-cli.sh --release` do.
 
 ## Where things live
 
@@ -124,7 +133,9 @@ Watch a run: `gh run list --limit 1` then `gh run watch <id>`. A change is
 | `install.sh` | the product; steps 1–6 are the top-level `step "N/6 …"` blocks |
 | `tests/test-install.sh` | integration test (Bash) |
 | `tests/clean-runner.sh` | GitHub-runner-only Docker purge |
-| `Makefile` | this developer tool |
+| `cli/` | the `voipappz` CLI: source, specs, SIPp scenarios (moved from the mothership 2026-09-03) |
+| `scripts/install-cli.sh` | puts a built or published CLI binary on PATH |
+| `Makefile` | this developer tool, and the CLI build and test targets |
 | `README.md` | operator documentation |
 | `CLAUDE.md` | engineering notes and contracts (registration, customers, credentials) — read before changing behaviour |
 
@@ -133,7 +144,8 @@ Watch a run: `gh run list --limit 1` then `gh run watch <id>`. A change is
 - POSIX `sh` only in `install.sh`: no arrays, no `[[ ]]`, no bashisms;
   `dash -n` is the referee.
 - One file. `install.sh` is fetched alone and piped into `sh`; it may not
-  source anything.
+  source anything, and it never builds, fetches or runs the host CLI — the
+  CLI it uses is the one inside the node image.
 - Prefer a direct shell fix over a framework or a dependency.
 - Behaviour that an operator can observe must be reflected in README.md and
   covered by an assertion in `tests/test-install.sh`.

@@ -1,0 +1,37 @@
+# Stands in for the far end of a trunk and ASSERTS what it is offered.
+#
+#   voipappz test scenario trunk-offer-check
+#   # then route a call at 127.0.0.1:5080
+#
+# This is the scenario shape for "verify the SDP offer carries a=ptime:20 and
+# a=maxptime:30" — and for any other must-be-on-the-wire requirement, like a
+# WG67-Version header on the INVITE. SIPp listens, the system under test calls
+# it, and `assert_body` / `assert_header` fail the call when the offer does not
+# match. The verdict lands in SIPp's exit code and its failure counters, so it
+# runs in CI; reading a Wireshark capture does not.
+#
+# A capture is still worth having for the FIRST look at a real trunk — use
+# `voipappz trace hep` for that, which is already wired into both kamailios.
+# What this file replaces is the repeated manual check afterwards.
+name: trunk-offer-check
+
+# No destination: the first step receives, so SIPp listens here instead of
+# calling out. Point the trunk at this port.
+source_port: 5080
+number_of_calls: 1
+max_concurrent: 1
+
+steps:
+  - wait_for_call
+  # Packetization: 20ms per packet, and never more than 30ms.
+  - assert_body 'a=ptime:20'
+  - assert_body 'a=maxptime:30'
+  # Header form, for the same class of requirement:
+  # - assert_header 'WG67-Version:' 'ED137'
+  - send_ringing
+  - answer
+  - wait_for_hangup
+
+# The reverse direction, when SIPp is the one that must offer a compliant SDP:
+#   ptime: 20
+#   maxptime: 30

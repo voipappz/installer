@@ -28,22 +28,9 @@ jobs:
           test -x install.sh
           sh -n install.sh
           dash -n install.sh
+          sh -n scripts/install-cli.sh && dash -n scripts/install-cli.sh
           bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
-          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
-          # The ISO pipeline. POSIX like install.sh, and held to the same gate:
-          # these scripts run on a workstation, on a GitHub runner, and (as
-          # va-node-install) on an offline node where nothing can be fixed.
-          # `sh -n` takes one script and treats the rest as its arguments, so
-          # this is a loop rather than one call.
-          for f in packer/build.sh packer/make-node-iso.sh \
-                   packer/scripts/fetch-base-iso.sh packer/scripts/stage-payload.sh \
-                   packer/scripts/presign-iso.sh packer/files/va-node-install; do
-            test -x "$f"
-            sh -n "$f"
-            dash -n "$f"
-          done
-          shellcheck packer/build.sh packer/make-node-iso.sh packer/scripts/*.sh \
-                     packer/files/va-node-install
+          shellcheck install.sh scripts/install-cli.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
           git diff --check
           test -z "$(find tests -type f -name '*.py' -print -quit)"
           ! grep -Eq 'python(3)?' install.sh
@@ -54,7 +41,8 @@ jobs:
           # dropped from .PHONY. What the commands DO is proved by the
           # integration job, which has a node to run them against.
           for t in help check install install-archive install-no-register \
-                   up down start stop logs health cli iso-validate; do
+                   up down start stop logs health cli \
+                   build cli-build cli-node-build cli-test install-cli; do
             echo "=== make $t ==="
             make -n "$t" || { echo "!! make $t does not resolve" >&2; exit 1; }
           done
@@ -63,6 +51,135 @@ jobs:
           make help | sed -n 's/^  [^ ]*\([a-z-]\{2,\}\) .*/\1/p' | while read -r t; do
             make -n "$t" >/dev/null 2>&1 || echo "note: help lists '$t'"
           done
+
+  # THE CLI, built and tested here since 2026-09-03, when cli/ moved in from
+  # the mothership so it can be public while the mothership is not.
+  #
+  # A SEPARATE JOB, deliberately. `shell` above stays a POSIX gate with no
+  # compiler in reach: install.sh is one script piped into sh, and its checks
+  # must keep passing on a machine that could not compile anything.
+  #
+  # Specs AND a link, in that order. A suite that passes while the artifact
+  # fails to link leaves nothing to ship — and the release workflow is not the
+  # place to discover that on a tag.
+  cli:
+    name: cli · specs + static link + SIPp round-trip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Specs
+        run: make cli-test
+
+      # --static, and it matters beyond this repo: the mothership's SIP suites
+      # and its ISO run the binary FROM THE HOST, where a musl dynamic build
+      # cannot exec.
+      - name: Static build links and runs
+        run: |
+          make build
+          ./bin/voipappz --version
+          file bin/voipappz | grep -q 'statically linked'
+
+      # The other program from the same source. `status` present in one and
+      # absent in the other is the cheapest proof the -Dnode_runtime build
+      # really dropped the host lifecycle surface — va-crystal's
+      # assert-runtime-image.sh rejects an image that carries it, remotely.
+      - name: The node build is the node build
+        run: |
+          make cli-node-build
+          ./cli/bin/voipappz-node --version
+          ./bin/voipappz --help | grep -qE '^[[:space:]]+status\b' || {
+            echo "!! the host build has no 'status' — is this the node binary?" >&2; exit 1; }
+          if ./cli/bin/voipappz-node --help | grep -qE '^[[:space:]]+status\b'; then
+            echo "!! the -Dnode_runtime build still carries the host lifecycle surface" >&2
+            exit 1
+          fi
+
+      # The mothership's CI installs a stack and a node with this binary
+      # rather than compiling a second one. Kept for a day: it is a build of
+      # this commit, not a release.
+      - name: Keep the binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: voipappz-linux-amd64
+          path: bin/voipappz
+          retention-days: 1
+
+      # Two checks, both self-contained: no node, no registry, no target. The
+      # first run also fetches the pinned SIPp, so the download and its
+      # checksum are covered here too.
+      - name: SIPp scenario round-trip
+        run: |
+          # GitHub hands this step `bash -e`, and `set -uo pipefail` does not
+          # clear it. Half the commands below MUST fail — that is the negative
+          # assertion — so under -e the shell dies on the expected failure
+          # before the line that judges it ever runs. Verdicts are read from
+          # captured exit codes here, so -e has to go.
+          set +e
+          set -uo pipefail
+
+          cat > /tmp/offer.yml <<'YML'
+          name: ci-offer
+          to: echo
+          number_of_calls: 1
+          max_concurrent: 1
+          calls_per_second: 1
+          ptime: 20
+          maxptime: 30
+          steps:
+            - invite
+            - wait_for_answer
+            - ack_answer
+            - hangup
+          YML
+          sed '/ptime/d' /tmp/offer.yml > /tmp/bare.yml
+
+          # 1. Assertions, both directions. `trunk-offer-check` listens and
+          # checks the SDP it is offered; a client dials it.
+          #
+          # The negative case is the point. That a compliant offer passes only
+          # proves the scenario ran; that a NON-compliant one FAILS proves
+          # check_it is wired to the call's verdict, which is the whole reason
+          # to write the check instead of reading a capture.
+          timeout 120 ./bin/voipappz test scenario trunk-offer-check --out /tmp/uas & server=$!
+          sleep 5
+          timeout 120 ./bin/voipappz test scenario /tmp/offer.yml --out /tmp/uac -d 127.0.0.1:5080
+          client=$?
+          wait $server; served=$?
+          [ $client -eq 0 ] || { echo "!! the client scenario failed (exit $client)" >&2; exit 1; }
+          [ $served -eq 0 ] || { echo "!! assert_body rejected a compliant offer (exit $served)" >&2; exit 1; }
+
+          timeout 120 ./bin/voipappz test scenario trunk-offer-check --out /tmp/uas2 & server=$!
+          sleep 5
+          timeout 120 ./bin/voipappz test scenario /tmp/bare.yml --out /tmp/uac2 -d 127.0.0.1:5080 || true
+          wait $server; served=$?
+          [ $served -ne 0 ] || { echo "!! assert_body passed an offer with no a=ptime — check_it is not wired" >&2; exit 1; }
+
+          # 2. Media. `call` carries three seconds of RTP, so this exercises the
+          # generated pcap and the raw socket replaying it needs.
+          #
+          # The far end is SIPp's OWN uas, not another of our scenarios: two of
+          # ours meeting with media trips a segfault inside SIPp's pcap cleanup
+          # AFTER the dialog completes (both 200s sent, BYE answered). That is
+          # SIPp's bug, not the scenario's, and it must not gate this repo.
+          .cache/sipp -sn uas -p 5085 -m 1 -nostdin >/tmp/uas-builtin.log 2>&1 & farend=$!
+          sleep 3
+          # Keep the far end's output: a uas that died on startup would
+          # otherwise show up only as a client that dialled nothing.
+          kill -0 $farend 2>/dev/null || {
+            echo "!! SIPp's own uas did not stay up" >&2
+            cat /tmp/uas-builtin.log >&2
+            exit 1
+          }
+          timeout 120 ./bin/voipappz test scenario call --to echo -d 127.0.0.1:5085 --out /tmp/media
+          media=$?
+          # Reaped, never waited on: `-m 1` only exits once a call arrives, so
+          # a client that never dialled would hang this step until the job
+          # timeout instead of reporting the failure it already knows about.
+          kill $farend 2>/dev/null
+          wait $farend 2>/dev/null
+          [ $media -eq 0 ] || { echo "!! the media scenario failed (exit $media)" >&2; exit 1; }
+          echo "round trip ok: offer asserted both ways, media replayed"
 
   # A NODE ON A CLEAN HOST, WITH NOTHING ELSE. The integration job below proves
   # registration against a real mothership; this one proves the thing that job

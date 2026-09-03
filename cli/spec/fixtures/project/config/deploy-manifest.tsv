@@ -1,0 +1,64 @@
+# WHICH FILES A DEPLOY SHIPS, and where they land on the target.
+#
+#   <repo-relative source> <TAB> <absolute path on the target> [<TAB> flags]
+#
+# Flags (comma-separated, optional):
+#   host-generated   written by `voipappz setup` ON THE HOST and gitignored, so
+#                    it never exists in a checkout or in CI. Still shipped, but
+#                    its absence from the repo is not an error.
+#
+# WHY THIS IS DATA AND NOT CODE. It is a property of THIS STACK — which configs
+# this compose file needs on a node — not of whatever tool does the copying. The
+# CLI is moving to va-crystal (docs/next-cli-boundary.md) and `deploy` is
+# becoming shell; both read this. A Crystal constant could not be read by either
+# once they part company, and a second copy is how two lists drift.
+#
+# THE INVARIANT THIS EXISTS FOR (pbx20, 2026-06-04/05): every relative
+# config-file bind-mount in docker-compose.yaml must appear here. A missing
+# entry means the source does not exist on the target, so Docker creates an
+# empty DIRECTORY and mounts it OVER the image's baked config. Two services came
+# up broken that way — FreeSWITCH on dev-tree mounts, and kamailio on a
+# `kamailio.lua` that compose mounted but no deploy ever copied.
+#
+# `scripts/check-deploy-manifest.sh` enforces it, in `make checks` and in CI.
+
+docker-compose.yaml	/opt/va/docker-compose.yaml
+# Itself. The binary resolves this file against the project root, which on a
+# deployed node is /opt/va — so a manifest that never ships leaves `voipappz
+# checks` on that node reading a path that does not exist.
+config/deploy-manifest.tsv	/opt/va/config/deploy-manifest.tsv
+# The service catalog, for the same reason: `up` reads it to know what to start.
+config/services.tsv	/opt/va/config/services.tsv
+.env	/opt/va/.env	host-generated
+config/kong/kong.yaml	/opt/va/config/kong/kong.yaml
+config/va.yaml	/opt/va/config/va.yaml	host-generated
+
+# app profile (ported from va-installer 2026-07-02)
+config/pgcat/pgcat.toml	/opt/va/config/pgcat/pgcat.toml
+config/nats/nats.conf	/opt/va/config/nats/nats.conf
+config/gatus/config.node.yaml	/opt/va/config/gatus/config.node.yaml
+
+# Kamailio KEMI Lua hooks. Ships even though the cfg only calls into it when
+# built with -A WITH_LUA: the file must exist on the target before the flag can
+# ever be flipped, and shipping it unconditionally keeps the bind mount from
+# empty-dir-clobbering /etc/kamailio/lua.
+config/kamailio/lua/custom.lua	/opt/va/config/kamailio/lua/custom.lua
+
+# kamailio-ingress (INGRESS SBC, incoming direction). Full KEMI: the cfg wires
+# the engine and the .lua holds every route, so the cfg is useless without it —
+# both must ship.
+config/kamailio/ingress/kamailio.cfg	/opt/va/config/kamailio/ingress/kamailio.cfg
+config/kamailio/ingress/kamailio.lua	/opt/va/config/kamailio/ingress/kamailio.lua
+
+# tls.so's config. The ingress terminates TLS for the SIP plane (the egress
+# dropped it in 69dd660), and enable_tls=1 with an unreadable config or cert
+# exits kamailio 255 — so this must be a FILE on the target, not an empty dir
+# docker invented over the mount.
+config/kamailio/ingress/tls.cfg	/opt/va/config/kamailio/ingress/tls.cfg
+
+# The ingress's destinations. GENERATED from va.yaml by `voipappz setup` and
+# rewritten by `voipappz sbc ingress sync`, but tracked and shipped like any
+# other config: compose bind-mounts it, and a missing bind-mount source makes
+# docker create an empty DIRECTORY over the path — kamailio then reads no
+# destinations and 404s every call.
+config/kamailio/ingress/dispatcher.list	/opt/va/config/kamailio/ingress/dispatcher.list

@@ -1,0 +1,18 @@
+# Registration load — a distinct account per call, with no data file.
+#
+#   voipappz test scenario register
+#
+# [call_number] is a SIPp keyword substituted per call, so this registers
+# loadtest1, loadtest2, loadtest3 ... rather than the same account N times.
+# A real account set belongs in a CSV instead: set `scenario_variables` to its
+# path and use [field0] / [field1] here.
+name: register
+
+number_of_calls: 100
+max_concurrent: 50
+calls_per_second: 10
+
+steps:
+  # With a password this becomes REGISTER, 401, REGISTER+auth, 200 — the whole
+  # digest exchange, which is what actually loads the registrar.
+  - register 'loadtest[call_number]' 'loadtest'

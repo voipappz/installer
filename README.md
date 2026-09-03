@@ -247,6 +247,39 @@ The disc is cut and published from the voipappz/mothership repository.
 | Phones never register, health shows a FreeSWITCH profile down | something else on the machine holds one of the node's SIP ports — see [Ports](#ports); `ss -lntup \| grep -E ':(5060\|5061\|5066\|5070\|5081\|5090)'` names it |
 | Wrong mothership | rerun with `VA_API_URL=https://…` (it is persisted to `va.yaml`) |
 
+## The `voipappz` CLI
+
+This repository is also the home of the `voipappz` CLI's source, `cli/`, since
+2026-09-03. It is the glue that installs the platform: `voipappz bootstrap`
+installs a mothership, `voipappz node install` launches the installer above,
+and the same source compiled with `-Dnode_runtime` is the CLI inside the node
+image (`docker exec va-voip voipappz …`). The mothership repository, where it
+lived, is private; the installer is public, so the source and the binaries
+live where anyone who can run the installer can reach them.
+
+`install.sh` never builds, fetches or runs a host binary. It only runs the
+copy inside the node image.
+
+Install the published binary on any linux amd64 or Apple silicon machine:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/scripts/install-cli.sh | sh -s -- --release
+```
+
+Build it from this checkout (Docker only, no Crystal toolchain):
+
+```sh
+make build          # static host binary at bin/voipappz
+make cli-node-build # the -Dnode_runtime binary the node image carries
+make cli-test       # the spec suite
+make install-cli    # put bin/voipappz on PATH
+```
+
+Releases (`git tag vX.Y.Z && git push origin vX.Y.Z`) publish
+`voipappz-linux-amd64`, `voipappz-node-linux-amd64`, `voipappz-darwin-arm64`
+and their `.sha256` files. va-crystal pins one of those tags for the binary it
+bakes into `nirlevi/va-crystal:node`.
+
 ## More
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) — changing the installer: `make check`,
@@ -254,4 +287,5 @@ The disc is cut and published from the voipappz/mothership repository.
 - CI runs on Ubuntu 22.04 and 24.04 on every push: unit tests, a clean-host
   install (Docker Hub, local archive, URL archive), a full install driven
   through a real terminal, registration and customer handling against a real
-  mothership, and the running node's health and SIP.
+  mothership, and the running node's health and SIP. The CLI job runs the
+  spec suite, links both static binaries, and drives a SIPp round trip.

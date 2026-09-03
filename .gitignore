@@ -5,3 +5,9 @@ CLAUDE.md
 tests/lab.yml
 
 .claude/
+
+# The CLI build. cli/.gitignore covers its own bin/, lib/ and .shards/; this
+# is the copy `make build` puts where consumers run it, and the SIPp the
+# scenario commands fetch.
+/bin/
+.cache/

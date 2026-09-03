@@ -1,0 +1,58 @@
+# THE SERVICE CATALOG — which service is in which profile, and what container
+# it becomes.
+#
+#   <compose service> <TAB> <container name> <TAB> <profiles> <TAB> <icon> <TAB> <port>
+#
+# profiles: comma-separated, MUST mirror the `profiles:` list in
+#           docker-compose.yaml. `up` starts services by explicit NAME, not by
+#           passing `--profile` to compose, so a service missing here is simply
+#           never started for that profile regardless of what compose says.
+#           That is how telegraf, influxdb and acmesh silently never ran —
+#           taking the whole syslog pipeline and cert issuance with them.
+# port:     primary host port, or `-` for internal-only.
+# icon:     display only.
+#
+# CONTAINER NAMES DO NOT TRACK SERVICE NAMES (2026-08-03). Compose SERVICE names
+# are unchanged because they are what containers resolve each other by —
+# kong.yaml upstreams `web:5000`, VA_DATABASE_URL is `db:5432`, pgcat and
+# telegraf likewise — so renaming them breaks docker DNS on every deployed node.
+# Container names are `va-` prefixed and ROLE-named: web -> va-app,
+# freeswitch -> va-voip, the SBC kamailio -> va-sbc (was va-ingress), the egress -> va-egress. Anything
+# doing `docker exec` must resolve through this catalog, never guess.
+#
+# WHY THIS IS DATA. `scripts/check-services.sh` cross-checks it against
+# docker-compose.yaml, and that compose file stays in THIS repo while the CLI
+# moves to va-crystal (docs/next-cli-boundary.md). A guard that cannot travel
+# with the code has to stop being part of it.
+
+postgres	va-postgres	app	box	5433
+pgcat	va-pgcat	app	box	-
+redis	va-redis	app	box	6379
+
+# app only. The node's NATS check is FATAL (startup_checks.cr exits 1 after its
+# retries, unlike the FreeSWITCH and InfluxDB probes), so a voip-only node must
+# point VA_NATS_URL at a reachable broker — the `nats:$VA_NATS_HOST` extra_host
+# on the voip service is what makes that resolvable.
+nats	va-nats	app	box	4222
+
+minio	va-minio	storage	box	9000
+web	va-app	app	net	5000
+admin	va-admin	app	net	7000
+kong	va-kong	app	net	8000
+kamailio-ingress	va-sbc	app	phone	5060
+gatus	va-gatus	app	gear	8080
+mailpit	va-mailpit	app	mail	8025
+
+# Missing from this catalog until 2026-07-29, so `up` (which starts by NAME)
+# never started them: no telegraf meant every service's syslog went nowhere, and
+# no acmesh meant TLS could never be issued.
+influxdb	va-influxdb	app	db	8181
+telegraf	va-telegraf	app	gear	-
+acmesh	va-acmesh	app	lock	-
+ofelia	va-ofelia	app	gear	-
+
+# The SIP plane, one container (was kamailio-egress/va-egress, freeswitch/va-voip
+# and node/va-node — see the `voip` service in docker-compose.yaml). Port 5060
+# because that is what an operator looks for on a voip node; the node's 4000 and
+# FreeSWITCH's 8021 live in the same container and are reachable there too.
+voip	va-voip	voip	phone	5060

@@ -1,0 +1,29 @@
+# An IVR probe: call, enter a PIN, hang up. This is the scenario the native SIP
+# client in helpers/sip.cr cannot do — the digits are real RFC 4733 events
+# replayed from a generated pcap, not signalling.
+#
+#   voipappz test scenario dtmf
+#
+# Needs root (or the container) to replay media: SIPp opens a raw socket for it.
+name: dtmf
+destination: 127.0.0.1:5160
+to: ivr
+from_user: loadtest
+
+number_of_calls: 1
+max_concurrent: 1
+calls_per_second: 1
+
+# rfc2833 sends the digits in the RTP stream. `info` sends SIP INFO instead, for
+# a target that only understands out-of-band DTMF.
+dtmf_mode: rfc2833
+
+steps:
+  - invite
+  - wait_for_answer
+  - ack_answer
+  # Let the IVR finish its greeting before dialling into it.
+  - sleep 2
+  - send_digits '1234#'
+  - sleep 2
+  - hangup

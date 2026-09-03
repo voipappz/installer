@@ -1,0 +1,48 @@
+# Stands in for an ED-137 ATM trunk peer and asserts what it is offered.
+#
+#   voipappz test scenario ed137-offer
+#   # then route a call at 127.0.0.1:5080
+#
+# Every check below FAILS THE CALL when it does not hold, so the verdict lands
+# in SIPp's exit code and failure counters — a CI gate, not a capture someone
+# reads. The enforcement lives in va-crystal (egress Kamailio and FreeSWITCH);
+# this file only says what compliance looks like on the wire.
+#
+# Values here are placeholders from the project plan. Confirm each against the
+# SRS before treating a green run as evidence.
+name: ed137-offer
+
+source_port: 5080
+number_of_calls: 1
+max_concurrent: 1
+
+steps:
+  - wait_for_call
+
+  # ── Headers, injected on outbound ATM INVITEs ──────────────────────────
+  # TODO-014 — WG67-Version
+  - assert_header 'WG67-Version:' 'phone'
+  # TODO-015 — WG67-CallType, set from the dial prefix
+  - assert_header 'WG67-CallType:' '.'
+  # TODO-016 — Priority maps to emergency / urgent / normal
+  - assert_header 'Priority:' '(emergency|urgent|normal)'
+  # TODO-017 — Subject carries the call label
+  - assert_header 'Subject:' '.'
+
+  # ── SDP ────────────────────────────────────────────────────────────────
+  # TODO-007 — packetization
+  - assert_body 'a=ptime:20'
+  - assert_body 'a=maxptime:30'
+  # TODO-006 — G.711 A-law ONLY. The positive check alone would pass an offer
+  # that also lists PCMU or G.729, so the prohibitions carry the requirement.
+  - assert_body 'm=audio [0-9]+ RTP/AVP 8'
+  - refute_body 'a=rtpmap:0 PCMU'
+  - refute_body 'a=rtpmap:18 G729'
+  # TODO-008 — RFC 4733 DTMF, and no comfort noise: VAD off means continuous
+  # RTP, so a CN payload in the offer contradicts the requirement.
+  - assert_body 'a=rtpmap:[0-9]+ telephone-event/8000'
+  - refute_body 'CN/8000'
+
+  - send_ringing
+  - answer
+  - wait_for_hangup

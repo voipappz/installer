@@ -4,7 +4,8 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help check install install-archive install-no-register test shellcheck \
-	up down start stop logs health cli node-preflight
+	up down start stop logs health cli node-preflight \
+	cli-build cli-node-build cli-test build install-cli
 
 B = \033[1m
 C = \033[36m
@@ -28,8 +29,75 @@ help:
 	  'down'       'docker stop $(NODE)                        (alias: stop)' \
 	  'health'     'docker exec $(NODE) voipappz health        — the 16-check verdict' \
 	  'logs'       'docker logs -f --tail 100 $(NODE)' \
-	  'cli'        'docker exec -it $(NODE) voipappz $$ARGS     — make cli ARGS="sbc egress status"'
+	  'cli'        'docker exec -it $(NODE) voipappz $$ARGS     — make cli ARGS="sbc egress status"' \
+	  'build'      'compile cli/ (static, in Docker) and put the host binary at bin/voipappz' \
+	  'cli-node-build' 'the -Dnode_runtime binary va-crystal bakes into the node image' \
+	  'cli-test'   'the CLI spec suite (in Docker)' \
+	  'install-cli' 'put bin/voipappz on PATH (PREFIX=/usr/local/bin; ARGS=--release for the published one)'
 	@printf '\n  $(D)docs: README.md (operators)  DEVELOPMENT.md (developers)  CLAUDE.md (engineering notes)$(R)\n\n'
+
+# ---------------------------------------------------------------- the CLI
+#
+# cli/ is the voipappz CLI's SOURCE, moved here from the mothership on
+# 2026-09-03 so it can be public while the mothership is not. One source, two
+# binaries: the host one (bin/voipappz — `voipappz bootstrap` installs a
+# mothership, `voipappz node install` launches install.sh) and the
+# -Dnode_runtime one, which va-crystal fetches from this repo's releases and
+# bakes into nirlevi/va-crystal:node. install.sh itself never builds, fetches
+# or runs either: it only runs the copy inside the image.
+#
+# In Docker, never on the host: nothing here assumes a Crystal toolchain, and
+# the alpine image is the same one the release workflow uses, so a workstation
+# build and a released build are the same binary. Static, always: the SIP
+# suites and the mothership's ISO run it FROM THE HOST, where a musl dynamic
+# build cannot exec.
+CRYSTAL_IMAGE ?= crystallang/crystal:1.16.3-alpine
+
+# The REPO ROOT is mounted, not cli/, so `shards` sees the lock file next to
+# the manifest and the specs can reach their fixtures under cli/spec.
+CLI_RUN = docker run --rm $(shell test -t 0 && echo -t) -v "$(CURDIR):/w" -w /w/cli $(CRYSTAL_IMAGE) sh -lc
+
+# `shards check` first: `shards install` on every build re-resolves the
+# dependency graph over the network for no gain. shard.lock is committed, so
+# what it installs is pinned — see cli/.gitignore for why that matters.
+CLI_SHARDS = (shards check >/dev/null 2>&1 || shards install --skip-postinstall)
+
+# chown back: the container is root, so bin/, lib/ and .shards/ land root-owned
+# and the NEXT run cannot write them — `shards install` then fails as Permission
+# denied on a tree the operator appears to own.
+CLI_CHOWN = chown -R $(shell id -u):$(shell id -g) bin lib .shards 2>/dev/null || true
+
+cli-build: ## Compile the host CLI from cli/ (static, in Docker)
+	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug; s=$$?; $(CLI_CHOWN); exit $$s'
+
+# The NODE binary. `-Dnode_runtime` drops the host-compose lifecycle surface
+# (up/down/restart/status/deploy/portal…) — a genuinely different program,
+# which is why it is a separate target and a separate release asset.
+cli-node-build: ## Compile the -Dnode_runtime CLI (what the node image carries)
+	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug -Dnode_runtime -o bin/voipappz-node; s=$$?; $(CLI_CHOWN); exit $$s'
+
+cli-test: ## The CLI spec suite (in Docker)
+	$(CLI_RUN) '$(CLI_SHARDS) && crystal spec --no-color; s=$$?; $(CLI_CHOWN); exit $$s'
+
+# The binary every consumer runs. cli/bin/voipappz is the compiler's output;
+# bin/voipappz is the one the mothership's Makefile, its SIP suites and its ISO
+# bake copy from this checkout when it sits beside theirs.
+build: cli-build ## Build the host CLI binary at bin/voipappz
+	@mkdir -p bin
+	@cp cli/bin/voipappz bin/voipappz
+	@chmod +x bin/voipappz
+	@echo "cli binary: $$(./bin/voipappz --version)"
+
+# File target: consumers build ONCE when the binary is absent instead of
+# recompiling on every call. `make build` forces a refresh.
+bin/voipappz:
+	$(MAKE) build
+
+#   make install-cli                      # this checkout, building it if needed
+#   make install-cli PREFIX=~/.local/bin  # no sudo
+#   make install-cli ARGS=--release       # the published binary instead
+install-cli: ## Put the voipappz CLI on PATH (PREFIX=/usr/local/bin)
+	@PREFIX="$(if $(PREFIX),$(PREFIX),/usr/local/bin)" sh scripts/install-cli.sh $(ARGS)
 
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from
 # its container when it is not installed, so this needs nothing but docker.
@@ -37,6 +105,7 @@ check:
 	test -x install.sh
 	sh -n install.sh
 	dash -n install.sh
+	sh -n scripts/install-cli.sh && dash -n scripts/install-cli.sh
 	bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
 	$(MAKE) --no-print-directory shellcheck
 	git diff --check
@@ -45,7 +114,7 @@ check:
 	bash tests/unit.sh
 	@printf '$(B)check green$(R)\n'
 
-SHELLCHECK_FILES = install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+SHELLCHECK_FILES = install.sh scripts/install-cli.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
 
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \

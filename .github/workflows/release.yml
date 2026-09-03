@@ -1,0 +1,164 @@
+name: release
+
+# A release of this repository is the voipappz CLI, built from cli/:
+#
+#   voipappz-linux-amd64         the CLI, host surface — `voipappz bootstrap`
+#                                installs a mothership, `voipappz node install`
+#                                launches install.sh
+#   voipappz-node-linux-amd64    the CLI, -Dnode_runtime — what va-crystal
+#                                bakes into nirlevi/va-crystal:node
+#   voipappz-darwin-arm64        the host CLI for laptops; nothing depends on it
+#
+# The source moved here from the mothership on 2026-09-03 so it can be public
+# while the mothership is not: a public installer cannot fetch a release asset
+# from a private repository, and va-crystal's image build has the same
+# problem. install.sh does not consume any of these — it runs the CLI inside
+# the node image — so a release here never changes what `curl | sh` installs.
+#
+# THE JOB GRAPH IS THE POINT. `publish: needs: build` over a matrix means one
+# leg that cannot succeed skips the release entirely — the mothership's v0.1.2
+# carried NO assets that way. So the producers are INDEPENDENT and each uploads
+# its own work: a slow macOS queue cannot cost you the linux CLI.
+#
+# Trigger: push a version tag, e.g.  git tag v0.3.0 && git push origin v0.3.0
+# (or run manually from the Actions tab).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag/version for the release (e.g. v0.3.0)"
+        required: true
+
+permissions:
+  contents: write   # create the release + upload assets
+
+env:
+  # The image every build uses — workstation (`make build`), CI and release
+  # alike, so a binary an operator builds locally is the binary that ships.
+  # crystallang images are published for amd64 ONLY; a linux-arm64 job pulled
+  # the amd64 image and died with `exec format error`, hence no arm64 leg.
+  CRYSTAL_IMAGE: crystallang/crystal:1.16.3-alpine
+
+jobs:
+  # Creates the release so the producers below have somewhere to upload,
+  # without any of them racing to create it. No compilation, no checkout of
+  # consequence — this must never be the step that fails.
+  prepare:
+    name: create the release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the release if it does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "${{ github.repository }}" \
+                 --title "$TAG" --generate-notes
+
+  cli-linux:
+    name: voipappz-linux-amd64 (+ node)
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # TWO BINARIES FROM ONE SOURCE, and they are genuinely different programs:
+      # `-Dnode_runtime` is read by nine `register_sub_command` blocks in
+      # cli/src/voipappz.cr, so the node build has no host-compose lifecycle
+      # surface at all. va-crystal's node image consumes the node one; the
+      # mothership's ISO, its `make build` fallback and operators consume the
+      # host one.
+      #
+      # --static (musl) is a CROSS-REPO contract, not a preference: va-crystal
+      # copies this binary into a Debian-based image, and the SIP suites and the
+      # ISO exec it from the host. Dropping it breaks both, remotely, with no
+      # local signal. One container run, so `shards install` resolves once.
+      - name: Build (linux, static)
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w/cli "$CRYSTAL_IMAGE" sh -lc '
+            set -eu
+            shards install --skip-postinstall
+            shards build voipappz --release --static --no-debug
+            mv bin/voipappz ../voipappz-linux-amd64
+            shards build voipappz --release --static --no-debug -Dnode_runtime
+            mv bin/voipappz ../voipappz-node-linux-amd64
+            cd .. && sha256sum voipappz-linux-amd64 voipappz-node-linux-amd64'
+
+      # Smoke the HOST binary, and prove the NODE binary is actually the node
+      # one — fetching the wrong asset into the node image is the failure this
+      # catches, and it is otherwise invisible until a node misbehaves.
+      - name: Smoke test
+        run: |
+          chmod +x voipappz-linux-amd64 voipappz-node-linux-amd64
+          ./voipappz-linux-amd64 --version
+          ./voipappz-node-linux-amd64 --version
+
+          # `status` present in one, absent in the other, is the cheapest proof
+          # the two assets are not the same binary under different names.
+          #
+          # NOT `grep -qv`: that succeeds when ANY line fails to match, which is
+          # every multi-line help output ever printed — so it passed
+          # unconditionally and could never have caught the thing it is for.
+          # Absence is `! grep -q`.
+          ./voipappz-linux-amd64 --help | grep -qE '^[[:space:]]+status\b' || {
+            echo "!! the host build has no 'status' — is this the node binary?" >&2; exit 1; }
+          if ./voipappz-node-linux-amd64 --help | grep -qE '^[[:space:]]+status\b'; then
+            echo "!! the -Dnode_runtime build still carries the host lifecycle surface" >&2
+            exit 1
+          fi
+
+      - name: Checksums
+        run: |
+          sha256sum voipappz-linux-amd64      > voipappz-linux-amd64.sha256
+          sha256sum voipappz-node-linux-amd64 > voipappz-node-linux-amd64.sha256
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
+            voipappz-linux-amd64 voipappz-linux-amd64.sha256 \
+            voipappz-node-linux-amd64 voipappz-node-linux-amd64.sha256
+
+  # Convenience for developers on Apple silicon — `voipappz portal deploy` is a
+  # laptop command. NOTHING depends on it: install-cli.sh fetches linux on
+  # linux, and a macOS runner that queues for ten minutes must not be able to
+  # hold a release hostage, which is precisely what a build matrix lets it do.
+  cli-darwin:
+    name: voipappz-darwin-arm64
+    needs: prepare
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin the compiler: brew installs the latest, under which the mcp shard
+      # fails to compile.
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: 1.16.3
+
+      # No --static: Crystal cannot statically link on Darwin.
+      - name: Build (macOS)
+        working-directory: cli
+        run: |
+          shards install --skip-postinstall
+          shards build voipappz --release --no-debug
+          mv bin/voipappz ../voipappz-darwin-arm64
+
+      - name: Smoke test
+        run: |
+          ./voipappz-darwin-arm64 --version
+          shasum -a 256 voipappz-darwin-arm64 > voipappz-darwin-arm64.sha256
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
+            voipappz-darwin-arm64 voipappz-darwin-arm64.sha256

@@ -1,0 +1,19 @@
+name: voipappz
+version: 0.1.0
+description: VoIPAppz Infrastructure CLI
+
+targets:
+  voipappz:
+    main: src/voipappz.cr
+
+crystal: ">= 1.10.0"
+
+dependencies:
+  admiral:
+    github: jwaldrip/admiral.cr
+    version: ~> 1.12
+  mcp:
+    github: spider-gazelle/mcp.cr
+  nats:
+    github: jgaskins/nats
+    version: ~> 1.6

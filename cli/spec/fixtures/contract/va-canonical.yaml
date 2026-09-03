@@ -1,0 +1,52 @@
+# CANONICAL va.yaml contract fixture — twin copies live in:
+#   cli:        spec/fixtures/contract/va-canonical.yaml
+#   va-crystal: node/spec/fixtures/contract/va-canonical.yaml
+# Both repos' suites must parse THIS shape; the CLI suite additionally
+# asserts that re-serialization stays in this shape (string gateways).
+# Change it in both places in one release, or the repos drift — a mapping
+# gateway once shipped from the CLI and crash-looped every va-node.
+---
+organization:
+  name: ContractOrg
+  domain: pbx.contract.example
+  email: admin@contract.example
+  language: en
+  timezone: UTC
+  environment: production
+
+customers:
+- name: contract
+  uuid: 00000000-0000-4000-8000-0000000000c1
+  node_uuids:
+  - 00000000-0000-4000-8000-0000000000n1
+  profile: {}
+
+nodes:
+- uuid: 00000000-0000-4000-8000-0000000000n1
+  name: contract-node
+  type: app
+  roles:
+  - app
+  - switch
+  profile:
+    ip_address_internal: 10.10.0.10
+    ip_address_external: 198.51.100.10
+    eventsocket_address: 10.10.0.10
+
+sip_interfaces:
+- uuid: 00000000-0000-4000-8000-0000000000s1
+  name: sofia
+  node_uuid: 00000000-0000-4000-8000-0000000000n1
+  profile:
+    port_internal: "5080"
+    port_external: "5090"
+    ip_address_internal: 10.10.0.10
+    ip_address_external: 198.51.100.10
+    ip_address_internal_int_sip: 10.10.0.10
+    ip_address_internal_ext_sip: 10.10.0.10
+    ip_address_external_int_rtp: 10.10.0.10
+    ip_address_external_ext_rtp: 198.51.100.10
+  gateways:
+  - '203.0.113.7'
+  - '203.0.113.0/24'
+  - '198.51.100.0/24|00000000-0000-4000-8000-0000000000g1'

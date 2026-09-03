@@ -1,0 +1,26 @@
+# The smallest scenario that puts real RTP on the wire: one answered call
+# through the ingress, three seconds of audio, then we hang up.
+#
+#   voipappz test scenario call
+#
+# `destination` is the local ingress. Aim it elsewhere without editing the file:
+#   voipappz test scenario call -d 10.0.0.5:5060
+name: call
+destination: 127.0.0.1:5160
+
+# No domain, so the URI keeps SIPp's [remote_ip] and the manifest stays portable
+# across boxes. This is the user the ingress has to route.
+to: echo
+from_user: loadtest
+
+number_of_calls: 1
+max_concurrent: 1
+calls_per_second: 1
+
+steps:
+  - invite
+  - wait_for_answer
+  - ack_answer
+  - sleep 3
+  # We hang up rather than wait: an echo target has no reason to.
+  - hangup
