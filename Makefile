@@ -72,9 +72,11 @@ cli-build: ## Compile the host CLI from cli/ (static, in Docker)
 
 # The NODE binary. `-Dnode_runtime` drops the host-compose lifecycle surface
 # (up/down/restart/status/deploy/portal…) — a genuinely different program,
-# which is why it is a separate target and a separate release asset.
+# which is why it is a separate target and a separate release asset. `shards
+# build` has no -o, so the output is renamed afterwards; cli/bin/voipappz is
+# the node one until `make build` rebuilds the host one.
 cli-node-build: ## Compile the -Dnode_runtime CLI (what the node image carries)
-	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug -Dnode_runtime -o bin/voipappz-node; s=$$?; $(CLI_CHOWN); exit $$s'
+	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug -Dnode_runtime && mv bin/voipappz bin/voipappz-node; s=$$?; $(CLI_CHOWN); exit $$s'
 
 cli-test: ## The CLI spec suite (in Docker)
 	$(CLI_RUN) '$(CLI_SHARDS) && crystal spec --no-color; s=$$?; $(CLI_CHOWN); exit $$s'

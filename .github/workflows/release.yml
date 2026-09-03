@@ -76,16 +76,23 @@ jobs:
       # copies this binary into a Debian-based image, and the SIP suites and the
       # ISO exec it from the host. Dropping it breaks both, remotely, with no
       # local signal. One container run, so `shards install` resolves once.
+      #
+      # The container runs as root, so what it writes is root-owned on the
+      # runner and the `chmod +x` below is "Operation not permitted" — which is
+      # exactly how the first run of this workflow failed. The binaries are
+      # handed back to the runner's user before the container exits.
       - name: Build (linux, static)
         run: |
-          docker run --rm -v "$PWD:/w" -w /w/cli "$CRYSTAL_IMAGE" sh -lc '
+          docker run --rm -v "$PWD:/w" -w /w/cli \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "$CRYSTAL_IMAGE" sh -lc '
             set -eu
             shards install --skip-postinstall
             shards build voipappz --release --static --no-debug
             mv bin/voipappz ../voipappz-linux-amd64
             shards build voipappz --release --static --no-debug -Dnode_runtime
             mv bin/voipappz ../voipappz-node-linux-amd64
-            cd .. && sha256sum voipappz-linux-amd64 voipappz-node-linux-amd64'
+            cd .. && chown "$HOST_UID:$HOST_GID" voipappz-linux-amd64 voipappz-node-linux-amd64 \
+              && sha256sum voipappz-linux-amd64 voipappz-node-linux-amd64'
 
       # Smoke the HOST binary, and prove the NODE binary is actually the node
       # one — fetching the wrong asset into the node image is the failure this
