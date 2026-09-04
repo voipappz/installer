@@ -215,7 +215,7 @@ mothership, or run `va-node-install --no-register` and register later.
 
 The disc is restricted media: it holds a private container image in the clear,
 so it is distributed by presigned link and must not be re-hosted.
-See [packer/README.md](packer/README.md) to cut or publish one.
+The disc is cut and published from the voipappz/mothership repository.
 
 ## What it guarantees
 
