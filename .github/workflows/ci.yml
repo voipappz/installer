@@ -105,6 +105,47 @@ jobs:
           path: bin/voipappz
           retention-days: 1
 
+      # THE CLI AT A REAL TERMINAL, a to z. Every step above pipes, and the
+      # CLI branches on STDIN.tty?/STDOUT.tty? throughout — the setup wizard
+      # blocks on stdin only when it has one, the tables draw, the line editor
+      # arms. A prompt that moved, vanished or was reworded is invisible to all
+      # of them. Moved here from the mothership on 2026-09-04: the prompts it
+      # asserts are cli/src/commands/setup.cr's, so the test now sits with the
+      # code it tests.
+      #
+      # `setup` and `status` need a PROJECT — a directory with a
+      # docker-compose.yaml — and write config/va.yaml and .env into it. The
+      # mothership is that fixture, DOWNLOADED as its public tarball, exactly
+      # as tests/test-install.sh takes it and as the mothership's own installer
+      # does. Never cloned: no git on a target, and no credential here.
+      - name: A mothership to answer at, and expect to do the typing
+        run: |
+          curl -fL --retry 5 --retry-all-errors -o /tmp/mothership.tar.gz \
+            "https://github.com/voipappz/mothership/archive/refs/heads/${VA_MOTHERSHIP_REF:-main}.tar.gz"
+          mkdir -p /tmp/ms && tar -xzf /tmp/mothership.tar.gz -C /tmp/ms
+          echo "MS=$(echo /tmp/ms/mothership-*)" >> "$GITHUB_ENV"
+          sudo apt-get install -y -qq expect >/dev/null
+
+      - name: The CLI answers at a real terminal, a to z
+        run: expect tests/tty-cli.exp "$PWD/bin/voipappz" "$MS" /tmp/tty-cli.log
+
+      - name: What was typed at the terminal reached the configuration
+        # The four answers that are TYPED. The two IP answers are Enter, so
+        # they are not asserted: setup heals an address that is not bound on
+        # this host back to one that is, and asserting a healed value would be
+        # asserting the healer rather than the prompt.
+        run: |
+          grep -q '^  name: Terminal Org$'        "$MS/config/va.yaml"
+          grep -q '^  domain: cli.ci.example$'    "$MS/config/va.yaml"
+          grep -q '^  email: cli@cli.ci.example$' "$MS/config/va.yaml"
+          grep -q '^  environment: staging$'      "$MS/config/va.yaml"
+          # And --dry-run leaked nothing. It is the flag people paste into an
+          # issue, and VA_NATS_URL carries a password inside a value whose key
+          # does not say so — which an earlier version of it printed in full.
+          ! grep -q 's3cr3t-not-a-real-password' /tmp/tty-cli.log
+          ! grep -q 'Y2xpQGV4YW1wbGU6c3VwZXJzZWNyZXQ=' /tmp/tty-cli.log
+          echo "tty: four typed answers reached config/va.yaml, no secret reached the transcript"
+
       # Two checks, both self-contained: no node, no registry, no target. The
       # first run also fetches the pinned SIPp, so the download and its
       # checksum are covered here too.

@@ -1,0 +1,156 @@
+#!/usr/bin/expect -f
+# THE CLI AT A REAL TERMINAL, a to z.
+#
+#   expect tests/tty-cli.exp bin/voipappz <project-dir> [logfile]
+#
+# <project-dir> IS WRITTEN TO. Step b is `voipappz setup`, which writes
+# config/va.yaml, .env and config/kamailio/ingress/dispatcher.list into it. CI
+# passes the checkout because a runner is disposable; running this by hand
+# wants a copy, not your working tree. There is deliberately no make target
+# for that reason.
+#
+# Every command below runs on its own pty. That is the point, not a detail:
+# the CLI branches on `STDIN.tty?` and `STDOUT.tty?` all over — the wizard
+# blocks on stdin only when it has one (setup.cr:701), the tables draw box
+# characters and colour, the line editor arms itself — and CI has never once
+# run it that way. `make cli-test` runs specs, the SIPp step pipes; both take
+# the non-tty branch of every one of those. A prompt that vanished, moved, or
+# was reworded is invisible to all of them.
+#
+# The mothership installer already has this gate (tests/tty-install.exp, used
+# by the health-check job). This is the same idea pointed at the CLI, which is
+# the interface the installer is being replaced BY.
+#
+# WHAT IS AND IS NOT HERE. Everything that configures or inspects, which is
+# everything that runs on a machine with no stack up and no registry
+# credential. `up`/`health`/`deploy` need both, and the health-check job
+# already installs a whole mothership; duplicating that here would double a
+# 30-minute job to re-prove it. `checks` is deliberately out too: it asserts a
+# LIVE SIP plane (kamailio answering OPTIONS on 5060), so it cannot pass here,
+# and its static half is the build-test job's, in shell, by design.
+set timeout 300
+
+set cli [lindex $argv 0]
+set dir [lindex $argv 1]
+set log [lindex $argv 2]
+if {$log eq ""} { set log /tmp/tty-cli.log }
+
+# Everything the terminal saw, for the assertions that follow this script.
+# Colour codes and all — a grep that has to tolerate them is a grep that
+# proves the escape sequences were really emitted.
+log_file -noappend $log
+log_user 1
+
+set env(VA_PROJECT_DIR) $dir
+# The answers are typed, not preset: VOIPAPPZ_* would skip every prompt
+# (setup.cr:682) and leave exactly the thing under test unexercised.
+foreach k [array names env VOIPAPPZ_*] { unset env($k) }
+
+set failures 0
+
+# One command, one pty, exit code judged. Nothing here reads output — the
+# transcript is on disk and the CI step greps it, so a new assertion does not
+# mean new Tcl.
+proc cli {label args} {
+    global cli failures
+    puts "\n\[$label\] voipappz $args"
+    eval spawn [linsert $args 0 $cli]
+    expect {
+        eof     { }
+        timeout { puts "\n!! $label: no output for 300s"; incr failures; return 99 }
+    }
+    catch wait result
+    set rc [lindex $result 3]
+    if {$rc != 0} { puts "  -> exit $rc" }
+    return $rc
+}
+
+proc must {label args} {
+    global failures
+    set rc [eval cli [linsert $args 0 $label]]
+    if {$rc != 0} {
+        puts "!! $label must succeed, exited $rc"
+        incr failures
+    }
+    return $rc
+}
+
+# ---------------------------------------------------------------- a. it runs
+must "a. version" --version
+
+# ------------------------------------------------- b. the wizard, at a prompt
+#
+# The IP answers are ENTER, on purpose. setup heals an address that is neither
+# bound here, nor this host's detected public one, back to one that is
+# (setup.cr:627-637) — so a typed 198.51.100.x would be silently corrected and
+# the assertion after this script would be asserting the healer, not the
+# prompt. The defaults are already healthy, so accepting them leaves the four
+# TYPED answers as the only thing that can reach the files.
+#
+# The domain is a real-looking one for the same reason: with .local or empty,
+# step 3 skips the Let's Encrypt question entirely (setup.cr:733) and the
+# branch goes untested.
+puts "\n\[b. setup\] the wizard, every answer typed at the terminal"
+spawn $cli setup
+expect {
+    -re {Organization name \S*: }                { send "Terminal Org\r"; exp_continue }
+    -re {Domain \S*: }                           { send "cli.ci.example\r"; exp_continue }
+    -re {Admin email \S*: }                      { send "cli@cli.ci.example\r"; exp_continue }
+    -re {External IP \S*: }                      { send "\r"; exp_continue }
+    -re {Choose internal IP \S*: }               { send "\r"; exp_continue }
+    -re {Internal IP \S*: }                      { send "\r"; exp_continue }
+    -re {Configure Let's Encrypt now\? \S*: }    { send "n\r"; exp_continue }
+    -re {Environment \S*: }                      { send "staging\r"; exp_continue }
+    -re {Proceed with setup\? \S*: }             { send "yes\r"; exp_continue }
+    -re {Enter custom IP \S*: } {
+        puts "\n!! the interface menu did not accept an empty choice"
+        exit 3
+    }
+    timeout {
+        puts "\n!! timed out at a prompt — one moved, was reworded, or never came"
+        exit 2
+    }
+    eof
+}
+catch wait result
+set rc [lindex $result 3]
+if {$rc != 0} { puts "!! setup exited $rc"; incr failures }
+
+# ------------------------------------------- c-g. read back what it just wrote
+must "c. dump"      dump
+must "d. config"    config --endpoints
+must "e. env"       env
+
+# `status` is the one command whose FAILURE is the expected answer here:
+# nothing is up, and 3 is how it says so. Requiring 0 would mean requiring a
+# stack; ignoring the code would pass on a status command that crashed.
+set rc [cli "f. status" status -p app]
+if {$rc != 0 && $rc != 3} {
+    puts "!! status exited $rc — expected 0 (all up) or 3 (nothing up)"
+    incr failures
+}
+
+# ------------------------------------------------ h. the node install wrapper
+#
+# `node install` LAUNCHES github.com/voipappz/installer; it reimplements
+# nothing (helpers/node_install.cr:10-16). --dry-run is the whole wrapper
+# minus the install: sibling resolution, the answers derived from this
+# checkout, and the redaction. The real thing needs an image, a registry
+# credential and a machine to ruin — the installer's own CI does that, and
+# this repo's node-install job does it through this command.
+#
+# Loopback would be refused for a remote target, so the fake mothership is a
+# routable-looking address. TEST-NET-3: RFC 5737 reserves it for exactly this.
+set env(VA_API_URL) "http://203.0.113.10:5000"
+set env(VA_NATS_URL) "nats://default:s3cr3t-not-a-real-password@203.0.113.10:4222"
+set env(VA_API_AUTHORIZATION) "Basic Y2xpQGV4YW1wbGU6c3VwZXJzZWNyZXQ="
+must "h. node install" node install --dry-run
+
+# ---------------------------------------------------------------------------
+puts "\n"
+if {$failures == 0} {
+    puts "tty: the CLI answered at a real terminal, a to z"
+    exit 0
+}
+puts "tty: $failures step(s) failed"
+exit 1
