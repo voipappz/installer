@@ -1,0 +1,274 @@
+#cloud-config
+# MOVED FROM mothership/packer/autoinstall/user-data and trimmed to the node
+# case. Removed: the stack tarball unpacked to /opt/voipappz, the CLI symlink,
+# the voipappz-firstboot and voipappz-loadimages units and the image parts they
+# drained, the /etc/voipappz/installer.env answer sheet, and every mention of
+# `voipappz bootstrap`. Added: install.sh and va-node-install off the disc, and
+# the single image archive copied to /var/lib/va-crystal.
+# Kept, with the reasoning intact: offline-install with geoip off, drivers and
+# snaps off, the `direct` storage layout, `shutdown: poweroff`, the local apt
+# repository installed through apt rather than dpkg, and the two console
+# banners.
+#
+# Unattended install for the offline VA-Crystal NODE ISO
+# (packer/make-node-iso.sh).
+#
+# SCOPE: this installs an operating system that can install one VoIP node with
+# no network — Ubuntu, Docker Engine, the four tools install.sh uses, the
+# installer itself, and one `docker save` archive of the node image. It does NOT
+# install the node, and it carries nothing of a VoIPAppz mothership: no
+# Postgres, no Kong, no admin, no API, and nothing here can run `voipappz
+# bootstrap`.
+#
+# The split is deliberate and it is not a style preference:
+#
+#   * A late-command that fails ABORTS THE WHOLE INSTALL — a completed
+#     partition table, bootloader and base system, thrown away because one step
+#     returned non-zero. Keeping this phase to "copy files and install packages
+#     from a local repository" keeps the blast radius there.
+#   * Node identity and secrets must never be baked. install.sh writes
+#     config/va.yaml and .env, and it takes an Account credential; putting any
+#     of that on media clones one node's identity onto every machine built from
+#     it. So the disc installs the INSTALLER and an operator runs it.
+#   * "Ubuntu did not install" and "the node did not install" become two
+#     different, separately debuggable failures.
+autoinstall:
+  version: 1
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+# The whole `network:` key, substituted by make-node-iso.sh from the file given
+# to --network (default: autoinstall/network.default.yaml, DHCP).
+#
+# A placeholder rather than a literal block because addressing is the one thing
+# that is per-SITE: a disc with a static address baked in builds exactly one
+# machine. It configures the INSTALLER and is written through to the installed
+# system as /etc/netplan/00-installer-config.yaml, so a static address is live
+# before anything else runs. That ordering matters — install.sh derives the
+# node's internal address from the interface holding the default route, and a
+# node configured on a DHCP lease it later loses binds Kamailio to an address
+# that is gone.
+#
+# Column 0 and alone on its line: that is what the substitution matches.
+@NETWORK@
+
+  identity:
+    hostname: va-crystal-node
+    username: voipappz
+    # "voipappz" — a CONSOLE credential, expired on first boot (`chage -d 0`
+    # below) so the operator must set a real one before the machine is usable.
+    #
+    # It is written in this file, in a PUBLIC repository, so treat it as known
+    # to everyone. That is survivable at a keyboard and was not survivable over
+    # the network — see the ssh block below.
+    password: "$6$packerbake$f0YbX2Ce8MZlxHNQLX8oH3XD4R4GdxY1DSvx3MD4NHMFXed.J4rAjxjSC2HJxMbHUocmVULssJ6Mxg6O/C.RX/"
+
+  ssh:
+    # NO SSH SERVER ON SHIPPED MEDIA.
+    #
+    # This was `install-server: true` with `allow-pw: true`, and the comment
+    # above the password claimed expiry meant "no usable default password".
+    # It did not. `chage -d 0` forces a password CHANGE at first login; it does
+    # not prevent logging IN, and the password needed to get that far is the
+    # one printed above in a public repository.
+    #
+    # So every machine built from this disc answered port 22, from first boot
+    # until an operator reached the console, with a login anyone could read off
+    # GitHub — and that account carries NOPASSWD:ALL sudo. The attacker is the
+    # one who satisfies the change prompt, sets a password of their own, and
+    # owns the box; the real operator is then locked out by their own media.
+    # A node ships to a customer LAN, so this was not theoretical.
+    #
+    # The disc installs a machine that is administered AT THE CONSOLE, which is
+    # what the account was always for. Add sshd afterwards, with a key, when
+    # there is an operator to decide who may log in. NOT from
+    # /var/lib/va-crystal/debs — that repository is the closure of the packages
+    # this autoinstall installs, and openssh-server is deliberately not one of
+    # them. Offline, it comes off the disc's own Ubuntu pool:
+    #
+    #   sudo mount /dev/sr0 /mnt
+    #   sudo apt-get install -y /mnt/pool/main/o/openssh/openssh-server_*.deb
+    #
+    # or, on a machine that can reach the archive, plain
+    # `sudo apt-get install -y openssh-server`. Then authorise a key
+    # (`ssh-copy-id voipappz@<node>`) rather than re-enabling password login.
+    install-server: false
+    allow-pw: false
+
+  # Empty on purpose. `packages:` fetches from the archive mirror, which does
+  # not exist here — everything comes from the local repository in
+  # late-commands instead.
+  packages: []
+
+  # THE flag that makes this work on a machine with no internet.
+  #
+  # subiquity tests the archive mirror before installing, and the default
+  # fallback when that test fails is `abort` — so on an offline target the
+  # install stops dead at "Mirror/apply_autoinstall_config", having partitioned
+  # nothing, and the failure names the mirror rather than the missing network.
+  # `offline-install` tells it to carry on and install from the CD pool.
+  #
+  # geoip off for the same reason: mirror selection is a network round-trip
+  # that can only time out here.
+  apt:
+    fallback: offline-install
+    geoip: false
+
+  # Third-party drivers are fetched from the network — another lookup that can
+  # only hang on an isolated box, for something no VoIP node needs.
+  drivers:
+    install: false
+
+  # No snap seeding; snapd would try to reach the store.
+  snaps: []
+
+  # `direct`, not `lvm`. Ubuntu's lvm layout leaves most of the volume group
+  # unallocated, so a 100GB disk installs a root LV a fraction of that size —
+  # and this machine holds a multi-gigabyte image archive AND the layer store
+  # that archive unpacks into. A too-small root shows up much later as a
+  # `docker load` that dies at 80%.
+  storage:
+    layout:
+      name: direct
+
+  user-data:
+    disable_root: true
+
+  # POWER OFF when the install finishes, do not reboot.
+  #
+  # An auto-installer that reboots into the media it is still booting from
+  # installs forever: the firmware picks the disc again, subiquity finds
+  # /autoinstall.yaml again, and it wipes the machine it just built. Powering
+  # off breaks the loop with no timing assumption and nobody watching for the
+  # right moment.
+  shutdown: poweroff
+
+  # Shown BEFORE the install starts. Without it the first thing an operator sees
+  # is a wall of subiquity log lines with no statement of what is running, how
+  # long it takes, or whether it will ask them anything — which is what makes a
+  # working unattended install look like a hang.
+  #
+  # /dev/console, not stdout: subiquity captures the latter into its own log.
+  early-commands:
+    - |
+      cat > /dev/console <<'BANNER'
+
+      ================================================================
+        VA-Crystal VoIP node  —  Ubuntu 24.04, fully offline
+      ================================================================
+
+        Installing, unattended. You will not be asked anything.
+
+          * Ubuntu Server + Docker Engine
+          * the node installer and ONE container image
+
+        Takes 10-20 minutes. Long silent pauses are NORMAL - it is
+        copying the image archive off the disc.
+
+        THE DISK WILL BE ERASED.
+
+        This installs the machine, NOT the node. When it comes back
+        up you log in and run:  va-node-install
+
+        When it finishes the machine POWERS ITSELF OFF.
+
+      ================================================================
+
+      BANNER
+
+  late-commands:
+    # Passwordless sudo for the operator account, matching what install.sh
+    # assumes when it elevates with $SUDO.
+    - echo 'voipappz ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/voipappz
+    - chmod 0440 /target/etc/sudoers.d/voipappz
+
+    # The package repository, copied off the disc and KEPT. It stays wired up
+    # because it is the only apt source an air-gapped node has — removing it
+    # would leave the box unable to reinstall its own packages.
+    - mkdir -p /target/var/lib/va-crystal/debs
+    - cp -a /cdrom/va-crystal/debs/. /target/var/lib/va-crystal/debs/
+    - echo 'deb [trusted=yes] file:/var/lib/va-crystal/debs ./' > /target/etc/apt/sources.list.d/va-crystal-local.list
+
+    # Install from it with apt, NOT `dpkg -i`: dpkg cannot satisfy pre-depends
+    # ordering, and its usual repair `apt-get -f install` has nothing to reach
+    # for offline. A real repository lets apt order the unpacking itself and
+    # install only what this target is actually missing.
+    #
+    # `[trusted=yes]` because the repository is unsigned — it came off the same
+    # read-only medium as the installer, so there is no separate trust decision.
+    #
+    # The Dir::Etc overrides point apt at ONLY this source. Left out,
+    # `apt-get update` also tries archive.ubuntu.com, and on an offline node
+    # that is minutes of DNS and connect timeouts before it reaches the local
+    # repository it could have used immediately.
+    - curtin in-target --target=/target -- apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/va-crystal-local.list -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0 update
+    - curtin in-target --target=/target -- env DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/va-crystal-local.list -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0 install -y --no-install-recommends @OS_PACKAGES@
+    - curtin in-target --target=/target -- systemctl enable docker.service containerd.service
+
+    # The operator account is in `docker` so install.sh talks to the daemon
+    # without elevation. It handles sudo either way (pick_docker), but a node
+    # whose every docker call prompts is a node nobody wants to operate.
+    - curtin in-target --target=/target -- usermod -aG docker voipappz
+
+    # Retire the build credential: expiring it forces a new password at the
+    # first console login, so the shipped media has no usable default password
+    # while staying administrable.
+    - curtin in-target --target=/target -- chage -d 0 voipappz
+
+    # THE INSTALLER. The same install.sh the public one-line curl fetches,
+    # copied off the disc rather than downloaded — that download is precisely
+    # the step that cannot work here.
+    - mkdir -p /target/opt/va-crystal
+    - install -m 0755 /cdrom/va-crystal/install.sh /target/opt/va-crystal/install.sh
+    - install -m 0755 /cdrom/va-crystal/va-node-install /target/usr/local/bin/va-node-install
+
+    # The image archive, staged onto the disk. NOT loaded here: `docker load`
+    # needs a running daemon and there is none in the installer's /target chroot
+    # — curtin can dpkg-install Docker but cannot start it. install.sh loads it,
+    # which is also why nothing about loading is reimplemented anywhere on this
+    # disc.
+    #
+    # Copied rather than read from /cdrom at install time because the disc has
+    # to come OUT before the next boot, or the firmware picks it again and
+    # reinstalls over the machine that was just built.
+    - mkdir -p /target/var/lib/va-crystal
+    - bash -c 'if [ -f /cdrom/va-crystal/node-image.tar.gz ]; then cp /cdrom/va-crystal/node-image.tar.gz /target/var/lib/va-crystal/node-image.tar.gz && cp /cdrom/va-crystal/node-image.tar.gz.sha256 /target/var/lib/va-crystal/node-image.tar.gz.sha256; fi'
+    - cp /cdrom/va-crystal/node-image.list /target/etc/va-crystal-node-image
+
+    # Provenance. The same plain-text stamp that sits at the root of the disc,
+    # so a machine can answer where it came from without the media.
+    - cp /cdrom/va-crystal/va-crystal-node.txt /target/etc/va-crystal-node
+    - install -m 0644 /cdrom/va-crystal/motd /target/etc/motd
+
+    # LAST, so it is the final thing on screen before the machine powers off.
+    # The media has to come out before the next boot — the one step this
+    # installer cannot do for itself, so it has to be unmissable.
+    - |
+      cat > /dev/console <<'DONE'
+
+      ================================================================
+        INSTALL COMPLETE  -  powering off in a moment
+      ================================================================
+
+        DO THIS NEXT:
+
+          1. REMOVE THE DISC / ISO
+             VirtualBox: Settings > Storage > optical drive >
+                         Remove Disk from Virtual Drive
+
+          2. Power the machine back on
+
+        Leave the disc in and it will install all over again,
+        erasing what was just built.
+
+        Log in:  voipappz / voipappz   (you must change it)
+        Then:    va-node-install
+
+        That installs and registers the node from the image on this
+        disk. It needs to reach your mothership to register.
+
+      ================================================================
+
+      DONE

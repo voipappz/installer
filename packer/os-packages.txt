@@ -1,0 +1,32 @@
+# Every package the node ISO installs — the ONLY list. node-iso.pkr.hcl reads
+# it, passes it to scripts/stage-payload.sh (which downloads exactly this
+# closure) and substitutes it into the autoinstall (which installs exactly this
+# closure). A second copy would drift, and the failure mode is a package that is
+# on the disc but never installed, or an install that asks for a package the
+# disc does not carry — the second aborts the whole installation.
+#
+# On an offline box you cannot apt-get anything later, so what is not here is
+# not on the machine, ever. Keep it to what install.sh actually needs: this disc
+# installs ONE VoIP node, not a debugging workstation and not a mothership.
+#
+# Blank lines and #-comments are ignored.
+
+# Docker Engine, from download.docker.com rather than Ubuntu's older docker.io.
+# No compose plugin: the node is one `docker run` (CLAUDE.md, "Runtime
+# contract"), and install.sh neither checks for Compose nor uses it.
+docker-ce
+docker-ce-cli
+containerd.io
+
+# What install.sh itself reaches for. Its ensure_host_tools() would apt-get
+# these, which on an offline host is an `apt-get update` against
+# archive.ubuntu.com that can only time out — so they are present before it ever
+# looks, and the function returns immediately.
+#   curl             every mothership call
+#   ca-certificates  the mothership's TLS chain
+#   jq               every API response is parsed with it
+#   openssl          the certificate pin (subject, issuer, SHA-256)
+curl
+ca-certificates
+jq
+openssl

@@ -1,0 +1,86 @@
+#!/bin/sh
+# NEW in this repository. It stands where mothership/packer/scripts/firstboot.sh
+# stood, and is deliberately almost nothing by comparison: that script ran
+# `voipappz setup --env-file` and `voipappz up` from a systemd unit at first
+# boot, deriving the node's addresses from IMDS. None of that came across —
+# install.sh already does setup, registration and start, and reimplementing any
+# of it here would put two installers on one disc. What survives from
+# firstboot.sh is its central rule, in the autoinstall rather than here: node
+# identity and secrets are generated on the running machine and never baked into
+# media.
+#
+# Run the installer that came on this disc, against the image archive that came
+# with it.
+#
+#   va-node-install
+#
+# THIS IS NOT AN INSTALLER. It sets two environment variables and execs
+# /opt/va-crystal/install.sh, which is the installer — the same script the
+# public one-line curl fetches, unmodified. install.sh has carried the offline
+# path since the image archives went to S3: VA_IMAGE_SOURCE=archive with
+# VA_IMAGE_ARCHIVE naming a `docker save` archive, which it loads and retags as
+# $VA_VOIP_IMAGE. All this does is point it at the local file.
+#
+# Every other setting is install.sh's own. Put them in an answer file and the
+# installer reads it before anything else:
+#
+#   sudo install -m 0600 -o "$USER" /dev/null /opt/va-crystal/.env
+#   sudo nano /opt/va-crystal/.env      # VA_API_URL=…, VA_CUSTOMER_NAME=…, …
+#   va-node-install
+#
+# `-o "$USER"` is not decoration. install.sh runs as YOU and sudos for the
+# parts that need root, so a root-owned 0600 answer file is present but
+# unreadable to it: `[ -f ./.env ]` is true, `[ -r ./.env ]` is false, and the
+# run dies with "cannot read ./.env" before doing anything. Found by following
+# these instructions on a booted disc, 2026-08-28.
+#
+# Registration still needs to reach the mothership — the disc makes the IMAGE
+# offline, not the API. On a machine that cannot reach one, install the node
+# alone with `va-node-install --no-register` and register it later.
+set -eu
+
+INSTALLER=/opt/va-crystal/install.sh
+ARCHIVE=/var/lib/va-crystal/node-image.tar.gz
+
+# A present-but-unreadable answer file is the one failure whose message does
+# not explain itself, so name the cause here instead of letting install.sh say
+# only "cannot read".
+if [ -f /opt/va-crystal/.env ] && [ ! -r /opt/va-crystal/.env ]; then
+  printf '!! /opt/va-crystal/.env exists but this user cannot read it.\n' >&2
+  printf '   install.sh runs as %s and sudos only where it must.\n' "$(id -un)" >&2
+  printf '   sudo chown %s /opt/va-crystal/.env\n' "$(id -un)" >&2
+  exit 1
+fi
+
+[ -f "$INSTALLER" ] || {
+  printf '!! %s is missing — this machine was not built from a VA-Crystal node disc\n' "$INSTALLER" >&2
+  exit 1
+}
+
+if [ ! -f "$ARCHIVE" ]; then
+  printf '!! %s is missing — this disc was cut with -var with_image=false.\n' "$ARCHIVE" >&2
+  printf '   Run the installer directly and choose a registry or S3 source:\n' >&2
+  printf '     sh %s\n' "$INSTALLER" >&2
+  exit 1
+fi
+
+# The disc shipped a checksum, so a rotted disc or a copy that ran out of room
+# during the install is a named failure here rather than an obscure `docker
+# load` error twenty minutes in. Verifying media is not installing: nothing
+# below this line decides anything about the node.
+if [ -f "$ARCHIVE.sha256" ]; then
+  printf '   verifying %s\n' "$ARCHIVE"
+  ( cd "$(dirname "$ARCHIVE")" && sha256sum -c "$(basename "$ARCHIVE").sha256" >/dev/null ) || {
+    printf '!! %s does not match the checksum it shipped with — the media or the copy is damaged\n' "$ARCHIVE" >&2
+    exit 1
+  }
+fi
+
+VA_IMAGE_SOURCE=archive
+VA_IMAGE_ARCHIVE=$ARCHIVE
+export VA_IMAGE_SOURCE VA_IMAGE_ARCHIVE
+
+# cd first: install.sh reads ./.env when one is beside the caller, and
+# /opt/va-crystal is where an operator would put it.
+cd /opt/va-crystal
+exec sh "$INSTALLER" "$@"

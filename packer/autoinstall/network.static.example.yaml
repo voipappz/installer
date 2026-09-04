@@ -1,0 +1,46 @@
+  # MOVED FROM mothership/packer/autoinstall/network.static.example.yaml.
+  # Unchanged except for the build commands and for naming install.sh where the
+  # original named `voipappz setup` — on this disc install.sh is what derives
+  # the node's address, and the failure it describes is the same one.
+  #
+  # Static address. Copy, edit the four values, and build with:
+  #
+  #   make iso IMAGE_VERSION=… RELEASE_VERSION=… ISO_NETWORK=autoinstall/network.mynode.yaml
+  #   packer/build.sh build -var 'network=autoinstall/network.mynode.yaml' \
+  #     -var image_version=… -var release_version=…
+  #
+  # WHY A NODE WANTS THIS, and it is not a preference:
+  #
+  # install.sh derives the node's internal address from whatever interface holds
+  # the default route, and writes it into config/va.yaml. Kamailio then binds to
+  # it. A node configured on a DHCP lease it later loses is bound to an address
+  # that no longer exists — the ingress dispatcher gets no answer to its
+  # keepalives and every call 404s.
+  #
+  # This key configures the INSTALLER and is written through to the installed
+  # system as /etc/netplan/00-installer-config.yaml, so the address is live
+  # before anything else runs.
+  #
+  # The interface name is NOT matched by glob here: a static address has to
+  # attach to one specific NIC, and on a multi-homed node the SIP interface is a
+  # deliberate choice. Check the name on the box with `ip -brief link` — it is
+  # usually enp0s3 under VirtualBox and ens3 under qemu.
+  network:
+    version: 2
+    ethernets:
+      enp0s3:
+        dhcp4: false
+        addresses:
+          - 192.168.137.20/24
+        routes:
+          - to: default
+            via: 192.168.137.1
+        nameservers:
+          addresses:
+            - 192.168.137.1
+            - 1.1.1.1
+        # Keeps boot from stalling on an unplugged second NIC:
+        # systemd-networkd-wait-online otherwise blocks for its full 2-minute
+        # timeout before the login prompt, which reads as a hang on a node that
+        # is perfectly fine.
+        optional: true
