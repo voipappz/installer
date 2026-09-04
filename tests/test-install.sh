@@ -29,6 +29,10 @@ DOCKER_AUTH_DIR="$RUN_ROOT/docker-auth"
 ONBOARD_OUTPUT="$RUN_ROOT/onboard.out"
 mkdir -p "$LOG_DIR"
 
+# The image install.sh pulls, one place. install.sh defaults to :node
+# (a987282); a test that hardcodes :latest inspects an image nothing pulled.
+NODE_IMAGE=${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}
+
 NODE_UUID=11111111-1111-4111-8111-111111111111
 NODE_SIP_UUID=22222222-2222-4222-8222-222222222222
 APP_UUID=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
@@ -366,8 +370,8 @@ env \
   }
 assert_no_secret_in_log "$FIRST_LOG"
 docker info >/dev/null
-docker image inspect nirlevi/va-crystal:latest >/dev/null
-docker run --rm --entrypoint voipappz nirlevi/va-crystal:latest node --help >/dev/null \
+docker image inspect "$NODE_IMAGE" >/dev/null
+docker run --rm --entrypoint voipappz "$NODE_IMAGE" node --help >/dev/null \
   || die 'node image CLI is unavailable'
 # The image is the whole node: no compose scaffold to extract, and none left
 # behind. An installation directory holds this node's files and nothing else.
@@ -379,16 +383,31 @@ find /tmp -maxdepth 1 -type d -name 'voipappz-docker-auth.*' -print -quit | grep
   && die 'temporary installer Docker credentials were not removed'
 pass 'clean host installs Docker, the image and va.yaml'
 
-# The mothership fixture: downloaded, not cloned — the same public tarball its
-# own installer fetches. The node image carries no stack any more.
+# The mothership fixture: downloaded, not cloned — the same tarball its own
+# installer fetches. The node image carries no stack any more.
+#
+# voipappz/mothership IS PRIVATE, so the plain archive URL answers 404 to
+# everyone, including this job. With a read token the API's tarball endpoint
+# serves it; without one, pass a checkout as $1 (`tests/test-install.sh
+# ../mothership`) — which is also the fast path locally, and the only one that
+# tests uncommitted mothership changes.
 if [[ -z $MOTHERSHIP_DIR ]]; then
   MOTHERSHIP_DIR="$RUN_ROOT/mothership"
   mkdir -p "$MOTHERSHIP_DIR"
-  curl -fL --retry 5 --retry-all-errors -o "$RUN_ROOT/mothership.tar.gz" \
-    "https://github.com/voipappz/mothership/archive/refs/heads/${VA_MOTHERSHIP_REF:-main}.tar.gz" \
-    || die 'could not download the mothership stack'
+  MOTHERSHIP_REF=${VA_MOTHERSHIP_REF:-main}
+  MOTHERSHIP_TOKEN=${MOTHERSHIP_TOKEN:-${GH_TOKEN:-}}
+  curl_args=(-fL --retry 5 --retry-all-errors -o "$RUN_ROOT/mothership.tar.gz")
+  if [[ -n $MOTHERSHIP_TOKEN ]]; then
+    curl_args+=(-H "Authorization: Bearer $MOTHERSHIP_TOKEN"
+                "https://api.github.com/repos/voipappz/mothership/tarball/$MOTHERSHIP_REF")
+  else
+    curl_args+=("https://github.com/voipappz/mothership/archive/refs/heads/$MOTHERSHIP_REF.tar.gz")
+  fi
+  curl "${curl_args[@]}" \
+    || die 'could not download the mothership stack — it is private: set MOTHERSHIP_TOKEN, or pass a checkout as the first argument'
   tar -xzf "$RUN_ROOT/mothership.tar.gz" -C "$RUN_ROOT"
-  top=$(find "$RUN_ROOT" -maxdepth 1 -type d -name 'mothership-*' | head -1)
+  # branch archive: mothership-<ref>/   API tarball: voipappz-mothership-<sha>/
+  top=$(find "$RUN_ROOT" -maxdepth 1 -type d -name '*mothership-*' | head -1)
   [[ -n $top ]] || die 'the mothership tarball did not unpack'
   (cd "$top" && tar -cf - .) | (cd "$MOTHERSHIP_DIR" && tar -xf -)
   for f in docker-compose.yaml config/va.yaml.example scripts/onboard-customer.sh; do
@@ -442,7 +461,7 @@ pass 'a supplied va.yaml replaces the unattended default'
 ARCHIVE_DIR="$(mktemp -d)"
 chmod 0755 "$ARCHIVE_DIR"   # nginx (below) serves it as an unprivileged worker
 ARCHIVE_LOG="$LOG_DIR/archive-install.log"
-docker tag nirlevi/va-crystal:latest installer-ci/va-crystal:archive
+docker tag "$NODE_IMAGE" installer-ci/va-crystal:archive
 docker save installer-ci/va-crystal:archive | gzip -1 >"$ARCHIVE_DIR/va-crystal.tar.gz"
 docker rmi installer-ci/va-crystal:archive >/dev/null
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN \
@@ -517,7 +536,7 @@ docker run --rm --network host \
   --entrypoint voipappz \
   -e VA_PROJECT_DIR=/work -e VA_PATH= -e "VA_API_URL=$API_URL" \
   -v "$MOTHERSHIP_DIR:/work" -w /work \
-  nirlevi/va-crystal:latest setup --ci \
+  "$NODE_IMAGE" setup --ci \
   >"$LOG_DIR/mothership-setup.log" 2>&1
 MOTHERSHIP_UP=1
 (

@@ -1,0 +1,24 @@
+# act (nektos/act) — this repo's workflows, locally.
+#
+#   act -j shell          the POSIX gates: syntax, shellcheck, unit tests (~1m)
+#   act -j cli --bind     specs, both binaries, the tty a-to-z, SIPp (~10m)
+#   act -n -j <job>       parse and list the steps, run nothing
+#
+# --bind for `cli`: `make build` compiles in a NESTED `docker run -v
+# "$(CURDIR):/w"`, and that mount is resolved by the HOST daemon. Without
+# --bind the workspace is a copy, the binary lands outside it, and the next
+# line fails with "cannot stat 'cli/bin/voipappz'" after a good compile.
+#
+# `container` and `integration` install a real node: they want DOCKERHUB_*
+# and a disposable /opt/voipappz (this host's is the lab node's). Run those
+# on GitHub.
+#
+# --env-file /dev/null IS LOAD-BEARING. act reads ./.env into every job by
+# default, and this repo's .env is a real answer file — VA_CONFIG, a node
+# image tag, an Account login. Injected, install.sh answers from YOUR machine
+# instead of asking, and a green run proves nothing about a clean host.
+--env-file /dev/null
+--artifact-server-path /tmp/act-artifacts
+-P ubuntu-latest=catthehacker/ubuntu:act-24.04
+-P ubuntu-22.04=catthehacker/ubuntu:act-22.04
+-P ubuntu-24.04=catthehacker/ubuntu:act-24.04

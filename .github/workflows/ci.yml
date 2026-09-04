@@ -376,6 +376,12 @@ jobs:
         env:
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        # No mothership checkout: the test boots it from the /stack the node
-        # image carries, which is the only copy an installed node ever has.
+          # voipappz/mothership went private on 2026-09-04: its tarball now
+          # needs a read token. This job already requires secrets (the registry
+          # pair), so it is the one place in this workflow that can hold one —
+          # unlike the `cli` job, which runs on fork PRs and answers at a
+          # fixture instead.
+          MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
+        # The mothership fixture is DOWNLOADED, never cloned — the same tarball
+        # its own installer fetches.
         run: tests/test-install.sh
