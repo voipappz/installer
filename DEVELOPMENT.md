@@ -45,9 +45,11 @@ sneaks into the installer or its tests (the project deliberately has none).
 ## Running the installer from your checkout
 
 ```sh
-make install                         # identical to `curl … | sh`, from the working tree
-make install-archive                 # same, loading ../va-crystal/ci/build/va-crystal-node-<VERSION>.tar.gz
-make install-archive ARCHIVE=/path/to/va-crystal-node-latest.tar.gz
+make install                         # the working tree's script, S3 image, no questions
+make install SOURCE=dockerhub        # pull the image instead of downloading the S3 archive
+make install ARCHIVE=latest          # load the newest ../va-crystal/ci/build/va-crystal-node-*.tar.gz
+make install ARCHIVE=/path/to/va-crystal-node-latest.tar.gz
+make install REGISTER=0              # a node with no mothership; register it later
 ```
 
 The script takes no arguments; everything is an environment variable (the
@@ -57,7 +59,7 @@ reach for while developing:
 ```sh
 INSTALL_DIR=/tmp/node-a sh install.sh --no-register --no-start  # no registration, nothing started
 VA_API_URL=https://mothership.local VA_CONFIG=./va.yaml make install
-VA_IMAGE_SOURCE=archive VA_IMAGE_ARCHIVE=/path/img.tar.gz make install
+VA_IMAGE_SOURCE=archive VA_IMAGE_ARCHIVE=/path/img.tar.gz sh install.sh
 ```
 
 Points worth knowing when reading the script:

@@ -47,17 +47,18 @@ jobs:
           # one place and not the other, a typo in a recipe, and a name
           # dropped from .PHONY. What the commands DO is proved by the
           # integration job, which has a node to run them against.
-          for t in help check install install-archive install-no-register \
-                   up down start stop logs health cli \
+          for t in help check shellcheck check-make install \
+                   up down logs health cli node-preflight \
                    build cli-build cli-node-build cli-test install-cli; do
             echo "=== make $t ==="
             make -n "$t" || { echo "!! make $t does not resolve" >&2; exit 1; }
           done
-          # Every target `help` advertises must be real — help is hand-written
-          # here, so it is the thing most likely to name something that is not.
-          make help | sed -n 's/^  [^ ]*\([a-z-]\{2,\}\) .*/\1/p' | while read -r t; do
-            make -n "$t" >/dev/null 2>&1 || echo "note: help lists '$t'"
-          done
+          # The flags the docs promise, expanded. `help` itself is generated
+          # from the `##` comments, so it cannot name a target that is not
+          # there; what it CAN do is lose one, which check-make catches.
+          make -n install SOURCE=dockerhub >/dev/null
+          make -n install REGISTER=0 | grep -q -- --no-register
+          make check-make
 
   # THE CLI, built and tested here since 2026-09-03, when cli/ moved in from
   # the mothership so it can be public while the mothership is not.
