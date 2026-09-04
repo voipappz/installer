@@ -538,6 +538,15 @@ docker run --rm --network host \
   -v "$MOTHERSHIP_DIR:/work" -w /work \
   "$NODE_IMAGE" setup --ci \
   >"$LOG_DIR/mothership-setup.log" 2>&1
+# COMPOSE IS THE MOTHERSHIP'S REQUIREMENT, NOT THE NODE'S. install.sh installs
+# Docker and nothing else — one `docker run` needs no compose — but the fixture
+# below is a whole stack. get.docker.com ships the compose plugin, so this
+# holds after a clean install; it is checked rather than assumed, because
+# without it the failure arrives as an unreadable compose error inside a log.
+docker compose version >/dev/null 2>&1 \
+  || die 'docker compose is missing — the mothership fixture is a compose stack'
+pass 'docker compose present (the mothership fixture needs it; the node does not)'
+
 MOTHERSHIP_UP=1
 (
   cd "$MOTHERSHIP_DIR"
