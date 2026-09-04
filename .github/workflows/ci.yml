@@ -30,9 +30,13 @@ jobs:
           dash -n install.sh
           sh -n scripts/install-cli.sh && dash -n scripts/install-cli.sh
           bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
-          # Preinstalled on a GitHub runner, absent from act's image — one
-          # line so `act -j shell` runs the same gate locally.
-          command -v shellcheck >/dev/null || sudo apt-get install -y -qq shellcheck
+          # Preinstalled on a GitHub runner, absent from act's image — these
+          # two lines are so `act -j shell` runs the same gate locally. The
+          # update is not optional: act's image ships an EMPTY package list, so
+          # the install alone fails with "Unable to locate package shellcheck",
+          # which reads as a missing package rather than a missing index.
+          command -v shellcheck >/dev/null || { sudo apt-get update -qq \
+            && sudo apt-get install -y -qq shellcheck; }
           shellcheck install.sh scripts/install-cli.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
           git diff --check
           test -z "$(find tests -type f -name '*.py' -print -quit)"
