@@ -30,6 +30,9 @@ jobs:
           dash -n install.sh
           sh -n scripts/install-cli.sh && dash -n scripts/install-cli.sh
           bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+          # Preinstalled on a GitHub runner, absent from act's image — one
+          # line so `act -j shell` runs the same gate locally.
+          command -v shellcheck >/dev/null || sudo apt-get install -y -qq shellcheck
           shellcheck install.sh scripts/install-cli.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
           git diff --check
           test -z "$(find tests -type f -name '*.py' -print -quit)"
@@ -114,16 +117,21 @@ jobs:
       # code it tests.
       #
       # `setup` and `status` need a PROJECT — a directory with a
-      # docker-compose.yaml — and write config/va.yaml and .env into it. The
-      # mothership is that fixture, DOWNLOADED as its public tarball, exactly
-      # as tests/test-install.sh takes it and as the mothership's own installer
-      # does. Never cloned: no git on a target, and no credential here.
-      - name: A mothership to answer at, and expect to do the typing
+      # docker-compose.yaml — and write config/va.yaml and .env into it. That
+      # is cli/spec/fixtures/project, the same fixture the spec suite resolves
+      # through VA_PROJECT_DIR, copied so the assertions below read a file this
+      # run wrote.
+      #
+      # NOT the real mothership. It was, for one run: downloaded as a public
+      # tarball the way tests/test-install.sh takes it. That repository went
+      # private on 2026-09-04 and the step 404'd. A public repo's CI cannot
+      # depend on a private one without a credential, and this job runs on fork
+      # PRs where no secret is available — so the fixture is the only honest
+      # answer. What is under test is the CLI's prompts, not the mothership.
+      - name: A project to answer at, and expect to do the typing
         run: |
-          curl -fL --retry 5 --retry-all-errors -o /tmp/mothership.tar.gz \
-            "https://github.com/voipappz/mothership/archive/refs/heads/${VA_MOTHERSHIP_REF:-main}.tar.gz"
-          mkdir -p /tmp/ms && tar -xzf /tmp/mothership.tar.gz -C /tmp/ms
-          echo "MS=$(echo /tmp/ms/mothership-*)" >> "$GITHUB_ENV"
+          cp -r cli/spec/fixtures/project /tmp/project
+          echo "MS=/tmp/project" >> "$GITHUB_ENV"
           sudo apt-get install -y -qq expect >/dev/null
 
       - name: The CLI answers at a real terminal, a to z
