@@ -120,6 +120,26 @@ as_root install -m 0755 "$SRC" "$PREFIX/voipappz"
 # (wrong libc, wrong arch) is exactly what this check is for.
 "$PREFIX/voipappz" --version >/dev/null 2>&1 || die "$PREFIX/voipappz does not run on this machine"
 
+# STATIC, and that is a CROSS-REPO CONTRACT rather than a preference: the
+# mothership's SIP suites and its ISO bake exec this binary FROM THE HOST,
+# where a musl dynamic build cannot run, and va-crystal copies the node one
+# into a Debian-based image. Asserted HERE, once, because this script is the
+# only way anyone obtains a binary — every consumer used to carry its own
+# `file ... | grep 'statically linked'` line, which is three places to forget.
+#
+# Skipped rather than failed when `file` is absent: a minimal container has no
+# file(1), and refusing to install on that basis would be worse than the check
+# is worth. Linux only — Crystal cannot link statically on Darwin.
+if [ "$(uname -s)" = Linux ]; then
+  if command -v file >/dev/null 2>&1; then
+    file "$PREFIX/voipappz" | grep -q 'statically linked' \
+      || die "$PREFIX/voipappz is NOT statically linked — the SIP suites and the ISO exec it from the host, where a dynamic musl build cannot run"
+    say "statically linked"
+  else
+    say "file(1) not here — static linkage not verified"
+  fi
+fi
+
 say "installed $PREFIX/voipappz ($("$PREFIX/voipappz" --version))"
 case ":$PATH:" in
   *":$PREFIX:"*) ;;
