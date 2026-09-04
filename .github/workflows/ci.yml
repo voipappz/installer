@@ -68,6 +68,9 @@ jobs:
   cli:
     name: cli · specs + static link + SIPp round-trip
     runs-on: ubuntu-latest
+    # Only this job publishes, and only the rolling `latest` release.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -98,15 +101,44 @@ jobs:
             exit 1
           fi
 
-      # The mothership's CI installs a stack and a node with this binary
-      # rather than compiling a second one. Kept for a day: it is a build of
-      # this commit, not a release.
-      - name: Keep the binary
+      # BOTH BINARIES, EVERY RUN. The mothership's CI installs a stack and a
+      # node with the host one rather than compiling a second copy, and
+      # va-crystal bakes the node one into its image — so every push should
+      # leave something they can take. A week, not a day: a branch reviewed on
+      # Friday still has its binary on Monday.
+      - name: Keep the binaries
         uses: actions/upload-artifact@v4
         with:
           name: voipappz-linux-amd64
-          path: bin/voipappz
-          retention-days: 1
+          path: |
+            bin/voipappz
+            cli/bin/voipappz-node
+          retention-days: 7
+
+      # A STABLE URL for the newest main. Artifacts need a GitHub token and an
+      # API call to fetch; a release asset is a plain https download, which is
+      # what an installer, a Dockerfile or a workstation can actually use
+      # without credentials. `latest` is rolling and marked prerelease: the
+      # v* tags release.yml publishes stay the immutable, citable ones.
+      #
+      # ACT skips it — a local run has no token and nothing to publish to.
+      - name: Publish the rolling `latest` binaries
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !env.ACT }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cp bin/voipappz            voipappz-linux-amd64
+          cp cli/bin/voipappz-node   voipappz-node-linux-amd64
+          sha256sum voipappz-linux-amd64      > voipappz-linux-amd64.sha256
+          sha256sum voipappz-node-linux-amd64 > voipappz-node-linux-amd64.sha256
+          gh release view latest >/dev/null 2>&1 || gh release create latest \
+            --prerelease --title 'latest (rolling)' \
+            --notes 'The newest main build. Replaced by every push to main; pin a v* tag for a binary that will not move.'
+          gh release upload latest --clobber \
+            voipappz-linux-amd64 voipappz-linux-amd64.sha256 \
+            voipappz-node-linux-amd64 voipappz-node-linux-amd64.sha256
+          gh release edit latest --notes "The newest main build ($GITHUB_SHA). Replaced by every push to main; pin a v* tag for a binary that will not move."
 
       # THE CLI AT A REAL TERMINAL, a to z. Every step above pipes, and the
       # CLI branches on STDIN.tty?/STDOUT.tty? throughout — the setup wizard
