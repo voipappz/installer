@@ -19,7 +19,7 @@ VoIPAppz VoIP node installer
 
 2/6  Platform image
   Image source:
-    1) pull nirlevi/va-crystal:latest from Docker Hub (needs a Docker Hub user + token)
+    1) pull nirlevi/va-crystal:node from Docker Hub (needs a Docker Hub user + token)
     2) download the latest image archive from Amazon S3
     3) load a docker-save archive (.tar or .tar.gz) from a local path or URL
   Choose 1, 2 or 3 [2]: 2          ← Enter is enough
@@ -185,7 +185,7 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_IMAGE_SOURCE=dockerhub\|s3\|archive` | Image source without the menu. |
 | `VA_IMAGE_ARCHIVE=<path or URL>` | The archive to load (`.tar`/`.tar.gz`); a URL is checked against its `.sha256`. |
 | `VA_IMAGE_URL=https://…` | Override the S3 archive URL used by `s3`. |
-| `VA_VOIP_IMAGE=<ref>` | Image to run (default `nirlevi/va-crystal:latest`). |
+| `VA_VOIP_IMAGE=<ref>` | Image to run (default `nirlevi/va-crystal:node`). |
 | `VA_KAMAILIO=off` | Install a node without its own kamailio — it relies on an external SBC (the mothership ingress). Topology, so it lives in the container environment (recorded in the install `.env`, passed with `docker -e`); health reports the kamailio checks as "off by config". |
 | `VA_FREESWITCH=off` | Install a proxy/agent-only node without media. |
 | `VA_CA_BUNDLE=/path/chain.pem` | Trust anchors for a mothership whose chain the node cannot verify. |
@@ -215,7 +215,7 @@ mothership, or run `va-node-install --no-register` and register later.
 
 The disc is restricted media: it holds a private container image in the clear,
 so it is distributed by presigned link and must not be re-hosted.
-The disc is cut and published from the voipappz/mothership repository.
+See [packer/README.md](packer/README.md) to cut or publish one.
 
 ## What it guarantees
 
@@ -274,6 +274,20 @@ make cli-node-build # the -Dnode_runtime binary the node image carries
 make cli-test       # the spec suite
 make install-cli    # put bin/voipappz on PATH
 ```
+
+Or take the newest build of `main` directly — no tag, no token, no toolchain:
+
+```sh
+curl -fsSLO https://github.com/voipappz/installer/releases/download/latest/voipappz-linux-amd64
+curl -fsSL  https://github.com/voipappz/installer/releases/download/latest/voipappz-linux-amd64.sha256 | sha256sum -c -
+chmod +x voipappz-linux-amd64
+```
+
+Every CI run compiles both linux binaries and keeps them as artifacts for a
+week; every push to `main` also replaces the assets on the rolling `latest`
+prerelease above (`voipappz-linux-amd64`, `voipappz-node-linux-amd64`, each
+with its `.sha256`). It moves under you by design — pin a tag for a binary
+that will not.
 
 Releases (`git tag vX.Y.Z && git push origin vX.Y.Z`) publish
 `voipappz-linux-amd64`, `voipappz-node-linux-amd64`, `voipappz-darwin-arm64`
