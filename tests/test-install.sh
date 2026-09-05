@@ -490,7 +490,10 @@ pass 'installs from a local image archive without registry credentials'
 # as S3 publishes it. VA_IMAGE_SOURCE=archive + a URL, no registry variables.
 URL_LOG="$LOG_DIR/archive-url-install.log"
 sha256sum "$ARCHIVE_DIR/va-crystal.tar.gz" | awk '{print $1}' >"$ARCHIVE_DIR/va-crystal.tar.gz.sha256"
-chmod 0644 "$ARCHIVE_DIR"/va-crystal.tar.gz "$ARCHIVE_DIR"/va-crystal.tar.gz.sha256
+# The same bytes published WITHOUT a checksum, for the refusal below.
+cp "$ARCHIVE_DIR/va-crystal.tar.gz" "$ARCHIVE_DIR/va-crystal-nosum.tar.gz"
+chmod 0644 "$ARCHIVE_DIR"/va-crystal.tar.gz "$ARCHIVE_DIR"/va-crystal.tar.gz.sha256 \
+           "$ARCHIVE_DIR"/va-crystal-nosum.tar.gz
 docker run -d --name installer-ci-www -p 127.0.0.1:18080:80 \
   -v "$ARCHIVE_DIR:/usr/share/nginx/html:ro" nginx:alpine >/dev/null
 for _ in $(seq 1 30); do curl -fsI http://127.0.0.1:18080/va-crystal.tar.gz.sha256 >/dev/null 2>&1 && break; sleep 1; done
@@ -508,7 +511,6 @@ env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN \
     show_safe_log "$URL_LOG"
     die 'installation from an image archive URL failed'
   }
-docker rm -f installer-ci-www >/dev/null
 grep -Fq -- 'sha256 verified' "$URL_LOG" || die 'URL install did not verify the published sha256'
 docker image inspect installer-ci/va-crystal:fromurl >/dev/null \
   || die 'the downloaded archive was not tagged as VA_VOIP_IMAGE'
@@ -516,6 +518,33 @@ find /tmp -maxdepth 1 -name 'voipappz-image-archive.*' -print -quit | grep -q . 
   && die 'the downloaded archive was not removed'
 docker rmi installer-ci/va-crystal:fromurl >/dev/null
 pass 'installs from an image archive URL with sha256 verification'
+
+# NO CHECKSUM, NO INSTALL. The same server, the same bytes, no sibling
+# .sha256: the download must be refused BEFORE `docker load`, because a
+# download nobody verified is the whole reason the check exists.
+NOSUM_LOG="$LOG_DIR/archive-url-nosum.log"
+if env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN \
+  INSTALL_DIR="$ARCHIVE_DIR/node-nosum" \
+  VA_VOIP_IMAGE=installer-ci/va-crystal:nosum \
+  VA_IMAGE_SOURCE=archive \
+  VA_IMAGE_ARCHIVE=http://127.0.0.1:18080/va-crystal-nosum.tar.gz \
+  VA_CONFIG="$BOOT_CONFIG" \
+  VA_API_URL="$API_URL" \
+  VA_NATS_URL=nats://127.0.0.1:4222 \
+  VA_REGISTER=0 \
+  START=0 \
+  sh "$ROOT/install.sh" </dev/null >"$NOSUM_LOG" 2>&1
+then
+  show_safe_log "$NOSUM_LOG"
+  die 'an image archive URL with no published sha256 was installed'
+fi
+grep -Fq -- 'installed only against its published checksum' "$NOSUM_LOG" \
+  || { show_safe_log "$NOSUM_LOG"; die 'the refusal was not the missing-checksum one'; }
+if docker image inspect installer-ci/va-crystal:nosum >/dev/null 2>&1; then
+  die 'the unverified archive was loaded anyway'
+fi
+docker rm -f installer-ci-www >/dev/null
+pass 'refuses an image archive URL with no published sha256'
 
 # A separate temporary Docker config is used only by this test environment to
 # pull the full mothership images. The installer already removed its own.

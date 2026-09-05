@@ -33,7 +33,8 @@ refuses() {  # label, expected message, env...
 refuses 'START must be 0 or 1'                    'START must be 0 or 1'                 START=2
 refuses 'VA_REGISTER must be 0 or 1'              'VA_REGISTER must be 0 or 1'           VA_REGISTER=yes
 refuses 'INSTALL_DIR must be absolute'            'INSTALL_DIR must be an absolute'      INSTALL_DIR=relative/dir
-refuses 'VA_IMAGE_SOURCE must be a known source'  'VA_IMAGE_SOURCE must be dockerhub, s3 or archive' VA_IMAGE_SOURCE=ftp
+refuses 'VA_IMAGE_SOURCE must be a known source'  'must be dockerhub, s3, archive or local' VA_IMAGE_SOURCE=ftp
+refuses 'IMAGE_ONLY must be 0 or 1'               'IMAGE_ONLY must be 0 or 1'            IMAGE_ONLY=maybe
 refuses 'VA_IMAGE_SOURCE=archive needs an archive' 'needs VA_IMAGE_ARCHIVE'              VA_IMAGE_SOURCE=archive
 refuses 'VA_IMAGE_ARCHIVE must be absolute or a URL' 'absolute path or an http(s) URL'   VA_IMAGE_ARCHIVE=rel.tar.gz
 refuses 'VA_IMAGE_ARCHIVE must be readable'       'not a readable file'                  VA_IMAGE_ARCHIVE=/nonexistent/x.tar.gz
@@ -45,6 +46,7 @@ check 'an unknown option is refused' '[[ $opt_out == *"unknown option: --nope"* 
 opt_out=$(sh "$INSTALLER" --help </dev/null 2>&1 || true)
 check '--help names --no-register'   '[[ $opt_out == *"--no-register"* ]]'
 check '--help names --no-start'      '[[ $opt_out == *"--no-start"*    ]]'
+check '--help names --image-only'    '[[ $opt_out == *"--image-only"*  ]]'
 # The option wins over the answer file and the environment, because it is later.
 opt_out=$(env VA_REGISTER=1 START=1 INSTALL_DIR=relative/dir \
   sh "$INSTALLER" --no-register --no-start </dev/null 2>&1 || true)

@@ -47,7 +47,7 @@ jobs:
           # one place and not the other, a typo in a recipe, and a name
           # dropped from .PHONY. What the commands DO is proved by the
           # integration job, which has a node to run them against.
-          for t in help check shellcheck check-make install \
+          for t in help check check-make get install \
                    up down logs health cli node-preflight \
                    build cli-build cli-node-build cli-test install-cli; do
             echo "=== make $t ==="
@@ -56,8 +56,10 @@ jobs:
           # The flags the docs promise, expanded. `help` itself is generated
           # from the `##` comments, so it cannot name a target that is not
           # there; what it CAN do is lose one, which check-make catches.
-          make -n install SOURCE=dockerhub >/dev/null
-          make -n install REGISTER=0 | grep -q -- --no-register
+          make -n get                     | grep -q -- --image-only
+          make -n get SOURCE=dockerhub    | grep -q "VA_IMAGE_SOURCE='dockerhub'"
+          make -n install                 | grep -q 'VA_IMAGE_SOURCE=local'
+          make -n install REGISTER=0      | grep -q -- --no-register
           make check-make
 
   # THE CLI, built and tested here since 2026-09-03, when cli/ moved in from

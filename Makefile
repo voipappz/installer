@@ -19,7 +19,7 @@ MAKEFLAGS   += --no-print-directory --no-builtin-rules --no-builtin-variables
 .DEFAULT_GOAL := help
 # Every target in one place so check-make can prove each still has a rule.
 # Add a target: add it here.
-PHONY_TARGETS := help check check-make shellcheck test install \
+PHONY_TARGETS := help check check-make test get install \
                  up down logs health cli node-preflight \
                  build cli-build cli-node-build cli-test install-cli
 .PHONY: $(PHONY_TARGETS)
@@ -29,12 +29,15 @@ PHONY_TARGETS := help check check-make shellcheck test install \
 # nothing hidden -- grouped by the `##@` section it lives under.
 help: ## Show this help
 	@printf '\n\033[1mvoipappz/installer\033[0m — one script that installs a VA-Crystal voip node\n'
-	@awk 'BEGIN { FS = ":.*## "; pad = "                              " } \
+	@awk 'BEGIN { FS = ":.*## "; W = 24; pad = sprintf("%" W "s", "") } \
 	     /^##@ / { printf "\n\033[1m%s\033[0m\n", substr($$0, 5); next } \
 	     /^[a-zA-Z0-9_\/-]+:.*## / { \
 	       desc = $$2; label = $$1; \
 	       if (match(desc, /^\[[^]]*\] /)) { label = label " " substr(desc, 1, RLENGTH - 1); desc = substr(desc, RLENGTH + 1) } \
-	       printf "  \033[36m%s\033[0m%s %s\n", label, substr(pad, 1, 24 - length(label)), desc \
+	       if (length(label) < W) \
+	         printf "  \033[36m%s\033[0m%s%s\n", label, substr(pad, 1, W - length(label)), desc; \
+	       else \
+	         printf "  \033[36m%s\033[0m\n  %s%s\n", label, pad, desc \
 	     }' $(firstword $(MAKEFILE_LIST))
 	@printf '\n\033[2mdocs: README.md (operators)  DEVELOPMENT.md (developers)  CLAUDE.md (engineering notes)\033[0m\n\n'
 
@@ -42,30 +45,24 @@ help: ## Show this help
 
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from its
 # container when it is not installed, so this needs nothing but docker.
+SCRIPTS = install.sh scripts/install-cli.sh tests/clean-runner.sh \
+          tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+
 check: ## Everything CI runs first: syntax, shellcheck, clean diff, no python, unit tests
 	test -x install.sh
 	sh -n install.sh
 	dash -n install.sh
 	sh -n scripts/install-cli.sh && dash -n scripts/install-cli.sh
 	bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
-	$(MAKE) shellcheck
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck $(SCRIPTS); else \
+	  docker run --rm -v "$(CURDIR):/w:ro" -w /w koalaman/shellcheck:stable $(SCRIPTS); fi
+	@echo "shellcheck: $(words $(SCRIPTS)) scripts clean"
 	$(MAKE) check-make
 	git diff --check
 	test -z "$$(find tests -type f -name '*.py' -print -quit)"
 	! grep -Eq 'python(3)?' install.sh
 	bash tests/unit.sh
 	@printf '\033[1mcheck green\033[0m\n'
-
-SHELLCHECK_FILES = install.sh scripts/install-cli.sh tests/clean-runner.sh \
-                   tests/test-install.sh tests/unit.sh tests/two-pbx.sh
-
-shellcheck: ## ShellCheck every script (in docker when it is not installed)
-	@if command -v shellcheck >/dev/null 2>&1; then \
-	  shellcheck $(SHELLCHECK_FILES); \
-	else \
-	  docker run --rm -v "$(CURDIR):/w:ro" -w /w koalaman/shellcheck:stable \
-	    $(SHELLCHECK_FILES); \
-	fi
 
 # A .PHONY target with no rule silently does nothing, so a deleted rule looks
 # like a working `make check` that skips steps.
@@ -87,36 +84,37 @@ check-make: ## Fail if any .PHONY target has no rule (CI runs this)
 # only to test against a local checkout. It creates a system user and writes
 # /opt/voipappz-ci — run it on a throwaway VM, never on a workstation you care
 # about.
-test: ## [MOTHERSHIP_DIR=…] The integration test against a real mothership — DISPOSABLE HOST ONLY
+test: ## [MOTHERSHIP_DIR=dir] The integration test against a real mothership — DISPOSABLE HOST ONLY
 	@test -n "$${VA_REGISTRY_USER:-}" && test -n "$${VA_REGISTRY_TOKEN:-}" || { \
 	  printf '\033[1mexport VA_REGISTRY_USER and VA_REGISTRY_TOKEN\033[0m (Docker Hub, read access to nirlevi/va-crystal)\n'; exit 1; }
 	tests/test-install.sh $(MOTHERSHIP_DIR)
 
-##@ Install a node
+##@ Get the image, then install it
 
 # Sibling checkout on a workstation, for ARCHIVE=latest only.
 VA_CRYSTAL_DIR ?= $(abspath $(CURDIR)/../va-crystal)
 # The newest archive `make s3-archive` wrote in va-crystal, if any.
 NEWEST_ARCHIVE  = $(lastword $(sort $(wildcard $(VA_CRYSTAL_DIR)/ci/build/va-crystal-node-*.tar.gz)))
 
-# ONE install target, because there is one action. The image source is a flag,
-# not a target of its own — install.sh already validates all three:
+# GET THE IMAGE, THEN INSTALL IT. Two steps because they fail for different
+# reasons and at different times: getting it needs the network and a gigabyte,
+# installing it needs a mothership and an Account. `get` ends by RUNNING the
+# image's CLI, so a machine is only "prepared" once the image is proved to
+# work; `install` then never touches the network for it, so a re-install
+# cannot re-download what the host already has.
 #
-#   make install                                 S3: the newest published image archive
-#   make install SOURCE=dockerhub                pull, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
-#   make install ARCHIVE=/path/img.tar.gz        load a docker-save archive (path or http(s) URL)
-#   make install ARCHIVE=latest                  ... the newest one in ../va-crystal/ci/build
-#   make install REGISTER=0                      a node with no mothership; register it later
+#   make get                          S3: the newest published image archive
+#   make get SOURCE=dockerhub         pull, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
+#   make get ARCHIVE=/path.tar.gz     docker load a docker-save archive: a path or an http(s) URL
+#   make get ARCHIVE=latest           ... the newest one in ../va-crystal/ci/build
 #
-# NO WIZARD. install.sh asks which source to use only when nothing chose one;
-# a SOURCE is always chosen here, so `make install` never asks — it takes the
-# same S3 default the prompt offers as [2]. Naming an ARCHIVE selects it.
-#
-# Everything else is an environment variable (README.md's "Useful controls"):
-# VA_API_URL=… VA_CONFIG=./va.yaml make install
+# NO WIZARD, either way. install.sh asks which source to use only when nothing
+# chose one: `get` always names a source (the S3 default is the same one its
+# prompt offers as [2]) and `install` names `local`, which never fetches and
+# says plainly when the image is missing.
 SOURCE ?= $(if $(ARCHIVE),archive,s3)
 
-install: ## [SOURCE=s3|dockerhub] [ARCHIVE=file|latest] [REGISTER=0] Run install.sh from this working tree
+get: ## [SOURCE=s3|dockerhub] [ARCHIVE=file|url|latest] Get the node image and prove it runs
 	@archive='$(ARCHIVE)'; \
 	 if [ "$$archive" = latest ]; then \
 	   archive='$(NEWEST_ARCHIVE)'; \
@@ -126,8 +124,12 @@ install: ## [SOURCE=s3|dockerhub] [ARCHIVE=file|latest] [REGISTER=0] Run install
 	   fi; \
 	   printf 'loading %s\n' "$$archive"; \
 	 fi; \
-	 VA_IMAGE_SOURCE='$(SOURCE)' VA_IMAGE_ARCHIVE="$$archive" \
-	   sh install.sh $(if $(filter 0,$(REGISTER)),--no-register)
+	 VA_IMAGE_SOURCE='$(SOURCE)' VA_IMAGE_ARCHIVE="$$archive" sh install.sh --image-only
+
+# Everything else is an environment variable (README.md's "Useful controls"):
+# VA_API_URL=… VA_CONFIG=./va.yaml make install
+install: ## [REGISTER=0] Install the node from the image on this host (make get first)
+	VA_IMAGE_SOURCE=local sh install.sh $(if $(filter 0,$(REGISTER)),--no-register)
 
 ##@ The installed node
 
@@ -191,7 +193,7 @@ logs: ## Follow it (kamailio + FreeSWITCH + node, interleaved)
 health: ## The 16-check verdict, from the CLI inside the image
 	docker exec $(NODE) voipappz health
 
-cli: ## [ARGS=…] The in-image CLI: make cli ARGS="sbc egress status"
+cli: ## [ARGS=cmd] The in-image CLI: make cli ARGS="sbc egress status"
 	@docker inspect -f '{{.State.Running}}' $(NODE) >/dev/null 2>&1 \
 	  || { echo "$(NODE) is not running — start it with: make up"; exit 1; }
 	docker exec -it $(NODE) voipappz $(ARGS)

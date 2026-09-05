@@ -182,8 +182,8 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_NATS_URL=nats://…` | Broker, when the YAML has none. May carry credentials (`nats://user:token@host:4222`): they go to the mode-0600 `.env` and the container environment only — the YAML gets the bare URL. ALL secrets live in env, never in `va.yaml`. |
 | `VA_CUSTOMER_UUID` / `VA_CUSTOMER_NAME` | Pick (or create) the customer. |
 | `VA_ACCOUNT_EMAIL` / `VA_ACCOUNT_PASSWORD` | The login of the Account a *new* customer gets; asked when a customer is created. The installer signs in with it once to prove it works, then forgets the password. |
-| `VA_IMAGE_SOURCE=dockerhub\|s3\|archive` | Image source without the menu. |
-| `VA_IMAGE_ARCHIVE=<path or URL>` | The archive to load (`.tar`/`.tar.gz`); a URL is checked against its `.sha256`. |
+| `VA_IMAGE_SOURCE=dockerhub\|s3\|archive\|local` | Image source without the menu. `local` uses the image already on this host and never fetches. |
+| `VA_IMAGE_ARCHIVE=<path or URL>` | The archive to load (`.tar`/`.tar.gz`). A URL **must** publish a sibling `.sha256`; a download that does not match it, or has none, is refused. |
 | `VA_IMAGE_URL=https://…` | Override the S3 archive URL used by `s3`. |
 | `VA_VOIP_IMAGE=<ref>` | Image to run (default `nirlevi/va-crystal:node`). |
 | `VA_KAMAILIO=off` | Install a node without its own kamailio — it relies on an external SBC (the mothership ingress). Topology, so it lives in the container environment (recorded in the install `.env`, passed with `docker -e`); health reports the kamailio checks as "off by config". |
@@ -192,10 +192,12 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `INSTALL_DIR=/path` | Where the stack lands (default `/opt/voipappz`). |
 | `START=0` | Install and register, do not start the container. |
 
-Two of those are decisions, not settings, so they are also options:
+Some of those are decisions, not settings, so they are also options:
 `sh install.sh --no-register` installs and starts a node without touching a
-mothership (register it later); `--no-start` is `START=0`. Through the
-one-liner: `curl -fsSL … | sh -s -- --no-register`.
+mothership (register it later); `--no-start` is `START=0`; `--image-only`
+gets the image, proves its CLI runs, and stops — prepare a machine once, then
+install on it offline with `VA_IMAGE_SOURCE=local`. Through the one-liner:
+`curl -fsSL … | sh -s -- --no-register`.
 
 ## No internet at all: the installer ISO
 

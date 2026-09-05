@@ -45,10 +45,11 @@ sneaks into the installer or its tests (the project deliberately has none).
 ## Running the installer from your checkout
 
 ```sh
-make install                         # the working tree's script, S3 image, no questions
-make install SOURCE=dockerhub        # pull the image instead of downloading the S3 archive
-make install ARCHIVE=latest          # load the newest ../va-crystal/ci/build/va-crystal-node-*.tar.gz
-make install ARCHIVE=/path/to/va-crystal-node-latest.tar.gz
+make get                             # the image: S3 archive, verified, no questions
+make get SOURCE=dockerhub            # ... pulled instead, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
+make get ARCHIVE=latest              # ... docker load the newest ../va-crystal/ci/build/*.tar.gz
+make get ARCHIVE=/path/img.tar.gz    # ... a path or an http(s) URL (which must publish .sha256)
+make install                         # install THAT image; never fetches, never asks
 make install REGISTER=0              # a node with no mothership; register it later
 ```
 

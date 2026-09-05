@@ -66,6 +66,11 @@ VA_CUSTOMER_NAME="${VA_CUSTOMER_NAME:-}"
 VA_ACCOUNT_EMAIL="${VA_ACCOUNT_EMAIL:-}"
 VA_ACCOUNT_PASSWORD="${VA_ACCOUNT_PASSWORD:-}"
 START="${START:-1}"
+# 1 with --image-only: fetch the image and stop. Splitting the download from
+# the installation is what lets a machine be prepared once and installed
+# offline afterwards (VA_IMAGE_SOURCE=local), and what keeps a re-install from
+# re-downloading a gigabyte it already has.
+IMAGE_ONLY="${IMAGE_ONLY:-0}"
 
 # THE OPTIONS. Everything else is a setting and lives in the answer file;
 # these two are a DECISION an operator makes for one run, so they are typed on
@@ -78,10 +83,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --no-register) VA_REGISTER=0 ;;
     --no-start)    START=0 ;;
+    --image-only)  IMAGE_ONLY=1 ;;
     -h|--help)
-      printf 'usage: install.sh [--no-register] [--no-start]\n'
+      printf 'usage: install.sh [--no-register] [--no-start] [--image-only]\n'
       printf '  --no-register  install and start the node, do not register it with a mothership\n'
       printf '  --no-start     install and register, do not start the container\n'
+      printf '  --image-only   obtain the node image and stop; install it later with no download\n'
       printf '  settings (mothership URL, image source, credentials) come from the\n'
       printf '  environment or an .env answer file — see README.md\n'
       exit 0 ;;
@@ -92,14 +99,19 @@ done
 
 case "$VA_REGISTER" in 0|1) ;; *) printf '!! VA_REGISTER must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$START" in 0|1) ;; *) printf '!! START must be 0 or 1\n' >&2; exit 1 ;; esac
+case "$IMAGE_ONLY" in 0|1) ;; *) printf '!! IMAGE_ONLY must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$INSTALL_DIR" in
   /*) ;;
   *) printf '!! INSTALL_DIR must be an absolute, specific directory\n' >&2; exit 1 ;;
 esac
 case "$VA_IMAGE_SOURCE" in
   ''|dockerhub|archive) ;;
+  # The image already on this host, and nothing else: no registry, no
+  # download, no menu. An install that follows `install.sh --image-only`.
+  local) [ -z "$VA_IMAGE_ARCHIVE" ] \
+    || { printf '!! VA_IMAGE_SOURCE=local takes no VA_IMAGE_ARCHIVE\n' >&2; exit 1; } ;;
   s3) [ -n "$VA_IMAGE_ARCHIVE" ] || VA_IMAGE_ARCHIVE=$VA_IMAGE_URL ;;
-  *) printf '!! VA_IMAGE_SOURCE must be dockerhub, s3 or archive\n' >&2; exit 1 ;;
+  *) printf '!! VA_IMAGE_SOURCE must be dockerhub, s3, archive or local\n' >&2; exit 1 ;;
 esac
 if [ "$VA_IMAGE_SOURCE" = "archive" ] && [ -z "$VA_IMAGE_ARCHIVE" ]; then
   printf '!! VA_IMAGE_SOURCE=archive needs VA_IMAGE_ARCHIVE=<path or URL>\n' >&2; exit 1
@@ -995,6 +1007,8 @@ step "2/6  Platform image"
 # lets a present image stand.
 if [ -z "$VA_IMAGE_ARCHIVE" ] && docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
   say "$VA_VOIP_IMAGE is already present"
+elif [ "$VA_IMAGE_SOURCE" = "local" ]; then
+  die "no $VA_VOIP_IMAGE on this host — get it first: sh install.sh --image-only"
 elif choose_image_source && [ -n "$VA_IMAGE_ARCHIVE" ]; then
   # Offline path: a `docker save` archive (plain or gzip) of the node image.
   # No registry credentials are needed or requested.
@@ -1008,15 +1022,24 @@ elif choose_image_source && [ -n "$VA_IMAGE_ARCHIVE" ]; then
       say "downloading $VA_IMAGE_ARCHIVE"
       curl -fL --progress-bar --retry 5 --retry-all-errors -o "$ARCHIVE_DOWNLOAD" "$VA_IMAGE_ARCHIVE" \
         || die "could not download $VA_IMAGE_ARCHIVE"
-      if curl -fsSL -o "$ARCHIVE_DOWNLOAD.sha256" "$VA_IMAGE_ARCHIVE.sha256" 2>/dev/null; then
-        EXPECTED_SHA="$(tr -d '[:space:]' < "$ARCHIVE_DOWNLOAD.sha256" | cut -c1-64)"
-        ACTUAL_SHA="$(sha256sum "$ARCHIVE_DOWNLOAD" | cut -d' ' -f1)"
-        [ "$EXPECTED_SHA" = "$ACTUAL_SHA" ] \
-          || die "sha256 mismatch for $VA_IMAGE_ARCHIVE (expected $EXPECTED_SHA, got $ACTUAL_SHA)"
-        say "sha256 verified"
-      else
-        say "no .sha256 published beside the archive; skipping checksum"
-      fi
+      # NO CHECKSUM, NO INSTALL. This used to fall back to "skipping checksum",
+      # which meant the one case the check exists for — a truncated download, a
+      # substituted file, a stale object in a cache — installed silently. Every
+      # publisher of ours writes the sibling .sha256 (va-crystal's
+      # `make s3-publish`, the release workflow, the integration test); a URL
+      # without one is not a source this installs from.
+      curl -fsSL -o "$ARCHIVE_DOWNLOAD.sha256" "$VA_IMAGE_ARCHIVE.sha256" 2>/dev/null \
+        || die "no $VA_IMAGE_ARCHIVE.sha256 — a downloaded image is installed only against its published checksum"
+      EXPECTED_SHA="$(tr -d '[:space:]' < "$ARCHIVE_DOWNLOAD.sha256" | cut -c1-64)"
+      case "$EXPECTED_SHA" in
+        [0-9a-fA-F][0-9a-fA-F]*) [ "${#EXPECTED_SHA}" -eq 64 ] \
+          || die "$VA_IMAGE_ARCHIVE.sha256 is not a sha256 sum" ;;
+        *) die "$VA_IMAGE_ARCHIVE.sha256 is not a sha256 sum" ;;
+      esac
+      ACTUAL_SHA="$(sha256sum "$ARCHIVE_DOWNLOAD" | cut -d' ' -f1)"
+      [ "$EXPECTED_SHA" = "$ACTUAL_SHA" ] \
+        || die "sha256 mismatch for $VA_IMAGE_ARCHIVE (expected $EXPECTED_SHA, got $ACTUAL_SHA)"
+      say "sha256 verified"
       ARCHIVE_FILE=$ARCHIVE_DOWNLOAD ;;
   esac
   say "loading $ARCHIVE_FILE"
@@ -1086,6 +1109,16 @@ fs_cmd mkdir -p "$WORK_DIR/config"
 docker_cmd run --rm --entrypoint voipappz "$VA_VOIP_IMAGE" node --help >/dev/null \
   || die "$VA_VOIP_IMAGE has no working node CLI"
 say "verified the in-container CLI of $VA_VOIP_IMAGE"
+
+# THE IMAGE, AND NOTHING ELSE — fetched AND proved runnable, which is the
+# whole point of stopping here rather than at the end of step 2: an archive
+# that loaded is not yet an image that works. Nothing has been written outside
+# WORK_DIR (the installation directory is only committed after registration),
+# so there is nothing to undo: the host simply has a verified image now.
+if [ "$IMAGE_ONLY" = 1 ]; then
+  printf '\n  %s is ready. install it with: sh install.sh\n\n' "$VA_VOIP_IMAGE"
+  exit 0
+fi
 
 step "4/6  va.yaml"
 VA_YAML="$WORK_DIR/config/va.yaml"
