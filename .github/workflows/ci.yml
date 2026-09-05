@@ -57,6 +57,7 @@ jobs:
           # from the `##` comments, so it cannot name a target that is not
           # there; what it CAN do is lose one, which check-make catches.
           make -n get                     | grep -q -- --image-only
+          make -n get dockerhub           | grep -q "VA_IMAGE_SOURCE='dockerhub'"
           make -n get SOURCE=dockerhub    | grep -q "VA_IMAGE_SOURCE='dockerhub'"
           make -n install                 | grep -q 'VA_IMAGE_SOURCE=local'
           make -n install REGISTER=0      | grep -q -- --no-register

@@ -104,7 +104,7 @@ NEWEST_ARCHIVE  = $(lastword $(sort $(wildcard $(VA_CRYSTAL_DIR)/ci/build/va-cry
 # cannot re-download what the host already has.
 #
 #   make get                          S3: the newest published image archive
-#   make get SOURCE=dockerhub         pull, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
+#   make get dockerhub                pull, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
 #   make get ARCHIVE=/path.tar.gz     docker load a docker-save archive: a path or an http(s) URL
 #   make get ARCHIVE=latest           ... the newest one in ../va-crystal/ci/build
 #
@@ -112,9 +112,16 @@ NEWEST_ARCHIVE  = $(lastword $(sort $(wildcard $(VA_CRYSTAL_DIR)/ci/build/va-cry
 # chose one: `get` always names a source (the S3 default is the same one its
 # prompt offers as [2]) and `install` names `local`, which never fetches and
 # says plainly when the image is missing.
-SOURCE ?= $(if $(ARCHIVE),archive,s3)
+#
+# The source is a bare word, not SOURCE=word, so each name below is also a
+# harmless phony goal — `make get dockerhub` runs `get` then the no-op
+# `dockerhub`. SOURCE=word (used by CI's `make -n` smoke tests) still works.
+IMAGE_SOURCES := s3 dockerhub archive local
+.PHONY: $(IMAGE_SOURCES)
+$(IMAGE_SOURCES): ; @:
+SOURCE ?= $(or $(filter $(IMAGE_SOURCES),$(MAKECMDGOALS)),$(if $(ARCHIVE),archive,s3))
 
-get: ## [SOURCE=s3|dockerhub] [ARCHIVE=file|url|latest] Get the node image and prove it runs
+get: ## [s3|dockerhub] [ARCHIVE=file|url|latest] Get the node image and prove it runs
 	@archive='$(ARCHIVE)'; \
 	 if [ "$$archive" = latest ]; then \
 	   archive='$(NEWEST_ARCHIVE)'; \

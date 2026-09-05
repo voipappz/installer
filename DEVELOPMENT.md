@@ -46,7 +46,7 @@ sneaks into the installer or its tests (the project deliberately has none).
 
 ```sh
 make get                             # the image: S3 archive, verified, no questions
-make get SOURCE=dockerhub            # ... pulled instead, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
+make get dockerhub                   # ... pulled instead, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
 make get ARCHIVE=latest              # ... docker load the newest ../va-crystal/ci/build/*.tar.gz
 make get ARCHIVE=/path/img.tar.gz    # ... a path or an http(s) URL (which must publish .sha256)
 make install                         # install THAT image; never fetches, never asks
