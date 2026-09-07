@@ -26,10 +26,30 @@ name: release
 # carried NO assets that way. So the producers are INDEPENDENT and each uploads
 # its own work: a slow macOS queue cannot cost you the linux CLI.
 #
-# Trigger: push a version tag, e.g.  git tag v0.3.0 && git push origin v0.3.0
-# (or run manually from the Actions tab).
+# TWO KINDS OF RELEASE, one workflow.
+#
+#   a version tag   git tag v0.3.0 && git push origin v0.3.0
+#                   -> the release v0.3.0, permanent, what a pin names.
+#   a push to main  -> the `latest` PRERELEASE, moved to that commit.
+#                   Every merge republishes it, so a consumer that follows the
+#                   project rather than a version always has today's binary.
+#
+# The rolling half exists because it was documented and never built: the
+# Makefile has promised "the rolling `latest` prerelease — every push to main"
+# since the tag was cut by hand on 2026-09-04, and nothing ever moved it again.
+# va-crystal bakes this CLI into the node image and its assertions grow with
+# the CLI, so a stale `latest` means every new node-side command fails that
+# build until someone remembers to cut a tag — which is how three builds died
+# on 2026-09-07 for a `monitor` that worked fine.
+#
+# PRERELEASE ON PURPOSE. GitHub's "latest release" excludes prereleases, so
+# https://github.com/voipappz/installer/releases/latest keeps meaning the
+# newest v* — a rolling build never displaces a real version. Fetch the moving
+# one by tag instead:
+#   https://github.com/voipappz/installer/releases/download/latest/voipappz-linux-amd64
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -47,6 +67,13 @@ env:
   # the amd64 image and died with `exec format error`, hence no arm64 leg.
   CRYSTAL_IMAGE: crystallang/crystal:1.16.3-alpine
 
+  # ONE definition of what is being released, inherited by every job below.
+  # A v* tag releases itself; a push to main releases `latest`; a manual run
+  # releases whatever was typed. github.ref_name is the BRANCH on a branch
+  # push, so it cannot be used unguarded — that is the bug this expression
+  # exists to avoid, and it would have published a release called "main".
+  TAG: ${{ github.event.inputs.tag || (github.ref_type == 'tag' && github.ref_name) || 'latest' }}
+
 jobs:
   # Creates the release so the producers below have somewhere to upload,
   # without any of them racing to create it. No compilation, no checkout of
@@ -55,14 +82,36 @@ jobs:
     name: create the release
     runs-on: ubuntu-latest
     steps:
-      - name: Create the release if it does not exist
+      # THE ROLLING TAG HAS TO MOVE, or the release keeps pointing at whatever
+      # commit it was cut from — which is exactly how `latest` sat on a
+      # 2026-09-04 commit while main went on without it. Moved through the API
+      # rather than a checkout: this job must stay the one that cannot fail.
+      - name: Move the rolling tag to this commit
+        if: github.ref_type == 'branch'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 \
-            || gh release create "$TAG" --repo "${{ github.repository }}" \
-                 --title "$TAG" --generate-notes
+          gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/latest" \
+                 -f sha="$GITHUB_SHA" -F force=true \
+            || gh api -X POST "repos/${{ github.repository }}/git/refs" \
+                 -f ref="refs/tags/latest" -f sha="$GITHUB_SHA"
+
+      - name: Create the release, or point the rolling one at this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            # Only `latest` is ever re-pointed. A published version is a fact.
+            [ "$TAG" = latest ] \
+              && gh release edit latest --repo "${{ github.repository }}" \
+                   --target "$GITHUB_SHA" --prerelease
+          else
+            # --prerelease for the rolling one keeps it out of
+            # /releases/latest, so it never displaces a real version there.
+            gh release create "$TAG" --repo "${{ github.repository }}" \
+              --title "$TAG" --generate-notes \
+              $([ "$TAG" = latest ] && echo --prerelease)
+          fi
 
   cli-linux:
     name: voipappz-linux-amd64
@@ -115,7 +164,6 @@ jobs:
       - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
             voipappz-linux-amd64 voipappz-linux-amd64.sha256
@@ -154,7 +202,6 @@ jobs:
       - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
             voipappz-darwin-arm64 voipappz-darwin-arm64.sha256
