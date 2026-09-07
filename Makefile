@@ -249,12 +249,30 @@ CLI_CHOWN = chown -R $(shell id -u):$(shell id -g) bin lib .shards 2>/dev/null |
 # bin/voipappz is the one the mothership's Makefile, its SIP suites and its ISO
 # bake copy from this checkout when it sits beside theirs — and the one
 # va-crystal's image build downloads from this repo's releases.
-build: ## Build the CLI binary at bin/voipappz (static, in Docker)
+
+# NO CRYSTAL, NO DOCKER, NO WAIT: `make build RELEASE=…` DOWNLOADS the binary
+# instead of compiling one, through the same scripts/install-cli.sh that puts
+# it on PATH — it just installs into ./bin here. Same artifact: release.yml
+# links it from this source, in the image named above.
+#
+#   make build                 compile it here (docker, ~1 min)
+#   make build RELEASE=1       the newest tagged release
+#   make build RELEASE=latest  the rolling `latest` prerelease — every push to main
+#   make build RELEASE=v0.2.0  a specific tag
+#
+# Use it when you only need to RUN the CLI (the SIP suites, the ISO bake, a
+# laptop); compile when you are CHANGING it, because a download cannot contain
+# your edit.
+build: ## [RELEASE=1|latest|v0.2.0] Build the CLI binary at bin/voipappz (static, in Docker; RELEASE downloads it)
+ifdef RELEASE
+	@PREFIX='$(CURDIR)/bin' sh scripts/install-cli.sh --release $(filter-out 1,$(RELEASE))
+else
 	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug; s=$$?; $(CLI_CHOWN); exit $$s'
 	@mkdir -p bin
 	@cp cli/bin/voipappz bin/voipappz
 	@chmod +x bin/voipappz
 	@echo "cli binary: $$(./bin/voipappz --version)"
+endif
 
 cli-test: ## The CLI spec suite (in Docker)
 	$(CLI_RUN) '$(CLI_SHARDS) && crystal spec --no-color; s=$$?; $(CLI_CHOWN); exit $$s'

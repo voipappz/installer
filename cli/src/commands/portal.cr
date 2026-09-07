@@ -9,7 +9,7 @@ module VoIPAppz::Commands
   # `voipappz portal` — the user-facing app, github.com/voipappz/app.
   #
   # This replaces the app repo's own Makefile. Everything runs in Docker, as
-  # that file insisted: no host node, npm, ruby or kamal is needed for any verb
+  # that file insisted: no host ruby or kamal is needed for any verb
   # here, which is what let a portal contributor start from a bare clone.
   #
   # The portal is NOT the mothership stack. Its compose project, .env and kamal
@@ -25,15 +25,10 @@ module VoIPAppz::Commands
     register_sub_command check, type: Check
     register_sub_command verify, type: Verify
     register_sub_command status, type: Status
-    register_sub_command build, type: Build
-    register_sub_command lint, type: Lint
-    register_sub_command unit, type: Unit
-    register_sub_command test, type: Test
     register_sub_command prod, type: Prod
     register_sub_command deploy, type: Deploy
     register_sub_command ship, type: Ship
     register_sub_command env, type: Env
-    register_sub_command scaffold, type: Scaffold
     register_sub_command ci, type: Ci
 
     def run
@@ -43,7 +38,7 @@ module VoIPAppz::Commands
     # ---------------------------------------------------------------- running
 
     class Dev < Admiral::Command
-      define_help description: "Run the app in Docker (Vite :4200 + portal :4001), attached logs"
+      define_help description: "Run the portal in Docker (:4001), attached logs"
       define_flag path : String,
         description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
         default: ""
@@ -51,24 +46,24 @@ module VoIPAppz::Commands
       def run
         dir = VoIPAppz::Portal.dir!(flags.path)
         Check.report(dir)
-        VoIPAppz::Portal.compose!(dir, ["up", "-d", "react-app", "elixir", "chrome-ext"])
-        puts "portal → #{VoIPAppz::Portal::PORTAL} · Vite → #{VoIPAppz::Portal::WEB_APP} " \
-             "(proxies /api → mothership #{VoIPAppz::Portal.mothership(dir)})"
+        VoIPAppz::Portal.compose!(dir, ["up", "-d", "elixir"])
+        puts "portal → #{VoIPAppz::Portal::PORTAL} " \
+             "(forwards /api → mothership #{VoIPAppz::Portal.mothership(dir)})"
         puts "Ctrl-C detaches; stack keeps running"
-        VoIPAppz::Portal.compose(dir, ["logs", "-f", "react-app", "elixir"])
+        VoIPAppz::Portal.compose(dir, ["logs", "-f", "elixir"])
       end
     end
 
     class Up < Admiral::Command
-      define_help description: "Start the full Docker stack (web + portal + extension), detached"
+      define_help description: "Start the portal in Docker, detached"
       define_flag path : String,
         description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
         default: ""
 
       def run
         dir = VoIPAppz::Portal.dir!(flags.path)
-        VoIPAppz::Portal.compose!(dir, ["up", "-d", "react-app", "elixir", "chrome-ext"])
-        puts "web → #{VoIPAppz::Portal::WEB_APP}   portal → #{VoIPAppz::Portal::PORTAL}"
+        VoIPAppz::Portal.compose!(dir, ["up", "-d", "elixir"])
+        puts "portal → #{VoIPAppz::Portal::PORTAL}"
       end
     end
 
@@ -88,10 +83,10 @@ module VoIPAppz::Commands
       define_flag path : String,
         description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
         default: ""
-      define_argument service : String, description: "Service to follow (default: react-app)"
+      define_argument service : String, description: "Service to follow (default: elixir)"
 
       def run
-        service = arguments.service || "react-app"
+        service = arguments.service || "elixir"
         VoIPAppz::Portal.compose(VoIPAppz::Portal.dir!(flags.path), ["logs", "-f", service])
       end
     end
@@ -140,7 +135,7 @@ module VoIPAppz::Commands
 
       def self.report(dir : String) : Nil
         mothership = VoIPAppz::Portal.mothership(dir)
-        puts "==> Mothership (override: VITE_API_TARGET / MOTHERSHIP_URL in .env)"
+        puts "==> Mothership (override: PORTAL_ENGINE_URL / MOTHERSHIP_URL in .env)"
         code = VoIPAppz::Portal.http_code("#{mothership}/tasks/customer_portal_data")
         state = code.starts_with?("2") || code.starts_with?("3") || code.starts_with?("4") ?
                 VoIPAppz::Colors.green("OK (#{code})") :
@@ -150,7 +145,7 @@ module VoIPAppz::Commands
     end
 
     class Verify < Admiral::Command
-      define_help description: "Health check: the portal, Vite, and the /health dependency report"
+      define_help description: "Health check: the portal and its /health dependency report"
       define_flag path : String,
         description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
         default: ""
@@ -160,7 +155,6 @@ module VoIPAppz::Commands
         puts "==> Services"
         # /health/alive, not /test — that was the Deno server's liveness route.
         probe("portal", "#{VoIPAppz::Portal::PORTAL}/health/alive")
-        probe("web/vite", "#{VoIPAppz::Portal::WEB_APP}/")
 
         puts "==> Dependencies (reported by #{VoIPAppz::Portal::PORTAL}/health)"
         body = VoIPAppz::Portal.get("#{VoIPAppz::Portal::PORTAL}/health")
@@ -193,7 +187,7 @@ module VoIPAppz::Commands
     end
 
     class Status < Admiral::Command
-      define_help description: "Local git + production health + deployed version"
+      define_help description: "Local git + production health"
       define_flag path : String,
         description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
         default: ""
@@ -217,83 +211,19 @@ module VoIPAppz::Commands
         puts "GET /      → #{VoIPAppz::Portal.http_code("#{prod}/")}"
         puts "GET /health/alive → #{VoIPAppz::Portal.http_code("#{prod}/health/alive")}"
         puts "GET /health/ready → #{VoIPAppz::Portal.http_code("#{prod}/health/ready")}"
-        puts "=== Deployed version ==="
-        puts deployed_version(prod) || "(not found)"
       end
 
-      # Scrape the version out of the served bundle: find the first asset the
-      # SPA shell loads, fetch it, and read the stamp deploy.yml baked in.
-      #
-      # The Makefile hardcoded `2026\.` — that stops finding anything on 1 Jan.
-      # VITE_APP_VERSION is %Y.%m.%d-<short-sha>, so match the shape, not a year.
-      private def deployed_version(prod : String) : String?
-        shell = VoIPAppz::Portal.get("#{prod}/")
-        return nil unless shell
-        asset = shell.match(/src="(\/assets\/[^"]+\.js)"/).try(&.[1])
-        return nil unless asset
-        bundle = VoIPAppz::Portal.get("#{prod}#{asset}", 20)
-        return nil unless bundle
-        bundle.match(/\d{4}\.\d{2}\.\d{2}-[a-f0-9]+/).try(&.[0])
-      end
+      # NO deployed-version line. It used to scrape the stamp out of the served
+      # JS bundle — find the asset the SPA shell loads, fetch it, read
+      # VITE_APP_VERSION out of it. The portal serves LiveView now; there is no
+      # bundle to scrape and nothing stamps a version into the release. The
+      # honest answer is not to print a line that can only ever say
+      # "(not found)". Restore it when the app reports a version of its own.
     end
 
-    # ---------------------------------------------------------------- build & test
 
-    class Build < Admiral::Command
-      define_help description: "Production build → dist/ (in Docker)"
-      define_flag path : String,
-        description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
-        default: ""
 
-      def run
-        VoIPAppz::Portal.npm!(VoIPAppz::Portal.dir!(flags.path), "build")
-      end
-    end
 
-    class Lint < Admiral::Command
-      define_help description: "ESLint (in Docker)"
-      define_flag path : String,
-        description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
-        default: ""
-
-      def run
-        VoIPAppz::Portal.npm!(VoIPAppz::Portal.dir!(flags.path), "lint")
-      end
-    end
-
-    class Unit < Admiral::Command
-      define_help description: "Vitest unit tests, one-shot (in Docker)"
-      define_flag path : String,
-        description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
-        default: ""
-
-      def run
-        VoIPAppz::Portal.npm!(VoIPAppz::Portal.dir!(flags.path), "test:run")
-      end
-    end
-
-    class Test < Admiral::Command
-      define_help description: "Playwright E2E in Docker (needs the app running — portal up)"
-      define_flag path : String,
-        description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
-        default: ""
-      define_flag crystal : Bool,
-        description: "Instead: the Crystal mock → DuckDB → health/dashboard pipeline",
-        default: false
-
-      def run
-        dir = VoIPAppz::Portal.dir!(flags.path)
-        if flags.crystal
-          # The script directly, not `npm run test:crystal` — going through npm
-          # needs a host node, which is the one thing every other verb avoids.
-          status = Process.run("bash", ["scripts/test-crystal-pipeline.sh"], chdir: dir,
-            output: Process::Redirect::Inherit, error: Process::Redirect::Inherit)
-          exit status.exit_code unless status.success?
-          return
-        end
-        VoIPAppz::Portal.compose!(dir, ["--profile", "test", "run", "--rm", "e2e"])
-      end
-    end
 
     class Ci < Admiral::Command
       define_help description: "Run the GitHub Actions workflow locally with act"
@@ -335,27 +265,6 @@ module VoIPAppz::Commands
       end
     end
 
-    class Scaffold < Admiral::Command
-      define_help description: "Scaffold a feature module: portal scaffold Foo [--endpoint /api/foos]"
-      define_flag path : String,
-        description: "Path to the portal (default: the ../app sibling, or $VA_PORTAL_DIR)",
-        default: ""
-      define_argument name : String, description: "Module name, e.g. Foo", required: true
-      define_flag endpoint : String, description: "API endpoint, e.g. /api/foos", default: ""
-
-      def run
-        dir = VoIPAppz::Portal.dir!(flags.path)
-        # --user: the scaffolder writes into the repo mount and the container is
-        # root, so without it the new files land root-owned and you need sudo to
-        # edit or delete your own scaffold. Safe here (unlike build/lint/unit)
-        # because this only writes source files — it never touches the
-        # node_modules volume.
-        VoIPAppz::Portal.compose!(dir, [
-          "run", "--rm", "--no-deps", "--user", VoIPAppz::Portal.user_group,
-          "react-app", "node", "scripts/new-module.mjs", arguments.name, flags.endpoint,
-        ])
-      end
-    end
 
     # ---------------------------------------------------------------- deploy
 

@@ -302,9 +302,10 @@ curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/scripts/ins
 Build it from this checkout (Docker only, no Crystal toolchain):
 
 ```sh
-make build          # the static binary at bin/voipappz
-make cli-test       # the spec suite
-make install-cli    # put bin/voipappz on PATH
+make build                 # the static binary at bin/voipappz
+make build RELEASE=latest  # ... or download the same binary, compiling nothing
+make cli-test              # the spec suite
+make install-cli           # put bin/voipappz on PATH
 ```
 
 Or take the newest build of `main` directly — no tag, no token, no toolchain:

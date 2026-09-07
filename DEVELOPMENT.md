@@ -179,7 +179,8 @@ Watch a run: `gh run list --limit 1` then `gh run watch <id>`. A change is
 
 `.github/workflows/release.yml` runs on a `v*` tag and publishes the CLI
 binaries and checksums. Nothing in `install.sh` consumes them; va-crystal and
-`scripts/install-cli.sh --release` do.
+`scripts/install-cli.sh --release` do — as does `make build RELEASE=1`, which
+downloads that binary into `bin/` instead of compiling one.
 
 ## Where things live
 

@@ -61,6 +61,9 @@ jobs:
           make -n get SOURCE=dockerhub    | grep -q "VA_IMAGE_SOURCE='dockerhub'"
           make -n install                 | grep -q 'VA_IMAGE_SOURCE=local'
           make -n install REGISTER=0      | grep -q -- --no-register
+          make -n build                   | grep -q crystallang/crystal
+          make -n build RELEASE=1         | grep -q -- 'install-cli.sh --release'
+          make -n build RELEASE=v0.2.0    | grep -q -- '--release v0.2.0'
           make check-make
 
   # THE CLI, built and tested here since 2026-09-03, when cli/ moved in from

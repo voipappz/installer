@@ -2,13 +2,13 @@ require "./spec_helper"
 require "../src/helpers/portal"
 require "../src/helpers/kamal"
 
-# A directory that looks like the portal: source markers only. config/deploy.yml
-# and .kamal/ used to be markers too and would now reject the real thing.
+# A directory that looks like the portal: the server, and nothing else.
+# config/deploy.yml and .kamal/ used to be markers too and would now reject the
+# real thing; so would package.json, which the portal no longer has.
 def with_portal(&)
   dir = File.realpath(File.tempname.tap { |d| Dir.mkdir_p(d) })
-  Dir.mkdir_p(File.join(dir, "agents_demo"))
-  File.write(File.join(dir, "package.json"), "{}\n")
-  File.write(File.join(dir, "agents_demo", "mix.exs"), "# phoenix\n")
+  Dir.mkdir_p(File.join(dir, "connectix"))
+  File.write(File.join(dir, "connectix", "mix.exs"), "# phoenix\n")
   yield dir
 ensure
   FileUtils.rm_rf(dir) if dir
@@ -37,22 +37,43 @@ describe VoIPAppz::Portal do
       end
     end
 
-    # agents_demo/mix.exs is the Phoenix portal. It replaced api/server.ts as the
-    # marker when the Deno BFF was deleted — api/ no longer exists, and checking
-    # for it rejected the real portal with an error telling you to re-clone the
-    # repo you were standing in.
+    # connectix/mix.exs is the Phoenix portal, and it is the ONLY marker. The
+    # pair before it — package.json + agents_demo/mix.exs — lost both halves at
+    # once when the portal went pure BEAM: the React SPA was deleted and
+    # agents_demo/ was renamed. `portal deploy` then refused before it started,
+    # again telling you to re-clone the repo you were standing in.
     #
     # Dockerfile.production is deliberately NOT a marker — the customer-app
     # template ships one, and deploying a customer app to the portal's host is
     # the failure that reasoning prevents.
-    it "rejects a bare node project that only has package.json" do
+    it "rejects a project that only has a Dockerfile" do
       dir = File.realpath(File.tempname.tap { |d| Dir.mkdir_p(d) })
       begin
-        File.write(File.join(dir, "package.json"), "{}\n")
         File.write(File.join(dir, "Dockerfile.production"), "FROM scratch\n")
         VoIPAppz::Portal.portal?(dir).should be_false
       ensure
         FileUtils.rm_rf(dir)
+      end
+    end
+
+    # The portal has no package.json and must never be identified by one: a
+    # node project is exactly what this check has to tell the portal APART
+    # from, now that the portal itself carries no node.
+    it "rejects a node project" do
+      dir = File.realpath(File.tempname.tap { |d| Dir.mkdir_p(d) })
+      begin
+        File.write(File.join(dir, "package.json"), "{}\n")
+        Dir.mkdir_p(File.join(dir, "node_modules"))
+        VoIPAppz::Portal.portal?(dir).should be_false
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
+
+    it "recognises the portal with no package.json anywhere in it" do
+      with_portal do |dir|
+        File.exists?(File.join(dir, "package.json")).should be_false
+        VoIPAppz::Portal.portal?(dir).should be_true
       end
     end
   end

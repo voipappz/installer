@@ -11,8 +11,8 @@ module VoIPAppz
   # Project.compose_file and would aim every portal command at the mothership's
   # containers.
   #
-  # THE SPLIT THAT MATTERS: the app repo carries the SOURCE (package.json,
-  # agents_demo/, Dockerfile.production, docker-compose.yml). This repo carries
+  # THE SPLIT THAT MATTERS: the app repo carries the SOURCE (connectix/,
+  # Dockerfile.production, docker-compose.yml). This repo carries
   # the DEPLOY
   # POLICY, in config/portal/ — deploy.yml, the destination overrides,
   # portal-destinations.tsv and .kamal/. Choosing where the portal lands needs
@@ -24,12 +24,12 @@ module VoIPAppz
     extend self
 
     DEFAULT_MOTHERSHIP = "https://cloud.voipappz.io"
-    # 4001 is THE ORIGIN and does not move: the SPA, the Chrome extension and
-    # Vite's proxy all point at it. It was called DENO_API when a Deno BFF held
-    # that port; the Elixir portal holds it now and the name was the last thing
-    # still saying otherwise.
+    # 4001 is THE ORIGIN and does not move: the LiveView UI, /ws/events and the
+    # Chrome extension all point at it. It was called DENO_API when a Deno BFF
+    # held that port, and WEB_APP :4200 sat beside it while a React SPA did.
+    # Both are gone — the Elixir portal is the whole app and holds this port
+    # alone.
     PORTAL             = "http://localhost:4001"
-    WEB_APP            = "http://localhost:4200"
 
     class NotFound < Exception; end
 
@@ -55,7 +55,7 @@ module VoIPAppz
 
       unless portal?(candidate)
         raise NotFound.new(
-          "#{candidate} does not look like the portal (no package.json + agents_demo/mix.exs).\n" \
+          "#{candidate} does not look like the portal (no connectix/mix.exs).\n" \
           "  The portal is github.com/voipappz/app, cloned BESIDE this repo:\n" \
           "    git clone https://github.com/voipappz/app #{sibling}\n" \
           "  Or pass --path, or set VA_PORTAL_DIR.")
@@ -91,16 +91,24 @@ module VoIPAppz
     # are not in the app repo any more — they live in config/portal/ here — so
     # checking them would reject the real portal.
     #
-    # THE MARKER MOVED WITH THE SERVER. It was api/server.ts, the Deno BFF that
-    # served the bundle same-origin and forwarded /api, /auth and /tasks. That
-    # BFF is gone — the Elixir portal does that job now — so api/ no longer
-    # exists and this check rejected the real portal with "no package.json +
-    # api/server.ts", i.e. it told you to re-clone the repo you were standing
-    # in. agents_demo/mix.exs is the replacement and is the better marker
-    # anyway: no customer app template carries a Phoenix app.
+    # THE MARKER MOVED WITH THE SERVER, twice. It was api/server.ts, the Deno
+    # BFF that served the bundle same-origin and forwarded /api, /auth and
+    # /tasks; that BFF is gone — the Elixir portal does that job now — so the
+    # check rejected the real portal with "no package.json + api/server.ts",
+    # i.e. it told you to re-clone the repo you were standing in.
+    #
+    # It then happened again, for the same reason in the other half of the
+    # pair. The portal is pure BEAM: the React SPA and its package.json were
+    # deleted, and agents_demo/ was renamed connectix/. Both halves of the old
+    # marker went at once, so `portal deploy` refused before it started.
+    #
+    # ONE marker now, and it is the server itself: connectix/mix.exs. Requiring
+    # a second file is what made this fragile — every marker that is not the
+    # thing being deployed is a file that can be deleted by work that has
+    # nothing to do with deploying. No customer app template carries a Phoenix
+    # app, so one is enough to tell the portal from anything else.
     def portal?(dir : String) : Bool
-      File.exists?(File.join(dir, "package.json")) &&
-        File.exists?(File.join(dir, "agents_demo", "mix.exs"))
+      File.exists?(File.join(dir, "connectix", "mix.exs"))
     end
 
     def env(dir : String) : Hash(String, String)
@@ -108,12 +116,15 @@ module VoIPAppz
       EnvFile.load(File.join(dir, ".env"), first_wins: true)
     end
 
-    # The mothership base, resolved exactly as vite.config.js does, so a
-    # preflight always probes the host Vite actually proxies to.
-    # VITE_API_TARGET wins over MOTHERSHIP_URL — by PRECEDENCE, not by whichever
-    # appears first in the file.
+    # Where the portal forwards /auth, /api and /tasks. PORTAL_ENGINE_URL is
+    # the portal's own variable and wins; MOTHERSHIP_URL is the tenant-wide
+    # knob and may name the cloud, so it is the fallback, not the default.
+    # By PRECEDENCE, not by whichever appears first in the file.
+    #
+    # VITE_API_TARGET used to lead this list, back when a Vite proxy owned the
+    # hop. Nothing reads it now.
     def mothership(dir : String) : String
-      EnvFile.first_set(env(dir), ["VITE_API_TARGET", "MOTHERSHIP_URL"]) || DEFAULT_MOTHERSHIP
+      EnvFile.first_set(env(dir), ["PORTAL_ENGINE_URL", "MOTHERSHIP_URL"]) || DEFAULT_MOTHERSHIP
     end
 
     def prod_url(dir : String) : String
@@ -236,12 +247,6 @@ module VoIPAppz
       exit code
     end
 
-    # One-off npm in the react-app service: repo mount plus the cached
-    # node_modules volume, so no host node is needed for anything.
-    def npm!(dir : String, script : String) : Nil
-      compose!(dir, ["run", "--rm", "--no-deps", "react-app", "bash", "-c",
-                     "npm install --loglevel=error --no-audit --no-fund && npm run #{script}"])
-    end
 
     # ---------------------------------------------------------------- probes
 
