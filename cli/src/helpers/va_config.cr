@@ -2,6 +2,8 @@ require "yaml"
 require "./deploy_config"
 require "./net_validation"
 require "./node_env"
+require "./node_local"
+require "./project"
 require "./secrets"
 require "./topology"
 
@@ -13,7 +15,20 @@ module VoIPAppz::VaConfig
   # resolved project. Every reader and writer must select the same file.
   def self.yaml_path(project_dir : String) : String
     configured = ENV["VA_PATH"]?.try(&.strip)
-    configured && !configured.empty? ? configured : File.join(project_dir, VA_YAML)
+    return configured if configured && !configured.empty?
+
+    in_project = File.join(project_dir, VA_YAML)
+    # A REAL PROJECT ALWAYS WINS, whether or not it has a va.yaml yet: this is
+    # also where `voipappz setup` is told to CREATE one, and redirecting a
+    # fresh setup in a checkout to /opt/voipappz would write the wrong box's
+    # node file. The compose file is what says "a project lives here".
+    return in_project if File.exists?(in_project) ||
+                         File.exists?(File.join(project_dir, VoIPAppz::Project::COMPOSE_FILE))
+
+    # No project here at all. On a node host that is the normal state, and the
+    # va.yaml the running container is mounted from is the installer's — the
+    # one file `sbc egress sync` and `node register` must read.
+    VoIPAppz::NodeLocal.installed? ? VoIPAppz::NodeLocal.yaml_path : in_project
   end
 
   # Load va.yaml from project directory, returning a DeployConfig

@@ -51,7 +51,59 @@ make get ARCHIVE=latest              # ... docker load the newest ../va-crystal/
 make get ARCHIVE=/path/img.tar.gz    # ... a path or an http(s) URL (which must publish .sha256)
 make install                         # install THAT image; never fetches, never asks
 make install REGISTER=0              # a node with no mothership; register it later
+sh install.sh --start-only           # start the node INSTALLED in $INSTALL_DIR
 ```
+
+## The node on your machine
+
+`make up` and friends are the other thing: they drive the node you are working
+on, HERE, out of two files beside the Makefile — `./.env` (the image tag and
+the secrets the image cannot derive) and `./config/va.yaml` (the node itself).
+
+```sh
+make setup                          # the wizard: writes ./.env and ./config/va.yaml
+make up                             # start the node from those two files
+make down                           # stop it, keeping its kamailio volume
+make logs                           # follow it (TAIL=all from the beginning)
+make health                         # its own verdict, from the CLI in the image
+make cli ARGS="sbc egress status"   # any other CLI command, in the image
+```
+
+ONE COMMAND, ONE SCRIPT: each is a file in `scripts/`, and the recipe only
+names it, so nothing about how a node starts lives in the Makefile. What make
+adds is visibility — it puts the values from `./.env` on the command line it
+echoes, and a variable you set wins over the file, exactly as the scripts read
+them:
+
+```
+$ make up
+VA_VOIP_IMAGE=nirlevi/va-crystal:node sh scripts/up.sh
+
+$ make up VA_VOIP_IMAGE=nirlevi/va-crystal:latest
+VA_VOIP_IMAGE=nirlevi/va-crystal:latest sh scripts/up.sh
+```
+
+No secret is ever expanded onto that line: only the image tag, the two file
+paths, the container name and `TAIL`. The scripts read the credentials from
+`./.env` themselves and mask them even in the `docker run` they print.
+
+STRICT, AND NOTHING IS GUESSED. There are no defaults: a value that is not in
+`./.env` or your environment is named and the run stops, pointing at `make
+setup`. Nothing pulls, loads or retags an image — `make get` does that.
+
+`make up` also validates the node it started rather than trusting a port.
+`--network host` means every `127.0.0.1` probe can be answered by a DIFFERENT
+node container, so it refuses to start beside a second host-network node
+(offering to stop it), then proves kamailio through *this* container's own
+control socket before waiting for the API on `:4000`. A start that fails prints
+the tail of the node's log instead of a bare exit code, and every check happens
+before the running container is removed — a `make up` that cannot start the
+node must not be the thing that stopped it.
+
+Its `docker run` is `install.sh`'s, flag for flag (the unit tests compare the
+two, and va-crystal's `scripts/run-node.sh` is the third copy that must agree):
+the real-time ulimits, the capabilities, the YAML at `/tmp/node.yaml` and the
+named kamailio volume.
 
 The script takes no arguments; everything is an environment variable (the
 full list is the "Useful controls" table in README.md). The ones you will
@@ -113,8 +165,8 @@ secrets automatically.
 
 - **Shell / Ubuntu 22.04, 24.04** — `make check`, on every push and PR.
 - **cli · specs + static link + SIPp round-trip** — `make cli-test`, `make
-  build`, `make cli-node-build`, the node-surface check, and a real SIPp
-  round trip through `voipappz test scenario`. The binary is kept as an
+  build`, the command-surface check, and a real SIPp round trip through
+  `voipappz test scenario`. The binary is kept as an
   artifact for a day; the mothership's CI builds its own from a clone of
   this repo.
 - **Clean install + real mothership / Ubuntu 22.04, 24.04** — the

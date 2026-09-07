@@ -1,4 +1,5 @@
 require "./colors"
+require "./node_local"
 require "./project"
 
 require "./services"
@@ -89,7 +90,7 @@ module VoIPAppz::Docker
     # Only when the merged container is actually running, so a node still on
     # the three-container layout resolves the old way and keeps working.
     if MERGED_INTO_VOIP.includes?(service)
-      if merged = VoIPAppz::Services.find?("voip").try(&.container)
+      if merged = VoIPAppz::Services.find?("voip").try(&.container) || installed_node?
         return merged if containers.includes?(merged)
       end
     end
@@ -133,6 +134,13 @@ module VoIPAppz::Docker
       c = VoIPAppz::Services.find?(svc).try(&.container)
       c if c && running.includes?(c)
     end
+    # An INSTALLED node has no catalog to enumerate, and exactly one kamailio:
+    # the egress, inside va-voip. Without this the loop above yields nothing on
+    # the very host the command targets, and `sbc egress` reported "No
+    # kamailio-egress (va-egress) container running" beside a running node.
+    if found.empty? && (node = installed_node?)
+      found << node if running.includes?(node)
+    end
     # Only when neither new-style container is present: on a mixed node the
     # real ones win, and a stray legacy name must not shadow them.
     found << LEGACY_KAMAILIO if found.empty? && running.includes?(LEGACY_KAMAILIO)
@@ -159,7 +167,26 @@ module VoIPAppz::Docker
     # which reads as "this command needs the stack project" on the one box
     # where the stack project is deliberately absent.
     return nil if local_exec?
+    # Same reasoning from OUTSIDE the image: an installed node runs the egress
+    # and nothing else. The ingress belongs to the app plane, on another
+    # machine. Answering nil here is what makes `ingress?(va-voip)` false, so
+    # the SQLite-backed commands correctly treat it as the egress.
+    return nil if installed_node?
     VoIPAppz::Services.find?("kamailio-ingress").try(&.container)
+  end
+
+  # The container an installer-made node runs, when there is no compose project
+  # to resolve through. install.sh starts ONE container holding kamailio-egress,
+  # FreeSWITCH and the node together — the same merge MERGED_INTO_VOIP
+  # describes, on a box that has no catalog to describe it.
+  #
+  # Nil whenever a catalog IS present: on a mothership box the catalog is the
+  # truth, and /opt/voipappz there is that stack, not a node.
+  def self.installed_node? : String?
+    return nil if VoIPAppz::Services.available?
+    name = container_override("voip") || VoIPAppz::NodeLocal::CONTAINER
+    return name if VoIPAppz::NodeLocal.installed?
+    running_containers.includes?(name) ? name : nil
   end
 
   # The legacy `kamailio` container is deliberately NOT the ingress — see

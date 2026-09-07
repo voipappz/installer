@@ -4,6 +4,7 @@ require "json"
 require "../helpers/colors"
 require "../helpers/table"
 require "../helpers/docker"
+require "../helpers/node_local"
 require "../helpers/sip"
 require "../helpers/node_health"
 require "../helpers/gatus"
@@ -54,16 +55,19 @@ module VoIPAppz::Commands
     }
 
     def run
-      {% if flag?(:node_runtime) %}
-        # Gatus is an app-profile service. A voip node does not run one, so on
-        # that build these are not "unsupported yet" — there is nothing to ask.
-        if flags.watch || flags.http || flags.direct || flags.api || flags.gatus || flags.report
-          STDERR.puts VoIPAppz::Colors.error(
-            "This health mode requires the host development stack; use `voipappz health` inside the node"
-          )
-          exit 2
-        end
-      {% end %}
+      # INSIDE THE NODE IMAGE these modes have nothing to ask. Gatus and the
+      # API rollup are app-profile services of the mothership, and the direct
+      # probes reach for a docker client the container does not have — so this
+      # is not "unsupported yet", it is a question with no subject. Decided by
+      # looking for kamctl on PATH (Docker.local_exec?), which is the one place
+      # that answers "am I running inside the node".
+      if VoIPAppz::Docker.local_exec? &&
+         (flags.watch || flags.http || flags.direct || flags.api || flags.gatus || flags.report)
+        STDERR.puts VoIPAppz::Colors.error(
+          "This health mode needs the host stack; inside the node run plain `voipappz health`"
+        )
+        exit 2
+      end
 
       ENV["VOIPAPPZ_JSON"] = "1" if flags.json
 
@@ -95,13 +99,24 @@ module VoIPAppz::Commands
         # this fall through: the node's own verdict, and failing that the CLI's
         # direct probes, can still say WHICH service is missing on a half-built
         # box. A gatus that answers RED is answered by run_gatus itself.
-        {% unless flag?(:node_runtime) %}
+        # A NODE HAS NO GATUS, and that is not an outage. Gatus is an
+        # app-profile service of the mothership, so an operator running
+        # `voipappz health` on the box install.sh built was greeted by
+        # "MONITORING IS OFFLINE" every time, about a service that plane never
+        # runs. Two ways to be on a node: standing on its host (installed_node?)
+        # or inside its container (local_exec?). Neither has a gatus to ask.
+        if VoIPAppz::Docker.local_exec?
+          # no banner: inside the node, asking the node IS the default
+        elsif VoIPAppz::Docker.installed_node?
+          puts VoIPAppz::Colors.dim("node at #{VoIPAppz::NodeLocal.install_dir} — asking the node itself")
+          puts ""
+        else
           return if try_gatus
           puts VoIPAppz::Colors.error(
             "#{VoIPAppz::Colors::WARN}  GATUS IS NOT ANSWERING (#{VoIPAppz::Gatus.url}) — monitoring is OFFLINE")
           puts VoIPAppz::Colors.warning("Falling back to the node's own verdict:")
           puts ""
-        {% end %}
+        end
 
         # Then: ask the node. It probes its own plane continuously and on
         # loopback (kamailio RPC, dispatcher routability, FreeSWITCH ESL, host
@@ -113,17 +128,17 @@ module VoIPAppz::Commands
         # missing, which is what an operator on a half-built box needs.
         unless try_node_health
           puts VoIPAppz::Colors.error("#{VoIPAppz::Colors::WARN}  THE NODE IS NOT ANSWERING (#{VoIPAppz::NodeHealth.url})")
-          {% if flag?(:node_runtime) %}
-            exit 1
-          {% else %}
+          # Inside the node there is nothing further to ask: the probes below
+          # go through docker, which the container does not have. On a host
+          # they can still say WHICH service is missing. Either way the exit
+          # code is 1 — direct probes may pass while the node itself is down,
+          # and a node that cannot report is a node that cannot take a call.
+          unless VoIPAppz::Docker.local_exec?
             puts VoIPAppz::Colors.warning("Falling back to direct probes (voipappz health --direct):")
             puts ""
             run_all_checks
-            # Direct probes may pass while the node itself is down — a node that
-            # cannot report is a node that cannot take a call, so never report a
-            # successful process status to scripts or the console shortcut.
-            exit 1
-          {% end %}
+          end
+          exit 1
         end
       end
     end
@@ -276,7 +291,10 @@ module VoIPAppz::Commands
     # exists to avoid. `source` names which one answered, and the fallbacks
     # below are only reached when the one above them cannot be reached at all.
     private def run_json
-      {% unless flag?(:node_runtime) %}
+      # Gatus first, but only where there is one to ask — inside the node this
+      # would be a guaranteed Unreachable on every call. Same rule as the human
+      # path above.
+      unless VoIPAppz::Docker.local_exec?
         begin
           board = VoIPAppz::Gatus.fetch
           gated = VoIPAppz::Gatus.gated_groups
@@ -303,16 +321,18 @@ module VoIPAppz::Commands
         rescue VoIPAppz::Gatus::Unreachable
           # Fall through — and `source` will say so.
         end
-      {% end %}
+      end
 
       if body = VoIPAppz::NodeHealth.body
         puts body
         exit(JSON.parse(body)["ok"]?.try(&.as_bool?) ? 0 : 4)
       end
-      {% if flag?(:node_runtime) %}
+      # Inside the node, a silent node is the whole answer: the cli-probes
+      # below go through docker, which the container does not have.
+      if VoIPAppz::Docker.local_exec?
         puts({"ok" => false, "error" => "the node is not answering at #{VoIPAppz::NodeHealth.url}"}.to_json)
         exit 4
-      {% end %}
+      end
       checks = evaluate_checks
       payload = {
         "source" => "cli-probes",
@@ -492,9 +512,12 @@ module VoIPAppz::Commands
     # domain.so is loaded ONLY by the egress — the ingress is a dispatcher-only
     # forwarder and makes no tenancy decisions, so this is skipped there.
     private def check_kamailio_domain : Bool
-      return true unless Docker.running_containers.includes?(
-        VoIPAppz::Services.find?("kamailio-egress").try(&.container) || "va-egress")
+      # Resolve FIRST, then ask whether that container is running. The literal
+      # "va-egress" fallback here answered for a box with no catalog — an
+      # installed node, whose egress is inside va-voip — so this check reported
+      # "not applicable" on the one plane that does load domain.so.
       container = Docker.resolve_container("kamailio-egress")
+      return true unless Docker.running_containers.includes?(container)
       exit_code, out = Docker.exec(container, ["kamcmd", "domain.dump"])
       exit_code == 0 && out.includes?("domain:")
     rescue

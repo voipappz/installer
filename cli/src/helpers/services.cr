@@ -154,7 +154,18 @@ module VoIPAppz::Services
 
   # Look up by either compose service name or actual container name
   # (matters for `db` ↔ `postgres`).
+  # NIL WHEN THERE IS NO CATALOG, not an exception.
+  #
+  # `find?` is nil-able by contract and every caller already handles a miss, but
+  # it reached `.all`, which raises. On a node host — where the stack project is
+  # deliberately absent — that turned `voipappz sbc egress status` into an
+  # unhandled CatalogMissing over fourteen `???` frames. Docker.resolve_container
+  # answers from VoIPAppz::NodeLocal instead once this returns nil.
+  #
+  # `.all` still raises: `status`, `up` and `down` cannot do anything useful
+  # without the catalog, and CatalogMissing is the message they should print.
   def self.find?(key : String) : Service?
+    return nil unless available?
     all.find { |s| s.name == key || s.container == key || "va-#{s.container}" == key }
   end
 end

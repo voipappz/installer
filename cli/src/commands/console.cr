@@ -1,6 +1,7 @@
 require "admiral"
 require "../helpers/colors"
 require "../helpers/line_editor"
+require "../helpers/services"
 
 module VoIPAppz
   # How a child process ENDED, in words.
@@ -37,59 +38,39 @@ module VoIPAppz::Commands
     # A curated map keeps discovery useful without dumping an alphabetical wall
     # of implementation details on developers. Every public CLI command appears
     # exactly once; console-only actions live in BUILTINS.
-    COMMAND_GROUPS = {% if flag?(:node_runtime) %}
-                       [
-                         {"Operate", %w(health monitor)},
-                         {"Voice", %w(sbc pbx switch)},
-                         {"Configure", %w(setup node sync env)},
-                         {"Advanced", %w(dump nats)},
-                       ]
-                     {% else %}
-                       [
-                         {"Operate", %w(status health up down restart logs monitor shell)},
-                         {"Voice", %w(sbc pbx trace test switch)},
-                         {"Configure", %w(setup node sync config env secrets cert)},
-                         # `image` is NOT here: it was deleted when image
-                         # building became `make image` (next-cli-boundary.md
-                         # step 3), but the catalog entry stayed — and since the
-                         # unknown-command guard is driven by this list, and
-                         # nothing registers an Image class, `voipappz image`
-                         # passed the guard, printed root help and exited 0.
-                         # A typo that reports success is the exact failure the
-                         # guard exists to prevent. An entry here without a
-                         # matching register_sub_command is always that bug.
-                         #
-                         # AND THE MIRROR IMAGE, hit while moving a command in
-                         # on 2026-09-01: a registered command missing from this
-                         # list is advertised by `--help` and then REJECTED by
-                         # the guard as unknown. Both directions have to be kept
-                         # by hand. Only this one is cheap to notice — it fails
-                         # on the first run; the other exits 0.
-                         {"Build & ship", %w(checks app portal deploy backup db clean)},
-                         {"Advanced", %w(bootstrap login dump syslog nats security mcp)},
-                       ]
-                     {% end %}
+    COMMAND_GROUPS = [
+                       {"Operate", %w(status health up down restart logs monitor node-monitor shell)},
+                       {"Voice", %w(sbc pbx trace test switch)},
+                       {"Configure", %w(setup node sync config env secrets cert)},
+                       # `image` is NOT here: it was deleted when image
+                       # building became `make image` (next-cli-boundary.md
+                       # step 3), but the catalog entry stayed — and since the
+                       # unknown-command guard is driven by this list, and
+                       # nothing registers an Image class, `voipappz image`
+                       # passed the guard, printed root help and exited 0.
+                       # A typo that reports success is the exact failure the
+                       # guard exists to prevent. An entry here without a
+                       # matching register_sub_command is always that bug.
+                       #
+                       # AND THE MIRROR IMAGE, hit while moving a command in
+                       # on 2026-09-01: a registered command missing from this
+                       # list is advertised by `--help` and then REJECTED by
+                       # the guard as unknown. Both directions have to be kept
+                       # by hand. Only this one is cheap to notice — it fails
+                       # on the first run; the other exits 0.
+                       {"Build & ship", %w(checks app portal deploy backup db clean)},
+                       {"Advanced", %w(bootstrap login dump syslog nats security mcp)},
+                     ]
     CLI_COMMANDS   = COMMAND_GROUPS.flat_map(&.[1])
     ROOT_COMMANDS  = CLI_COMMANDS + ["console"]
     BUILTINS       = %w(help watch clear version exit quit q)
-    QUICK_COMMANDS = {% if flag?(:node_runtime) %}
-                       {
-                         "s" => %w(health),
-                         "h" => %w(help),
-                       }
-                     {% else %}
-                       {
-                         "s" => %w(health),
-                         "c" => %w(status --active),
-                         "l" => %w(logs),
-                         "h" => %w(help),
-                       }
-                     {% end %}
-    EVERYDAY_COMMANDS = {% if flag?(:node_runtime) %}
-                          %w(health sbc pbx setup)
-                        {% else %}
-                          %w(status up down logs sbc pbx test deploy)
-                        {% end %}
+    QUICK_COMMANDS = {
+                       "s" => %w(health),
+                       "c" => %w(status --active),
+                       "l" => %w(logs),
+                       "h" => %w(help),
+                     }
+    EVERYDAY_COMMANDS = %w(status up down logs sbc pbx test deploy)
     # Bare TAB stays intentionally small. `help` and `help <TAB>` expose the
     # complete catalog, while every command remains directly invokable.
     TOP_COMMANDS   = EVERYDAY_COMMANDS + %w(help)
@@ -97,15 +78,11 @@ module VoIPAppz::Commands
 
     # Old paths get a direct migration hint instead of silently printing the
     # root help, which made a typo look like a successful command.
-    MOVED_COMMANDS = {% if flag?(:node_runtime) %}
-                       {"egress" => "sbc", "ingress" => "sbc"}
-                     {% else %}
-                       {
-                         "ingress" => "sbc ingress",
-                         "egress"  => "sbc egress",
-                         "hep"     => "trace hep",
-                       }
-                     {% end %}
+    MOVED_COMMANDS = {
+                       "ingress" => "sbc ingress",
+                       "egress"  => "sbc egress",
+                       "hep"     => "trace hep",
+                     }
 
     # Nested completion vocabulary for operational command paths.
     NESTED = begin
@@ -116,44 +93,33 @@ module VoIPAppz::Commands
         ["switch"]                      => %w(logs),
         ["switch", "logs"]              => %w(--follow --grep --level --exchange --raw),
       }
-      # The completion catalog must follow sip.cr's shape exactly: a node has ONE
-      # kamailio and no ingress/egress level, the host build has both boxes.
-      {% if flag?(:node_runtime) %}
-        nested[["sbc"]]               = %w(status list sync reload shell dispatcher address domain subscriber trace db hep)
-        nested[["sbc", "list"]]       = %w(dispatcher address domain all)
-        nested[["sbc", "address"]]    = %w(add remove)
-        nested[["sbc", "dispatcher"]] = %w(status add rm)
-        nested[["sbc", "domain"]]     = %w(add)
-        nested[["sbc", "subscriber"]] = %w(add remove passwd show)
-        nested[["sbc", "trace"]]      = %w(on off status query)
-        nested[["sbc", "db"]]         = %w(status)
-        nested[["sbc", "hep"]]        = %w(enable disable status tail query)
-      {% end %}
-      {% unless flag?(:node_runtime) %}
-        nested[["sbc"]]                         = %w(ingress egress hep)
-        nested[["sbc", "egress"]]               = %w(sync status list reload shell dispatcher address domain subscriber trace db)
-        nested[["sbc", "egress", "list"]]       = %w(dispatcher address domain all)
-        nested[["sbc", "egress", "address"]]    = %w(add remove)
-        nested[["sbc", "egress", "dispatcher"]] = %w(status add rm)
-        nested[["sbc", "egress", "domain"]]     = %w(add)
-        nested[["sbc", "egress", "subscriber"]] = %w(add remove passwd show)
-        nested[["sbc", "egress", "trace"]]      = %w(on off status query)
-        nested[["sbc", "egress", "db"]]         = %w(init status)
-        nested[["sbc", "ingress"]] = %w(sync list reload status shell)
-        nested[["trace"]] = %w(hep)
-        nested[["trace", "hep"]] = %w(enable disable status listen send selftest query)
-        nested[["logs"]] = %w(--profile --service)
-        nested[["test"]] = %w(scenario --level --calls --duration --target --port --user --password --domain)
-        nested[["test", "scenario"]] = %w(--out --compile-only --dry-run --destination --source --to --calls --cps --concurrent --docker --image)
-        nested[["up"]] = %w(-p --profile --wait --recreate --service)
-        nested[["portal"]] = %w(dev up down logs check verify status build lint unit test prod deploy ship token env scaffold ci)
-        nested[["portal", "deploy"]] = %w(-d --dest --print --path)
-        nested[["portal", "ship"]]   = %w(-d --dest --print --path)
-        nested[["portal", "test"]]   = %w(--crystal)
-        nested[["portal", "prod"]]   = %w(--down)
-        nested[["portal", "token"]]  = %w(--show)
-        nested[["portal", "ci"]]     = %w(--api)
-      {% end %}
+      # The completion catalog must follow sip.cr's shape exactly: ingress and
+      # egress are both named, on every host. A node runs only the egress, but
+      # it is still called the egress there — one vocabulary, so what an
+      # operator learns on one box is what they type on the other.
+      nested[["sbc"]]                         = %w(ingress egress hep)
+      nested[["sbc", "egress"]]               = %w(sync status list reload shell dispatcher address domain subscriber trace db)
+      nested[["sbc", "egress", "list"]]       = %w(dispatcher address domain all)
+      nested[["sbc", "egress", "address"]]    = %w(add remove)
+      nested[["sbc", "egress", "dispatcher"]] = %w(status add rm)
+      nested[["sbc", "egress", "domain"]]     = %w(add)
+      nested[["sbc", "egress", "subscriber"]] = %w(add remove passwd show)
+      nested[["sbc", "egress", "trace"]]      = %w(on off status query)
+      nested[["sbc", "egress", "db"]]         = %w(init status)
+      nested[["sbc", "ingress"]] = %w(sync list reload status shell)
+      nested[["trace"]] = %w(hep)
+      nested[["trace", "hep"]] = %w(enable disable status listen send selftest query)
+      nested[["logs"]] = %w(--profile --service)
+      nested[["test"]] = %w(scenario --level --calls --duration --target --port --user --password --domain)
+      nested[["test", "scenario"]] = %w(--out --compile-only --dry-run --destination --source --to --calls --cps --concurrent --docker --image)
+      nested[["up"]] = %w(-p --profile --wait --recreate --service)
+      nested[["portal"]] = %w(dev up down logs check verify status build lint unit test prod deploy ship token env scaffold ci)
+      nested[["portal", "deploy"]] = %w(-d --dest --print --path)
+      nested[["portal", "ship"]]   = %w(-d --dest --print --path)
+      nested[["portal", "test"]]   = %w(--crystal)
+      nested[["portal", "prod"]]   = %w(--down)
+      nested[["portal", "token"]]  = %w(--show)
+      nested[["portal", "ci"]]     = %w(--api)
       nested
     end
 
@@ -245,22 +211,22 @@ module VoIPAppz::Commands
 
       interactive = STDIN.tty?
       if interactive
-        # Opening on a bare prompt tells an operator nothing about the node
-        # they just opened. The node build has no `status` — that is the
-        # mothership's rollup — so it greets with its OWN verdict, which is
+        # Opening on a bare prompt tells an operator nothing about the box they
+        # just opened. `status` is the compose rollup and needs a catalog; a
+        # node has none, so there the greeting is the node's OWN verdict —
         # the same thing the image's HEALTHCHECK polls.
-        {% if flag?(:node_runtime) %}
-          run_sub(bin, ["health"], report: false)
-        {% else %}
+        if VoIPAppz::Services.available?
           run_sub(bin, ["status", "--bar", "--active"], report: false)
-        {% end %}
+        else
+          run_sub(bin, ["health"], report: false)
+        end
         puts ""
         puts VoIPAppz::Colors.dim("TAB: everyday commands · help: all commands · Ctrl-C: cancel")
-        {% if flag?(:node_runtime) %}
-          puts VoIPAppz::Colors.dim("  Try `help`, `sbc status`, or `watch health`.")
-        {% else %}
+        if VoIPAppz::Services.available?
           puts VoIPAppz::Colors.dim("  Try `help`, `sbc ingress status`, or `watch status`.")
-        {% end %}
+        else
+          puts VoIPAppz::Colors.dim("  Try `help`, `sbc egress status`, or `watch health`.")
+        end
         puts ""
       end
 

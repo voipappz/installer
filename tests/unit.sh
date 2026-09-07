@@ -35,6 +35,9 @@ refuses 'VA_REGISTER must be 0 or 1'              'VA_REGISTER must be 0 or 1'  
 refuses 'INSTALL_DIR must be absolute'            'INSTALL_DIR must be an absolute'      INSTALL_DIR=relative/dir
 refuses 'VA_IMAGE_SOURCE must be a known source'  'must be dockerhub, s3, archive or local' VA_IMAGE_SOURCE=ftp
 refuses 'IMAGE_ONLY must be 0 or 1'               'IMAGE_ONLY must be 0 or 1'            IMAGE_ONLY=maybe
+refuses 'START_ONLY must be 0 or 1'               'START_ONLY must be 0 or 1'            START_ONLY=maybe
+refuses '--start-only needs an installation'      'nothing is installed at /tmp/unit-not-installed' \
+  START_ONLY=1 INSTALL_DIR=/tmp/unit-not-installed
 refuses 'VA_IMAGE_SOURCE=archive needs an archive' 'needs VA_IMAGE_ARCHIVE'              VA_IMAGE_SOURCE=archive
 refuses 'VA_IMAGE_ARCHIVE must be absolute or a URL' 'absolute path or an http(s) URL'   VA_IMAGE_ARCHIVE=rel.tar.gz
 refuses 'VA_IMAGE_ARCHIVE must be readable'       'not a readable file'                  VA_IMAGE_ARCHIVE=/nonexistent/x.tar.gz
@@ -534,6 +537,65 @@ check 'a real .env is never committed'               'git -C "$ROOT" check-ignor
 # The answer file is read before anything else, and the environment wins.
 check 'the installer loads ./.env'                   'grep -q "VA_ENV_FILE=./.env" "$ROOT/install.sh"'
 check 'the installer runs the node with docker run'  'grep -q "docker_cmd run -d --name va-voip" "$ROOT/install.sh"'
+
+# ONE COMMAND, ONE SCRIPT. Every `make` target that drives the node here is a
+# file in scripts/; the recipe only names it. install.sh stays the other thing —
+# it installs and registers a node into $INSTALL_DIR. The two run the same
+# docker run, so the checks below prove its flags have not drifted apart, which
+# is how nodes once lost their real-time limits.
+printf '\n── make setup/up/down/logs/health/cli are scripts\n'
+UP="$ROOT/scripts/up.sh"
+for cmd in setup up down logs health cli; do
+  check "scripts/$cmd.sh exists and is executable" '[[ -x "$ROOT/scripts/$cmd.sh" ]]'
+  check "make $cmd runs it"                        'grep -qE "^\s+@?..NODE_ARGS. sh scripts/$cmd.sh" "$ROOT/Makefile"'
+  check "$cmd.sh sources common.sh"                'grep -q "common.sh" "$ROOT/scripts/$cmd.sh"'
+done
+check 'make check syntax-checks every script'       'grep -q "for s in scripts/\*.sh" "$ROOT/Makefile"'
+check 'shellcheck sees them'                        'grep -q "scripts/common.sh" <<<"$(sed -n "/^SCRIPTS = /,/^$/p" "$ROOT/Makefile")"'
+check 'the Makefile starts no container itself' '! grep -q "docker run -d" "$ROOT/Makefile"'
+check 'make shows ./.env in the command it runs'     '[[ "$(cd "$ROOT" && make -n up)" == VA_VOIP_IMAGE=*" sh scripts/up.sh" ]]'
+check 'an override wins and is shown'               '[[ "$(cd "$ROOT" && make -n up VA_VOIP_IMAGE=unit/test:tag)" == "VA_VOIP_IMAGE=unit/test:tag sh scripts/up.sh" ]]'
+check 'no secret is ever put on a command line'     '! grep -E "^NODE_VARS" "$ROOT/Makefile" | grep -qE "PASSWORD|SECRET|TOKEN|_KEY"'
+check 'install.sh still starts the installed node'  'grep -q "START_ONLY. = 1 .; then" "$ROOT/install.sh"'
+check '--start-only calls the same function'        '[[ $(grep -c "^ *start_node$" "$ROOT/install.sh") == 2 ]]'
+
+# NO GUESSING. Every value comes from ./.env or the run stops: no default tag,
+# no invented secret, no pull, no sudo. What is missing is named, and `make
+# setup` is what writes it.
+printf '\n── the node commands invent nothing\n'
+check 'up.sh invents no image tag'                  '! grep -q "VA_VOIP_IMAGE:-nirlevi" "$ROOT/scripts/"*.sh'
+check 'a missing value names itself'                'grep -q "is missing:" "$ROOT/scripts/common.sh"'
+check '... and points at make setup'                'grep -q "run: make setup" "$ROOT/scripts/common.sh"'
+check 'a missing .env points at make setup'         'grep -q "run: make setup" "$UP"'
+check 'a missing va.yaml points at make setup'      'grep -q "no \$VA_CONFIG" "$UP"'
+check 'no command pulls or loads an image'          '! grep -qE "docker (pull|load)" "$ROOT/scripts/up.sh" "$ROOT/scripts/setup.sh"'
+check 'no node command runs sudo'                   '! grep -qE "^[^#]*sudo " "$ROOT/scripts/common.sh" "$ROOT/scripts/setup.sh" "$ROOT/scripts/up.sh" "$ROOT/scripts/down.sh" "$ROOT/scripts/logs.sh" "$ROOT/scripts/health.sh" "$ROOT/scripts/cli.sh"'
+check 'up.sh masks the secrets it prints'           'grep -q "<masked>" "$UP"'
+check 'setup.sh reads secrets without echo'         'grep -q "stty -echo" "$ROOT/scripts/setup.sh"'
+check 'setup.sh keeps .env 0600'                    'grep -q "chmod 0600" "$ROOT/scripts/setup.sh"'
+check 'setup.sh runs the CLI wizard, not its own'   'grep -q "VA_PATH=./work/" "$ROOT/scripts/setup.sh"'
+
+# VALIDATION, because a node that is not up must not report success. With
+# --network host every 127.0.0.1 probe can be answered by a DIFFERENT node
+# container, which is exactly how a dead va-voip once looked healthy.
+printf '\n── make up validates the node it started\n'
+check 'up.sh refuses a second host-network node'    'grep -q "another node container already owns" "$UP"'
+check 'up.sh proves kamailio through its own socket' 'grep -q "kamcmd core.uptime" "$UP"'
+check 'up.sh shows the log when it fails'           'grep -q "docker logs --tail" "$UP"'
+check 'up.sh refuses before destroying'             '(( $(grep -n "docker rm -f" "$UP" | head -1 | cut -d: -f1) > $(grep -n "another node container" "$UP" | head -1 | cut -d: -f1) ))'
+check 'up.sh reports health without gating on it'   'grep -q "health verdict is red" "$UP"'
+
+# THE TWO DOCKER RUNS STAY IN STEP: same capabilities, same ulimits, same
+# mounts — the set install.sh, scripts/up.sh and va-crystal's
+# scripts/run-node.sh all have to agree on.
+run_flags() {  # file -> the flags of its docker run, one per line, sorted
+  sed -n '/run -d --name/,/^$/p' "$1" |
+    grep -oE -- '--(network|restart|cap-add|security-opt|ulimit) [^ \\]+' | sort -u
+}
+check 'up.sh runs the same flags as install.sh'     '[[ "$(run_flags "$UP")" == "$(run_flags "$ROOT/install.sh")" ]]'
+check 'up.sh mounts the YAML at /tmp/node.yaml'     'grep -q "/tmp/node.yaml:ro" "$UP"'
+check 'up.sh keeps the kamailio volume'             'grep -q "voipappz-kamailio:/var/lib/kamailio" "$UP"'
+check 'up.sh applies the YAML to kamailio'          'grep -q "sbc egress sync" "$UP"'
 check 'the installer no longer needs Compose'        '! grep -qE "compose (up|down|ps|config|version)" "$ROOT/install.sh"'
 check 'the installer no longer extracts /stack'      '! grep -q "stack/." "$ROOT/install.sh"'
 printf '\n'

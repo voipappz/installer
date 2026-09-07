@@ -2,12 +2,18 @@ name: release
 
 # A release of this repository is the voipappz CLI, built from cli/:
 #
-#   voipappz-linux-amd64         the CLI, host surface — `voipappz bootstrap`
-#                                installs a mothership, `voipappz node install`
-#                                launches install.sh
-#   voipappz-node-linux-amd64    the CLI, -Dnode_runtime — what va-crystal
-#                                bakes into nirlevi/va-crystal:node
-#   voipappz-darwin-arm64        the host CLI for laptops; nothing depends on it
+#   voipappz-linux-amd64         THE CLI. `voipappz bootstrap` installs a
+#                                mothership, `voipappz node install` launches
+#                                install.sh, and va-crystal bakes this same
+#                                binary into nirlevi/va-crystal:node.
+#   voipappz-darwin-arm64        the same CLI for laptops; nothing depends on it
+#
+# ONE linux asset since 2026-09-07. There used to be a second,
+# voipappz-node-linux-amd64, compiled with `-Dnode_runtime` to drop the compose
+# lifecycle commands. The CLI decides at RUNTIME where it is (a service catalog
+# means a stack; kamctl on PATH means the inside of the node image), so the
+# flag was a second mechanism for a question already answered — and a second
+# asset to build, checksum, pin and prove. va-crystal fetches this one.
 #
 # The source moved here from the mothership on 2026-09-03 so it can be public
 # while the mothership is not: a public installer cannot fetch a release asset
@@ -59,19 +65,12 @@ jobs:
                  --title "$TAG" --generate-notes
 
   cli-linux:
-    name: voipappz-linux-amd64 (+ node)
+    name: voipappz-linux-amd64
     needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # TWO BINARIES FROM ONE SOURCE, and they are genuinely different programs:
-      # `-Dnode_runtime` is read by nine `register_sub_command` blocks in
-      # cli/src/voipappz.cr, so the node build has no host-compose lifecycle
-      # surface at all. va-crystal's node image consumes the node one; the
-      # mothership's ISO, its `make build` fallback and operators consume the
-      # host one.
-      #
       # --static (musl) is a CROSS-REPO contract, not a preference: va-crystal
       # copies this binary into a Debian-based image, and the SIP suites and the
       # ISO exec it from the host. Dropping it breaks both, remotely, with no
@@ -89,38 +88,29 @@ jobs:
             shards install --skip-postinstall
             shards build voipappz --release --static --no-debug
             mv bin/voipappz ../voipappz-linux-amd64
-            shards build voipappz --release --static --no-debug -Dnode_runtime
-            mv bin/voipappz ../voipappz-node-linux-amd64
-            cd .. && chown "$HOST_UID:$HOST_GID" voipappz-linux-amd64 voipappz-node-linux-amd64 \
-              && sha256sum voipappz-linux-amd64 voipappz-node-linux-amd64'
+            cd .. && chown "$HOST_UID:$HOST_GID" voipappz-linux-amd64 \
+              && sha256sum voipappz-linux-amd64'
 
-      # Smoke the HOST binary, and prove the NODE binary is actually the node
-      # one — fetching the wrong asset into the node image is the failure this
-      # catches, and it is otherwise invisible until a node misbehaves.
+      # THE ASSET va-crystal PINS, so what it carries is checked before the
+      # tag exists rather than when a node misbehaves. Both planes in one
+      # `--help`: `status` is the stack's rollup, `node-monitor` the node's
+      # screen. A release missing either means someone put a build-time surface
+      # back — and a Dockerfile that pins this tag would bake it.
+      #
+      # Absence is `! grep -q`, never `grep -qv`: the latter succeeds when ANY
+      # line fails to match, which is every multi-line help output ever
+      # printed, so it passed unconditionally.
       - name: Smoke test
         run: |
-          chmod +x voipappz-linux-amd64 voipappz-node-linux-amd64
+          chmod +x voipappz-linux-amd64
           ./voipappz-linux-amd64 --version
-          ./voipappz-node-linux-amd64 --version
-
-          # `status` present in one, absent in the other, is the cheapest proof
-          # the two assets are not the same binary under different names.
-          #
-          # NOT `grep -qv`: that succeeds when ANY line fails to match, which is
-          # every multi-line help output ever printed — so it passed
-          # unconditionally and could never have caught the thing it is for.
-          # Absence is `! grep -q`.
-          ./voipappz-linux-amd64 --help | grep -qE '^[[:space:]]+status\b' || {
-            echo "!! the host build has no 'status' — is this the node binary?" >&2; exit 1; }
-          if ./voipappz-node-linux-amd64 --help | grep -qE '^[[:space:]]+status\b'; then
-            echo "!! the -Dnode_runtime build still carries the host lifecycle surface" >&2
-            exit 1
-          fi
+          for command in status node-monitor sbc pbx health node setup; do
+            ./voipappz-linux-amd64 --help | grep -qE "^[[:space:]]+$command\b" || {
+              echo "!! the release binary has no '$command'" >&2; exit 1; }
+          done
 
       - name: Checksums
-        run: |
-          sha256sum voipappz-linux-amd64      > voipappz-linux-amd64.sha256
-          sha256sum voipappz-node-linux-amd64 > voipappz-node-linux-amd64.sha256
+        run: sha256sum voipappz-linux-amd64 > voipappz-linux-amd64.sha256
 
       - name: Upload
         env:
@@ -128,8 +118,7 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
-            voipappz-linux-amd64 voipappz-linux-amd64.sha256 \
-            voipappz-node-linux-amd64 voipappz-node-linux-amd64.sha256
+            voipappz-linux-amd64 voipappz-linux-amd64.sha256
 
   # Convenience for developers on Apple silicon — `voipappz portal deploy` is a
   # laptop command. NOTHING depends on it: install-cli.sh fetches linux on

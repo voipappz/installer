@@ -6,6 +6,7 @@ require "socket"
 require "../helpers/colors"
 require "../helpers/table"
 require "../helpers/docker"
+require "../helpers/node_local"
 require "../helpers/deploy_config"
 require "../helpers/dispatcher_list"
 require "../helpers/hep/decoder"
@@ -56,6 +57,16 @@ module VoIPAppz::Commands
         end
         found = VoIPAppz::Docker.running_kamailios.find { |c| VoIPAppz::Docker.ingress?(c) == want_ingress }
         return found if found
+
+        # THE ADVICE HAS TO MATCH THE BOX. `voipappz up -p voip` is a compose
+        # command against the mothership's project; on an installed node there
+        # is no such project and never will be — its container is started by
+        # one `docker run`, which is `make up`'s job, not the CLI's.
+        if (node = VoIPAppz::Docker.installed_node?) && (hint = VoIPAppz::NodeLocal.start_hint)
+          STDERR.puts VoIPAppz::Colors.red("The node container #{node} is not running.")
+          STDERR.puts VoIPAppz::Colors.dim("  #{hint}")
+          exit 1
+        end
 
         name    = want_ingress ? "kamailio-ingress (va-ingress)" : "kamailio-egress (va-egress)"
         profile = want_ingress ? "app" : "voip"
@@ -306,9 +317,7 @@ module VoIPAppz::Commands
     class DbGroup < Admiral::Command
       define_help description: "Kamailio DB schema: init/migrate the SQLite tables"
 
-      {% unless flag?(:node_runtime) %}
-        register_sub_command init, type: Init
-      {% end %}
+      register_sub_command init, type: Init
       register_sub_command status, type: Status
 
       def run
@@ -846,7 +855,8 @@ module VoIPAppz::Commands
               return
             end
             STDERR.puts VoIPAppz::Colors.red("kamcmd dispatcher.list failed: #{listing.strip}")
-            STDERR.puts VoIPAppz::Colors.dim("  Is kamailio running? Try: voipappz up -p voip")
+            STDERR.puts VoIPAppz::Colors.dim("  Is kamailio running? " +
+                                             (VoIPAppz::NodeLocal.start_hint || "Try: voipappz up -p voip"))
             exit 1
           end
 

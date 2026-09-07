@@ -70,6 +70,13 @@ docker stop va-voip                       # stop it (config and data stay)
 docker start va-voip                      # start it again
 ```
 
+If the container is gone rather than stopped — a failed upgrade, a removed
+container, a host that came up without it — `sh install.sh --start-only`
+recreates it from what `/opt/voipappz` already holds (its `va.yaml`, its
+`.env`, its pinned CA bundle). It downloads nothing, registers nothing and
+writes nothing: it is the last step of the install, on its own, and it waits
+for the node to answer its health check before it reports success.
+
 ### Ports
 
 Kamailio, FreeSWITCH and the node agent run together in the container **on the
@@ -134,8 +141,26 @@ docker exec va-voip voipappz node --help     # registration commands
 docker exec va-voip voipappz --help          # everything else
 ```
 
-`config/va.yaml` in `/opt/voipappz` is the node's configuration; Compose mounts
-it at `/tmp/node.yaml`. Edit it, then `sbc egress sync` (or restart).
+`config/va.yaml` in `/opt/voipappz` is the node's configuration; `docker run`
+mounts it at `/tmp/node.yaml`. Edit it, then `sbc egress sync` (or restart).
+
+The same CLI also runs **from the host** if you put it there (see
+[the `voipappz` CLI](#the-voipappz-cli)). On a node box it resolves the
+installation on its own — `/opt/voipappz/config/va.yaml`, its `.env` and the
+`va-voip` container — so there is no directory to stand in and nothing to
+export:
+
+```sh
+voipappz health                        # the node's own verdict
+voipappz sbc egress list               # what Kamailio is routing on
+voipappz sbc egress sync               # apply config/va.yaml to Kamailio
+voipappz test scenario call --to 1001  # a real SIPp call, aimed at this node
+```
+
+`INSTALL_DIR=…` points it at a node installed somewhere other than the default.
+Starting and stopping the container is not the CLI's job — that is `make up` /
+`make down`, which run `install.sh --start-only` so the node is always started
+by the installer's own `docker run`.
 
 ## Reinstall and upgrade
 
@@ -196,8 +221,9 @@ Some of those are decisions, not settings, so they are also options:
 `sh install.sh --no-register` installs and starts a node without touching a
 mothership (register it later); `--no-start` is `START=0`; `--image-only`
 gets the image, proves its CLI runs, and stops — prepare a machine once, then
-install on it offline with `VA_IMAGE_SOURCE=local`. Through the one-liner:
-`curl -fsSL … | sh -s -- --no-register`.
+install on it offline with `VA_IMAGE_SOURCE=local`; `--start-only` is the other
+end of that pair — it starts the node already installed here and does nothing
+else. Through the one-liner: `curl -fsSL … | sh -s -- --no-register`.
 
 ## No internet at all: the installer ISO
 
@@ -254,10 +280,15 @@ The disc is cut and published from the voipappz/mothership repository.
 This repository is also the home of the `voipappz` CLI's source, `cli/`, since
 2026-09-03. It is the glue that installs the platform: `voipappz bootstrap`
 installs a mothership, `voipappz node install` launches the installer above,
-and the same source compiled with `-Dnode_runtime` is the CLI inside the node
-image (`docker exec va-voip voipappz …`). The mothership repository, where it
-lived, is private; the installer is public, so the source and the binaries
-live where anyone who can run the installer can reach them.
+and the same binary is the CLI inside the node image (`docker exec va-voip
+voipappz …`). The mothership repository, where it lived, is private; the
+installer is public, so the source and the binaries live where anyone who can
+run the installer can reach them.
+
+One binary, everywhere. What a command can do is a fact about the host, so the
+CLI works it out when it runs: a service catalog in reach means a stack, and
+`kamctl` on PATH means it is inside the node image. There is no separate node
+build to fetch, pin or confuse with this one.
 
 `install.sh` never builds, fetches or runs a host binary. It only runs the
 copy inside the node image.
@@ -271,8 +302,7 @@ curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/scripts/ins
 Build it from this checkout (Docker only, no Crystal toolchain):
 
 ```sh
-make build          # static host binary at bin/voipappz
-make cli-node-build # the -Dnode_runtime binary the node image carries
+make build          # the static binary at bin/voipappz
 make cli-test       # the spec suite
 make install-cli    # put bin/voipappz on PATH
 ```
@@ -285,16 +315,15 @@ curl -fsSL  https://github.com/voipappz/installer/releases/download/latest/voipa
 chmod +x voipappz-linux-amd64
 ```
 
-Every CI run compiles both linux binaries and keeps them as artifacts for a
-week; every push to `main` also replaces the assets on the rolling `latest`
-prerelease above (`voipappz-linux-amd64`, `voipappz-node-linux-amd64`, each
-with its `.sha256`). It moves under you by design — pin a tag for a binary
-that will not.
+Every CI run compiles the linux binary and keeps it as an artifact for a week;
+every push to `main` also replaces the assets on the rolling `latest`
+prerelease above (`voipappz-linux-amd64` and its `.sha256`). It moves under you
+by design — pin a tag for a binary that will not.
 
 Releases (`git tag vX.Y.Z && git push origin vX.Y.Z`) publish
-`voipappz-linux-amd64`, `voipappz-node-linux-amd64`, `voipappz-darwin-arm64`
-and their `.sha256` files. va-crystal pins one of those tags for the binary it
-bakes into `nirlevi/va-crystal:node`.
+`voipappz-linux-amd64`, `voipappz-darwin-arm64` and their `.sha256` files.
+va-crystal pins one of those tags for the binary it bakes into
+`nirlevi/va-crystal:node`.
 
 ## More
 

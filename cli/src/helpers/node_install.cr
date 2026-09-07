@@ -1,5 +1,6 @@
 require "./colors"
 require "./env_file"
+require "./node_local"
 require "./project"
 
 module VoIPAppz
@@ -117,10 +118,13 @@ module VoIPAppz
     # Still true with the `voip` profile gone (2026-09-01, 4ec7719bd): this is
     # about two INSTALLERS sharing a directory, not about two ways to start a
     # container.
-    DEFAULT_INSTALL_DIR = "/opt/voipappz"
+    # ONE definition, in NodeLocal — the module that also READS what an install
+    # leaves there. Two copies of this path is how the half that installs a node
+    # and the half that manages it afterwards drift apart.
+    DEFAULT_INSTALL_DIR = VoIPAppz::NodeLocal::DEFAULT_INSTALL_DIR
 
     def install_dir : String
-      ENV["INSTALL_DIR"]?.presence || DEFAULT_INSTALL_DIR
+      VoIPAppz::NodeLocal.install_dir
     end
 
     # A mothership lives here if a compose file does. The installer would delete

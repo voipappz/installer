@@ -1,7 +1,7 @@
 # act (nektos/act) — this repo's workflows, locally.
 #
 #   act -j shell          the POSIX gates: syntax, shellcheck, unit tests (~1m)
-#   act -j cli --bind     specs, both binaries, the tty a-to-z, SIPp (~10m)
+#   act -j cli --bind     specs, the binary, the tty a-to-z, SIPp (~10m)
 #   act -n -j <job>       parse and list the steps, run nothing
 #
 # --bind for `cli`: `make build` compiles in a NESTED `docker run -v

@@ -3,6 +3,7 @@ require "../helpers/colors"
 require "../helpers/freeswitch"
 require "../helpers/table"
 require "../helpers/docker"
+require "../helpers/node_local"
 require "../helpers/services"
 require "../helpers/dispatcher_list"
 require "./sbc"
@@ -244,36 +245,10 @@ module VoIPAppz::Commands
   # sbc — one namespace, with explicit ingress/egress targets
   # ---------------------------------------------------------------------------
   class Sbc < Admiral::Command
-    {% if flag?(:node_runtime) %}
-      # A NODE RUNS ONE KAMAILIO. Naming a direction there is a distinction
-      # without a difference — there is no ingress box to tell it apart from —
-      # so the level is dropped and it reads `sbc status`, `sbc subscriber add`.
-      # The host build has both boxes and therefore keeps ingress/egress.
-      define_help description: "Session border controller — this node's kamailio"
+    define_help description: "Session border controllers — ingress and egress"
 
-      register_sub_command sync, type: Egress::Sync
-      register_sub_command status, type: Egress::Status
-      register_sub_command list, type: Egress::List
-      register_sub_command reload, type: Egress::Reload
-      register_sub_command shell, type: Egress::Shell
-      register_sub_command dispatcher, type: VoIPAppz::Commands::Kamailio::DispatcherGroup
-      register_sub_command address, type: VoIPAppz::Commands::Kamailio::AddressGroup
-      register_sub_command domain, type: VoIPAppz::Commands::Kamailio::DomainGroup
-      register_sub_command subscriber, type: VoIPAppz::Commands::Kamailio::SubscriberGroup
-      register_sub_command db, type: VoIPAppz::Commands::Kamailio::DbGroup
-      register_sub_command trace, type: VoIPAppz::Commands::Kamailio::TraceGroup
-      # BACK-COMPAT, not a second surface. `sbc egress ...` is what installed
-      # nodes and the installer already run (installer/install.sh applies the
-      # mounted YAML with `sbc egress sync` after start), and an upgrade must
-      # not break a node that is already on disk. Undocumented in the help
-      # above it: the flattened names are the ones to learn.
-      register_sub_command egress, type: Egress
-    {% else %}
-      define_help description: "Session border controllers — ingress and egress"
-
-      register_sub_command ingress, type: Ingress
-      register_sub_command egress, type: Egress
-    {% end %}
+    register_sub_command ingress, type: Ingress
+    register_sub_command egress, type: Egress
     # SIP capture lives on the node, not on either kamailio: status/switch on
     # loopback, live tail over the broker, history from InfluxDB.
     register_sub_command hep, type: VoIPAppz::Commands::SbcHep
@@ -365,8 +340,12 @@ module VoIPAppz::Commands
                   end
       unless running.includes?(container)
         STDERR.puts VoIPAppz::Colors.red("#{container} is not running.")
-        svc = VoIPAppz::Services.find?(service)
-        if svc && (profile = svc.profiles.first?)
+        # A node host has no catalog, so no profile to name — and no compose
+        # project to run `up` against either. It has one node and one way to
+        # start it.
+        if hint = VoIPAppz::NodeLocal.start_hint
+          STDERR.puts VoIPAppz::Colors.dim("  #{hint}")
+        elsif (svc = VoIPAppz::Services.find?(service)) && (profile = svc.profiles.first?)
           STDERR.puts VoIPAppz::Colors.dim("  Start it: voipappz up -p #{profile}")
         end
         exit 1

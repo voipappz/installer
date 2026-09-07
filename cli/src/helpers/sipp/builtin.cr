@@ -6,9 +6,6 @@ module VoIPAppz::Sipp
   # file would be missing exactly where a load test is worth running. `read_file`
   # also means a renamed or deleted scenario fails the BUILD rather than shipping
   # a command that cannot find its own examples.
-  #
-  # Not the voip node image: `test` is registered {% unless flag?(:node_runtime) %},
-  # so that build has no scenario command to carry examples for.
   module Builtin
     SCENARIOS = {
       "call"               => {{ read_file("#{__DIR__}/../../../scenarios/call.yml") }},

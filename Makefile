@@ -20,8 +20,8 @@ MAKEFLAGS   += --no-print-directory --no-builtin-rules --no-builtin-variables
 # Every target in one place so check-make can prove each still has a rule.
 # Add a target: add it here.
 PHONY_TARGETS := help check check-make test get install \
-                 up down logs health cli node-preflight \
-                 build cli-build cli-node-build cli-test install-cli
+                 setup up down logs health cli \
+                 build cli-test install-cli
 .PHONY: $(PHONY_TARGETS)
 
 # ONE list, generated from the `##` comments on the rules themselves, so it can
@@ -45,24 +45,37 @@ help: ## Show this help
 
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from its
 # container when it is not installed, so this needs nothing but docker.
-SCRIPTS = install.sh scripts/install-cli.sh tests/clean-runner.sh \
+SCRIPTS = install.sh scripts/common.sh scripts/setup.sh scripts/up.sh \
+          scripts/down.sh scripts/logs.sh scripts/health.sh scripts/cli.sh \
+          scripts/install-cli.sh tests/clean-runner.sh \
           tests/test-install.sh tests/unit.sh tests/two-pbx.sh
 
 check: ## Everything CI runs first: syntax, shellcheck, clean diff, no python, unit tests
+	@printf '\n\033[1m1. syntax\033[0m — every script parses under the shell that runs it\n'
 	test -x install.sh
 	sh -n install.sh
 	dash -n install.sh
-	sh -n scripts/install-cli.sh && dash -n scripts/install-cli.sh
+	for s in scripts/*.sh; do sh -n "$$s" && dash -n "$$s"; done
 	bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck $(SCRIPTS); else \
-	  docker run --rm -v "$(CURDIR):/w:ro" -w /w koalaman/shellcheck:stable $(SCRIPTS); fi
+	@printf '\n\033[1m2. shellcheck\033[0m — the lint CI runs, on all $(words $(SCRIPTS)) scripts\n'
+	@if command -v shellcheck >/dev/null 2>&1; then \
+	  echo "shellcheck $(SCRIPTS)"; shellcheck $(SCRIPTS); \
+	else \
+	  echo "no shellcheck on this host — running it from Docker (the first run pulls ~4MB)"; \
+	  echo "  to skip the pull: sudo apt-get install -y shellcheck"; \
+	  docker run --rm -v "$(CURDIR):/w:ro" -w /w koalaman/shellcheck:stable $(SCRIPTS); \
+	fi
 	@echo "shellcheck: $(words $(SCRIPTS)) scripts clean"
+	@printf '\n\033[1m3. this Makefile\033[0m — no .PHONY target lost its rule\n'
 	$(MAKE) check-make
+	@printf '\n\033[1m4. the diff\033[0m — no trailing whitespace or conflict markers\n'
 	git diff --check
+	@printf '\n\033[1m5. no python\033[0m — the installer and its tests are shell, deliberately\n'
 	test -z "$$(find tests -type f -name '*.py' -print -quit)"
 	! grep -Eq 'python(3)?' install.sh
+	@printf '\n\033[1m6. unit tests\033[0m — install.sh'"'"'s own functions, and the scripts/ contract\n'
 	bash tests/unit.sh
-	@printf '\033[1mcheck green\033[0m\n'
+	@printf '\n\033[1mcheck green\033[0m — this is the "Shell" CI job; the integration job is `make test`\n\n'
 
 # A .PHONY target with no rule silently does nothing, so a deleted rule looks
 # like a working `make check` that skips steps.
@@ -138,82 +151,78 @@ get: ## [s3|dockerhub] [ARCHIVE=file|url|latest] Get the node image and prove it
 install: ## [REGISTER=0] Install the node from the image on this host (make get first)
 	VA_IMAGE_SOURCE=local sh install.sh $(if $(filter 0,$(REGISTER)),--no-register)
 
-##@ The installed node
+##@ The node on this machine
 
-# Thin on purpose: each is the docker command an operator would type, so
-# nothing here can drift from what the node actually does. Lifecycle is
-# Docker's (`--restart unless-stopped`), and every node operation is the CLI's,
-# inside the image.
-NODE        ?= va-voip
-INSTALL_DIR ?= /opt/voipappz
+# ONE COMMAND, ONE SCRIPT. Every target below is a file in scripts/ — the
+# recipe only names it. Nothing about how a node is set up, started, stopped or
+# asked a question lives in this Makefile, so `make up` and the command an
+# operator types by hand cannot drift apart, and each script says in its own
+# header what it does and refuses to do.
+#
+# These drive the node you are working on, HERE: scripts/setup.sh writes ./.env
+# and ./config/va.yaml, and the rest read them. install.sh is the other thing —
+# it installs and registers a node into $INSTALL_DIR on a real host.
+#
+#   make setup    the wizard: ./.env + ./config/va.yaml
+#   make up       start the node from those two files
+#   make down     stop it, keeping its volume
+#   make logs     follow it
+#   make health   its own verdict, from the CLI in the image
+#   make cli      any other CLI command, in the image
 
-# Checked BEFORE anything destructive. `up` removes the container to recreate
-# it; discovering only afterwards that the .env is unreadable leaves the host
-# with no node at all. That happened once — it does not happen again.
+# SHOW THE WHOLE COMMAND, ./.env INCLUDED. `make up` prints the line it runs
+# with every value that decided it spelled out:
 #
-# install.sh writes .env mode 0600 owned by root, on purpose (it holds the
-# FreeSWITCH and licence secrets), so `make up` on a real /opt/voipappz install
-# needs sudo. Say so instead of failing halfway.
-node-preflight: ## Refuse early when INSTALL_DIR holds no readable install (up depends on it)
-	@test -r $(INSTALL_DIR)/.env || { \
-	  printf 'cannot read \033[1m$(INSTALL_DIR)/.env\033[0m — install.sh writes it 0600, owned by root.\n  run: \033[1msudo make up INSTALL_DIR=$(INSTALL_DIR)\033[0m\n'; exit 1; }
-	@test -r $(INSTALL_DIR)/config/va.yaml || { \
-	  printf 'no \033[1m$(INSTALL_DIR)/config/va.yaml\033[0m — nothing is installed there. run: \033[1mmake install\033[0m\n'; exit 1; }
+#   $ make up
+#   VA_VOIP_IMAGE=nirlevi/va-crystal:node sh scripts/up.sh
+#
+# — so the tag comes from ./.env, and you can still see it, copy the line and
+# run it yourself. A value you set on the command line or export in your shell
+# wins over the file (the same rule the scripts follow) and is shown the same
+# way; a value nothing names is not invented here.
+#
+# NEVER A SECRET. Only the four names below are ever expanded onto a command
+# line, and none of them is a credential: the FreeSWITCH, licence and API
+# secrets stay in ./.env, are read by the script itself, and are masked even in
+# the docker run it prints.
+NODE_VARS = VA_VOIP_IMAGE VA_ENV_FILE VA_CONFIG NODE TAIL
+env_file  = $(if $(VA_ENV_FILE),$(VA_ENV_FILE),.env)
+env_value = $(strip $(shell test -f $(env_file) && sed -n 's/^$(1)=//p' $(env_file) | tail -1 | tr -d '\042\047'))
+node_arg  = $(if $(filter command\ line environment,$(origin $(1))),$(1)=$($(1)),\
+              $(if $(call env_value,$(1)),$(1)=$(call env_value,$(1))))
+NODE_ARGS = $(strip $(foreach v,$(NODE_VARS),$(call node_arg,$(v))))
 
-# THE WHOLE COMMAND, because a wrapper that hides how a node is started is a
-# wrapper you have to trust. This recreates the container rather than
-# restarting it, so what you read is what ran.
-#
-# It DUPLICATES install.sh's docker run, which is a real cost: two copies drift,
-# and the divergence between this repo's run and ../va-crystal's is exactly the
-# bug that left every installed node without real-time limits. KEEP THIS IN
-# STEP WITH install.sh's step 6 — the CI job "Node starts with real-time
-# limits" checks the installer's copy, not this one.
-#
-# The three secrets are read from the installation's .env at run time. `$$VAR`
-# is shell, not make, so the recipe echoes the NAMES and the values never reach
-# the terminal.
-up: node-preflight ## Recreate and start the node, showing the whole docker run
-	-docker rm -f $(NODE)
-	set -a && . $(INSTALL_DIR)/.env && set +a && docker run -d --name $(NODE) \
-	  --network host --restart unless-stopped \
-	  --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_RESOURCE \
-	  --cap-add SYS_NICE --cap-add IPC_LOCK \
-	  --security-opt seccomp=unconfined \
-	  --ulimit rtprio=99 --ulimit nice=-19 \
-	  --ulimit memlock=-1:-1 --ulimit nofile=999999:999999 \
-	  -v $(INSTALL_DIR)/config/va.yaml:/tmp/node.yaml:ro \
-	  -v voipappz-kamailio:/var/lib/kamailio \
-	  -e VA_PATH=/tmp/node.yaml \
-	  -e FREESWITCH_PASSWORD="$$VA_FREESWITCH_PASSWORD" \
-	  -e VA_FREESWITCH_PASSWORD="$$VA_FREESWITCH_PASSWORD" \
-	  -e LICENSE_JWT_SECRET="$$VA_LICENSE_JWT_SECRET" \
-	  -e LICENSE_ENCRYPTION_KEY="$$VA_LICENSE_ENCRYPTION_KEY" \
-	  "$$VA_VOIP_IMAGE"
+setup: ## The wizard: write ./.env and ./config/va.yaml
+	$(NODE_ARGS) sh scripts/setup.sh
+
+up: ## Start the node here from ./.env and ./config/va.yaml
+	$(NODE_ARGS) sh scripts/up.sh
 
 down: ## Stop it, keeping its identity and its kamailio volume
-	docker stop $(NODE)
+	$(NODE_ARGS) sh scripts/down.sh
 
-logs: ## Follow it (kamailio + FreeSWITCH + node, interleaved)
-	docker logs -f --tail 100 $(NODE)
+logs: ## [TAIL=n] Follow it (kamailio + FreeSWITCH + node, interleaved)
+	$(NODE_ARGS) sh scripts/logs.sh
 
-health: ## The 16-check verdict, from the CLI inside the image
-	docker exec $(NODE) voipappz health
+health: ## The node's own health verdict, from the CLI inside the image
+	$(NODE_ARGS) sh scripts/health.sh
 
 cli: ## [ARGS=cmd] The in-image CLI: make cli ARGS="sbc egress status"
-	@docker inspect -f '{{.State.Running}}' $(NODE) >/dev/null 2>&1 \
-	  || { echo "$(NODE) is not running — start it with: make up"; exit 1; }
-	docker exec -it $(NODE) voipappz $(ARGS)
+	@$(NODE_ARGS) sh scripts/cli.sh $(ARGS)
 
 ##@ The CLI binary
 
 # cli/ is the voipappz CLI's SOURCE, moved here from the mothership on
-# 2026-09-03 so it can be public while the mothership is not. One source, two
-# binaries: the host one (bin/voipappz — `voipappz bootstrap` installs a
-# mothership, `voipappz node install` launches install.sh) and the
-# -Dnode_runtime one, which va-crystal fetches from this repo's releases and
-# bakes into nirlevi/va-crystal:node. install.sh itself never builds, fetches
-# or runs either: it only runs the copy inside the image.
+# 2026-09-03 so it can be public while the mothership is not.
+#
+# ONE SOURCE, ONE BINARY, since 2026-09-07. It used to be two: a host build and
+# a `-Dnode_runtime` build with the compose lifecycle commands compiled out.
+# The CLI already decides at RUNTIME where it is — Services.available? for a
+# catalog, Docker.local_exec? for the inside of the node image — so the flag
+# was a second mechanism answering a question already answered, and a second
+# artifact to build, release, pin and prove. va-crystal bakes this same binary
+# into nirlevi/va-crystal:node. install.sh never builds or fetches it: it only
+# runs the copy inside the image.
 #
 # In Docker, never on the host: nothing here assumes a Crystal toolchain, and
 # the alpine image is the same one the release workflow uses, so a workstation
@@ -238,23 +247,14 @@ CLI_CHOWN = chown -R $(shell id -u):$(shell id -g) bin lib .shards 2>/dev/null |
 
 # The binary every consumer runs. cli/bin/voipappz is the compiler's output;
 # bin/voipappz is the one the mothership's Makefile, its SIP suites and its ISO
-# bake copy from this checkout when it sits beside theirs.
-build: cli-build ## Build the host CLI binary at bin/voipappz
+# bake copy from this checkout when it sits beside theirs — and the one
+# va-crystal's image build downloads from this repo's releases.
+build: ## Build the CLI binary at bin/voipappz (static, in Docker)
+	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug; s=$$?; $(CLI_CHOWN); exit $$s'
 	@mkdir -p bin
 	@cp cli/bin/voipappz bin/voipappz
 	@chmod +x bin/voipappz
 	@echo "cli binary: $$(./bin/voipappz --version)"
-
-cli-build: ## Compile the host CLI from cli/ (static, in Docker)
-	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug; s=$$?; $(CLI_CHOWN); exit $$s'
-
-# The NODE binary. `-Dnode_runtime` drops the host-compose lifecycle surface
-# (up/down/restart/status/deploy/portal…) — a genuinely different program,
-# which is why it is a separate target and a separate release asset. `shards
-# build` has no -o, so the output is renamed afterwards; cli/bin/voipappz is
-# the node one until `make build` rebuilds the host one.
-cli-node-build: ## Compile the -Dnode_runtime CLI (what the node image carries)
-	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug -Dnode_runtime && mv bin/voipappz bin/voipappz-node; s=$$?; $(CLI_CHOWN); exit $$s'
 
 cli-test: ## The CLI spec suite (in Docker)
 	$(CLI_RUN) '$(CLI_SHARDS) && crystal spec --no-color; s=$$?; $(CLI_CHOWN); exit $$s'

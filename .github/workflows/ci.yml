@@ -49,7 +49,7 @@ jobs:
           # integration job, which has a node to run them against.
           for t in help check check-make get install \
                    up down logs health cli node-preflight \
-                   build cli-build cli-node-build cli-test install-cli; do
+                   build cli-test install-cli; do
             echo "=== make $t ==="
             make -n "$t" || { echo "!! make $t does not resolve" >&2; exit 1; }
           done
@@ -94,33 +94,35 @@ jobs:
           ./bin/voipappz --version
           file bin/voipappz | grep -q 'statically linked'
 
-      # The other program from the same source. `status` present in one and
-      # absent in the other is the cheapest proof the -Dnode_runtime build
-      # really dropped the host lifecycle surface — va-crystal's
-      # assert-runtime-image.sh rejects an image that carries it, remotely.
-      - name: The node build is the node build
+      # ONE BINARY, BOTH PLANES — the check that replaced the two-build proof
+      # on 2026-09-07. `status` is the compose rollup a stack needs;
+      # `node-monitor` is the screen a node needs, and it is registered
+      # unconditionally now instead of taking `monitor`'s name in a second
+      # build. Both present in one `--help` is what "the flag is gone" means.
+      # Losing either would mean someone reintroduced a build-time surface.
+      - name: One binary serves the stack and the node
         run: |
-          make cli-node-build
-          ./cli/bin/voipappz-node --version
-          ./bin/voipappz --help | grep -qE '^[[:space:]]+status\b' || {
-            echo "!! the host build has no 'status' — is this the node binary?" >&2; exit 1; }
-          if ./cli/bin/voipappz-node --help | grep -qE '^[[:space:]]+status\b'; then
-            echo "!! the -Dnode_runtime build still carries the host lifecycle surface" >&2
-            exit 1
-          fi
+          for command in status node-monitor sbc pbx health; do
+            ./bin/voipappz --help | grep -qE "^[[:space:]]+$command\b" || {
+              echo "!! the binary has no '$command' — the command surface shrank" >&2; exit 1; }
+          done
+          # And the runtime dispatch: with no config/services.tsv in reach this
+          # checkout is not a stack, so `monitor` must resolve to the node
+          # screen. Compiling that decision in is what this repo just stopped
+          # doing; proving it at runtime is what replaces it.
+          ./bin/voipappz monitor --help | grep -q 'node-monitor' || {
+            echo "!! 'monitor' did not fall through to the node monitor without a catalog" >&2; exit 1; }
 
-      # BOTH BINARIES, EVERY RUN. The mothership's CI installs a stack and a
-      # node with the host one rather than compiling a second copy, and
-      # va-crystal bakes the node one into its image — so every push should
-      # leave something they can take. A week, not a day: a branch reviewed on
-      # Friday still has its binary on Monday.
-      - name: Keep the binaries
+      # THE BINARY, EVERY RUN. The mothership's CI installs a stack and a node
+      # with it rather than compiling its own copy, and va-crystal bakes it
+      # into the node image — so every push should leave something they can
+      # take. A week, not a day: a branch reviewed on Friday still has its
+      # binary on Monday.
+      - name: Keep the binary
         uses: actions/upload-artifact@v4
         with:
           name: voipappz-linux-amd64
-          path: |
-            bin/voipappz
-            cli/bin/voipappz-node
+          path: bin/voipappz
           retention-days: 7
 
       # A STABLE URL for the newest main. Artifacts need a GitHub token and an
@@ -136,16 +138,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          cp bin/voipappz            voipappz-linux-amd64
-          cp cli/bin/voipappz-node   voipappz-node-linux-amd64
-          sha256sum voipappz-linux-amd64      > voipappz-linux-amd64.sha256
-          sha256sum voipappz-node-linux-amd64 > voipappz-node-linux-amd64.sha256
+          cp bin/voipappz voipappz-linux-amd64
+          sha256sum voipappz-linux-amd64 > voipappz-linux-amd64.sha256
           gh release view latest >/dev/null 2>&1 || gh release create latest \
             --prerelease --title 'latest (rolling)' \
             --notes 'The newest main build. Replaced by every push to main; pin a v* tag for a binary that will not move.'
           gh release upload latest --clobber \
-            voipappz-linux-amd64 voipappz-linux-amd64.sha256 \
-            voipappz-node-linux-amd64 voipappz-node-linux-amd64.sha256
+            voipappz-linux-amd64 voipappz-linux-amd64.sha256
           gh release edit latest --notes "The newest main build ($GITHUB_SHA). Replaced by every push to main; pin a v* tag for a binary that will not move."
 
       # THE CLI AT A REAL TERMINAL, a to z. Every step above pipes, and the

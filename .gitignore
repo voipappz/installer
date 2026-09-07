@@ -11,3 +11,9 @@ tests/lab.yml
 # scenario commands fetch.
 /bin/
 .cache/
+
+# The local installation lives in this checkout (INSTALL_DIR=.): its node
+# yaml and generated secrets are this host's, never the repository's.
+/config/
+.env.bak.*
+/secrets/

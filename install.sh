@@ -57,6 +57,13 @@ CA_BUNDLE=""
 if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
 VA_NATS_URL="${VA_NATS_URL:-}"
+# THE FOURTH VALUE THE IMAGE CANNOT DERIVE. Cable verifies every websocket
+# token against SECRET_KEY, so the node refuses to start without it (va-crystal
+# 2026.09.06 and later: "cannot start this node — SECRET_KEY is not set"). It
+# is not the node's to generate: it MUST equal the token-signing secret of the
+# API this node belongs to, or it verifies nothing. A credential, so it lives
+# in the install .env and the container environment, never in va.yaml.
+VA_SECRET_KEY="${VA_SECRET_KEY:-}"
 VA_REGISTER="${VA_REGISTER:-1}"
 VA_CUSTOMER_UUID="${VA_CUSTOMER_UUID:-}"
 VA_CUSTOMER_NAME="${VA_CUSTOMER_NAME:-}"
@@ -71,6 +78,11 @@ START="${START:-1}"
 # offline afterwards (VA_IMAGE_SOURCE=local), and what keeps a re-install from
 # re-downloading a gigabyte it already has.
 IMAGE_ONLY="${IMAGE_ONLY:-0}"
+# 1 with --start-only: start the container from what $INSTALL_DIR already
+# holds and do nothing else — no image fetch, no setup, no registration. This
+# is what `make up` runs, so a restart by hand is the SAME docker run the
+# installer performed instead of a second copy of it that drifts.
+START_ONLY="${START_ONLY:-0}"
 
 # THE OPTIONS. Everything else is a setting and lives in the answer file;
 # these two are a DECISION an operator makes for one run, so they are typed on
@@ -84,11 +96,13 @@ while [ $# -gt 0 ]; do
     --no-register) VA_REGISTER=0 ;;
     --no-start)    START=0 ;;
     --image-only)  IMAGE_ONLY=1 ;;
+    --start-only)  START_ONLY=1 ;;
     -h|--help)
-      printf 'usage: install.sh [--no-register] [--no-start] [--image-only]\n'
+      printf 'usage: install.sh [--no-register] [--no-start] [--image-only] [--start-only]\n'
       printf '  --no-register  install and start the node, do not register it with a mothership\n'
       printf '  --no-start     install and register, do not start the container\n'
       printf '  --image-only   obtain the node image and stop; install it later with no download\n'
+      printf '  --start-only   start the installed node and nothing else — this is what make up runs\n'
       printf '  settings (mothership URL, image source, credentials) come from the\n'
       printf '  environment or an .env answer file — see README.md\n'
       exit 0 ;;
@@ -100,6 +114,10 @@ done
 case "$VA_REGISTER" in 0|1) ;; *) printf '!! VA_REGISTER must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$START" in 0|1) ;; *) printf '!! START must be 0 or 1\n' >&2; exit 1 ;; esac
 case "$IMAGE_ONLY" in 0|1) ;; *) printf '!! IMAGE_ONLY must be 0 or 1\n' >&2; exit 1 ;; esac
+case "$START_ONLY" in 0|1) ;; *) printf '!! START_ONLY must be 0 or 1\n' >&2; exit 1 ;; esac
+if [ "$START_ONLY" = 1 ] && [ "$IMAGE_ONLY" = 1 ]; then
+  printf '!! --start-only and --image-only are opposite ends of the same job\n' >&2; exit 1
+fi
 case "$INSTALL_DIR" in
   /*) ;;
   *) printf '!! INSTALL_DIR must be an absolute, specific directory\n' >&2; exit 1 ;;
@@ -600,6 +618,27 @@ pick_docker() {
   fi
 }
 
+# THE IMAGE IS NOT HERE, SO STOP. Both local-only paths (VA_IMAGE_SOURCE=local
+# and --start-only) refuse rather than reach for a registry: an operator who
+# named a tag meant that tag, and quietly running a different build — or
+# pulling a gigabyte they did not ask for — is worse than stopping. So say
+# which tag is missing and which node images the host does have, because the
+# answer is almost always a tag typo or a build that was never tagged.
+die_no_image() {
+  printf '\n!! no %s on this host\n' "$VA_VOIP_IMAGE" >&2
+  _present="$(docker_cmd images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null |
+    grep -E 'va-crystal' | grep -v '<none>' | head -10)"
+  if [ -n "$_present" ]; then
+    printf '   node images that ARE here:\n' >&2
+    printf '%s\n' "$_present" | sed 's/^/     /' >&2
+    printf '   set VA_VOIP_IMAGE to one of them, or tag your build as %s\n' "$VA_VOIP_IMAGE" >&2
+  else
+    printf '   this host has no va-crystal image at all\n' >&2
+  fi
+  printf '   to fetch one instead: sh install.sh --image-only\n\n' >&2
+  exit 1
+}
+
 registry_of() {
   case "$1" in
     */*)
@@ -974,6 +1013,186 @@ resolve_customer() {
   esac
 }
 
+# START THE CONTAINER. The one place a node is launched: the installer's last
+# step and `--start-only` (`make up`) both call this, so an operator restarting
+# a node gets exactly the run the installer performed — the same ulimits, the
+# same mounts, the same environment — and there is no second copy to drift.
+# Everything it needs is already on disk: config/va.yaml and the mode-0600 .env
+# of $INSTALL_DIR.
+start_node() {
+  # THE THREE VALUES THE IMAGE CANNOT DERIVE FROM va.yaml. Everything else the
+  # container needs it reads from the mounted YAML itself (the va-env oneshot
+  # runs `voipappz env --export --s6` before any service starts). These three
+  # are secrets: the CLI generated them into .env at setup and reads them back
+  # on a rerun, so a restart never rotates what the node already uses.
+  FS_PASSWORD="$(fs_cmd sed -n 's/^VA_FREESWITCH_PASSWORD=//p' "$INSTALL_DIR/.env" | head -1)"
+  LIC_JWT="$(fs_cmd sed -n 's/^VA_LICENSE_JWT_SECRET=//p' "$INSTALL_DIR/.env" | head -1)"
+  LIC_ENC="$(fs_cmd sed -n 's/^VA_LICENSE_ENCRYPTION_KEY=//p' "$INSTALL_DIR/.env" | head -1)"
+  # The service flags, recorded at install time (or by an earlier run).
+  NODE_KAMAILIO="$(fs_cmd sed -n 's/^VA_KAMAILIO=//p' "$INSTALL_DIR/.env" | head -1)"
+  NODE_FREESWITCH="$(fs_cmd sed -n 's/^VA_FREESWITCH=//p' "$INSTALL_DIR/.env" | head -1)"
+  # A credentialed broker URL, if the install recorded one (the bare URL is in
+  # va.yaml; the credential exists only here and in the container env).
+  NODE_NATS_URL="$(fs_cmd sed -n 's/^VA_NATS_URL_CREDENTIALED=//p' "$INSTALL_DIR/.env" | head -1)"
+  # The API's token-signing secret. The image refuses to start without it.
+  NODE_SECRET_KEY="$(fs_cmd sed -n 's/^VA_SECRET_KEY=//p' "$INSTALL_DIR/.env" | head -1)"
+  if [ -z "$FS_PASSWORD" ] || [ -z "$LIC_JWT" ] || [ -z "$LIC_ENC" ]; then
+    die "$INSTALL_DIR/.env is missing the FreeSWITCH or licence secrets; rerun the installer"
+  fi
+
+  # This installer owns the name `va-voip`: replacing it IS how a node is
+  # upgraded, and there is no other project to conflict with now that Compose
+  # is gone. Subscribers live in a named volume, so they survive the swap.
+  if docker_cmd inspect va-voip >/dev/null 2>&1; then
+    say "replacing the running node container"
+    docker_cmd rm -f va-voip >/dev/null 2>&1 || die "could not remove the existing va-voip container"
+  fi
+
+  # --network host: a SIP node advertises its own addresses and takes RTP on a
+  # wide port range; a bridge would rewrite neither. The capabilities are what
+  # FreeSWITCH needs to set thread priorities and lock memory, and kamailio to
+  # manage its own sockets.
+  #
+  # THE ULIMITS CAN ONLY COME FROM HERE. Nothing inside the image can raise its
+  # own rtprio or memlock, so a node installed without them runs FreeSWITCH with
+  # no real-time scheduling and no locked memory — fine while idle, jitter under
+  # load, and nothing names the cause. This set is va-crystal's
+  # scripts/run-node.sh, which calls itself "the one way a node runs" and is
+  # what its CI proof boots; until 2026-08-29 the thing that installs real nodes
+  # quietly used a smaller one. KEEP THE TWO IN STEP.
+  set -- docker_cmd run -d --name va-voip \
+    --network host \
+    --restart unless-stopped \
+    --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_RESOURCE \
+    --cap-add SYS_NICE --cap-add IPC_LOCK \
+    --security-opt seccomp=unconfined \
+    --ulimit rtprio=99 --ulimit nice=-19 \
+    --ulimit memlock=-1:-1 --ulimit nofile=999999:999999 \
+    -v "$INSTALL_DIR/config/va.yaml:/tmp/node.yaml:ro" \
+    -v voipappz-kamailio:/var/lib/kamailio \
+    -e VA_PATH=/tmp/node.yaml \
+    -e "FREESWITCH_PASSWORD=$FS_PASSWORD" \
+    -e "VA_FREESWITCH_PASSWORD=$FS_PASSWORD" \
+    -e "LICENSE_JWT_SECRET=$LIC_JWT" \
+    -e "LICENSE_ENCRYPTION_KEY=$LIC_ENC"
+  [ -n "${NODE_KAMAILIO:-}" ] && set -- "$@" -e "VA_KAMAILIO=$NODE_KAMAILIO"
+  [ -n "${NODE_FREESWITCH:-}" ] && set -- "$@" -e "VA_FREESWITCH=$NODE_FREESWITCH"
+  [ -n "${NODE_NATS_URL:-}" ] && set -- "$@" -e "NATS_URL=$NODE_NATS_URL"
+  if [ -n "${NODE_SECRET_KEY:-}" ]; then
+    set -- "$@" -e "SECRET_KEY=$NODE_SECRET_KEY"
+  else
+    say "WARNING: no VA_SECRET_KEY — a current node image refuses to start without it"
+  fi
+  if [ -n "$CA_BUNDLE" ]; then
+    set -- "$@" -v "$INSTALL_DIR/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
+      -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem
+  fi
+  # SHOW THE COMMAND. An operator who cannot see how their container was made
+  # cannot reproduce it, cannot tell whether it got the real-time limits, and
+  # has to read this script to find out. The three secrets are masked — their
+  # NAMES matter (they are what the image cannot derive), their values never
+  # appear anywhere, including here.
+  printf '  $ '
+  for _a in "$@" "$VA_VOIP_IMAGE"; do
+    case "$_a" in
+      docker_cmd) printf 'docker ' ;;
+      FREESWITCH_PASSWORD=*|VA_FREESWITCH_PASSWORD=*|LICENSE_JWT_SECRET=*|LICENSE_ENCRYPTION_KEY=*|SECRET_KEY=*)
+        printf '%s=<generated> ' "${_a%%=*}" ;;
+      *) printf '%s ' "$_a" ;;
+    esac
+  done
+  printf '\n'
+  _a=""
+
+  "$@" "$VA_VOIP_IMAGE" >/dev/null || die "could not start the node container"
+  FS_PASSWORD=""; LIC_JWT=""; LIC_ENC=""; NODE_SECRET_KEY=""
+  say "started va-voip from $VA_VOIP_IMAGE"
+
+  _attempt=0
+  while [ "$_attempt" -lt 40 ]; do
+    curl -fsS --max-time 3 http://127.0.0.1:4000/health >/dev/null 2>&1 && break
+    [ "$(docker_cmd inspect -f '{{.State.Running}}' va-voip 2>/dev/null)" = "false" ] \
+      && die "va-voip stopped before becoming healthy; run: docker logs va-voip"
+    _attempt=$((_attempt + 1))
+    sleep 3
+  done
+  curl -fsS --max-time 3 http://127.0.0.1:4000/health >/dev/null 2>&1 \
+    || die "va-voip did not become healthy; run: docker logs va-voip"
+  docker_cmd exec -e VA_CONFIG_PATH=/tmp/node.yaml \
+    va-voip voipappz sbc egress sync >/dev/null \
+    || die "the node CLI could not apply va.yaml to Kamailio"
+
+  _attempt=0
+  while [ "$_attempt" -lt 40 ]; do
+    docker_cmd exec va-voip voipappz health >/dev/null 2>&1 && break
+    _attempt=$((_attempt + 1))
+    sleep 3
+  done
+  if ! docker_cmd exec va-voip voipappz health >/dev/null 2>&1; then
+    # Show the verdict itself: which check is down is the whole diagnosis.
+    docker_cmd exec va-voip voipappz health 2>&1 | sed 's/^/    /' || true
+    # A FAILED VERDICT IS NOT A FAILED START. Half of what `health` checks is
+    # remote — the mothership, the broker — and a node is expected to run
+    # without them here: `--start-only` starts a node that is already
+    # installed, and refusing to finish would not un-start the container it
+    # just started. So the report above is the answer, and the exit status
+    # stays 0. An INSTALL still gates on it: there, a red verdict means the
+    # thing that was just installed does not work.
+    if [ "$START_ONLY" = 1 ]; then
+      say "WARNING: va-voip is up but its health verdict is red (report above)"
+      say "docker health: $(docker_cmd inspect -f '{{.State.Health.Status}}' va-voip 2>/dev/null || printf 'starting')"
+      return 0
+    fi
+    die "va-voip did not pass node health (report above); run: docker exec va-voip voipappz health"
+  fi
+  say "va-voip is healthy"
+  say "docker health: $(docker_cmd inspect -f '{{.State.Health.Status}}' va-voip 2>/dev/null || printf 'starting')"
+}
+
+# START ONLY, and stop. `make up`, a reboot, a node that was stopped: the
+# container comes back from what $INSTALL_DIR already holds — its va.yaml, its
+# 0600 .env, its pinned CA bundle — with no download, no setup, no
+# registration, and no write to the installation. It calls the SAME start_node
+# the install does, so a node restarted by hand is never a different node from
+# the one that was installed and registered.
+if [ "$START_ONLY" = 1 ]; then
+  VA_YAML="$INSTALL_DIR/config/va.yaml"
+  [ -f "$VA_YAML" ] \
+    || die "nothing is installed at $INSTALL_DIR (no config/va.yaml) — run: sh install.sh"
+  # install.sh writes .env 0600 and usually root-owned, because it holds the
+  # FreeSWITCH and licence secrets. Read it the way the installer would, rather
+  # than reporting the secrets as missing when they are only unreadable.
+  [ -r "$VA_YAML" ] || FS_AS_ROOT=1
+  [ -r "$INSTALL_DIR/.env" ] || FS_AS_ROOT=1
+  fs_cmd test -r "$INSTALL_DIR/.env" \
+    || die "cannot read $INSTALL_DIR/.env (it is 0600, owned by root) — run this with sudo"
+  command -v docker >/dev/null 2>&1 || die "Docker is not installed here — run: sh install.sh"
+  pick_docker
+  # WHICH IMAGE THIS INSTALLATION RUNS. Recorded in its .env at install time,
+  # so a restart cannot silently swap the build underneath a registered node —
+  # not even when VA_VOIP_IMAGE in the caller's environment says otherwise.
+  INSTALLED_IMAGE="$(fs_cmd sed -n 's/^VA_VOIP_IMAGE=//p' "$INSTALL_DIR/.env" | head -1)"
+  [ -z "$INSTALLED_IMAGE" ] || VA_VOIP_IMAGE=$INSTALLED_IMAGE
+  # ONLY THE LOCAL IMAGE. Nothing here pulls, loads or retags: `make up` runs
+  # the build this installation was given, or it runs nothing.
+  docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1 || die_no_image
+  # The mothership chain this installation pinned, if it pinned one.
+  [ -f "$INSTALL_DIR/config/ca-bundle.pem" ] && CA_BUNDLE="$INSTALL_DIR/config/ca-bundle.pem"
+
+  printf '\nVoIPAppz VoIP node\n'
+  step "The node"
+  say "installation: $INSTALL_DIR"
+  start_node
+
+  printf '\n\033[1mva-voip is up\033[0m\n'
+  say "mothership: $(yaml_api_url)"
+  say "broker:     $(yaml_broker_url)"
+  say "va.yaml:    $VA_YAML -> /tmp/node.yaml (Docker bind mount)"
+  say "health:     http://127.0.0.1:4000/health"
+  say "CLI:        docker exec va-voip voipappz --help"
+  exit 0
+fi
+
 # Validate an explicit mothership URL before anything is written to disk;
 # step 4 persists it to va.yaml and .env, and --no-register never reaches
 # the registration-time check.
@@ -1008,7 +1227,7 @@ step "2/6  Platform image"
 if [ -z "$VA_IMAGE_ARCHIVE" ] && docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
   say "$VA_VOIP_IMAGE is already present"
 elif [ "$VA_IMAGE_SOURCE" = "local" ]; then
-  die "no $VA_VOIP_IMAGE on this host — get it first: sh install.sh --image-only"
+  die_no_image
 elif choose_image_source && [ -n "$VA_IMAGE_ARCHIVE" ]; then
   # Offline path: a `docker save` archive (plain or gzip) of the node image.
   # No registry credentials are needed or requested.
@@ -1220,10 +1439,12 @@ esac
 if [ -n "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
   set_yaml_broker_url "$VA_NATS_URL"
 fi
-[ -z "$NATS_URL_WITH_CREDENTIALS" ] || set_env_value VA_NATS_URL_CREDENTIALED "$NATS_URL_WITH_CREDENTIALS"
+# NO BROKER IS A WARNING, NOT A REFUSAL. A node with no NATS is a node that
+# cannot talk to a mothership — kamailio, FreeSWITCH and the node's own API
+# still come up, which is exactly the local run this installer has to support.
+# `voipappz health` says the broker is down; that is the right place to say it.
 if [ -z "$(yaml_broker_url)" ]; then
-  [ "$START" = "0" ] || die "va.yaml has no broker; add broker.url or set VA_NATS_URL"
-  say "WARNING: va.yaml has no broker; it must be configured before the node starts"
+  say "WARNING: va.yaml names no broker — this node will run without one"
 fi
 
 # Service flags: VA_KAMAILIO=off installs a node that relies on an external
@@ -1238,8 +1459,7 @@ for _flag in VA_KAMAILIO VA_FREESWITCH; do
   eval "_flag_value=\${$_flag:-}"
   case "$_flag_value" in
     '') ;;
-    on|off) set_env_value "$_flag" "$_flag_value"
-            [ "$_flag_value" = off ] && say "$_flag=off — this node runs without its own ${_flag#VA_}" ;;
+    on|off) [ "$_flag_value" = off ] && say "$_flag=off — this node runs without its own ${_flag#VA_}" ;;
     *) die "$_flag must be 'on' or 'off' (got: $_flag_value)" ;;
   esac
 done
@@ -1262,9 +1482,27 @@ if [ "$VA_API_URL_EXPLICIT" = "1" ]; then
 else
   [ -z "$CONFIG_API_URL" ] || VA_API_URL=$CONFIG_API_URL
 fi
-# Which image this node runs — the one thing besides the secrets that the
-# installer itself needs back on the next run.
+# EVERYTHING THE INSTALLER PUTS IN .env GOES HERE, AFTER setup, because the
+# image's `setup` WRITES .env FROM SCRATCH: it keeps the values it generates
+# (the FreeSWITCH and licence secrets) and drops every key it does not know.
+# Written before this line, the image tag, the service flags, the credentialed
+# broker URL and SECRET_KEY all vanished — silently, and only the tag was
+# noticed, because it is the only one this script reads back on the same run.
 set_env_value VA_VOIP_IMAGE "$VA_VOIP_IMAGE"
+# Where this installation lives, so a rerun and `make up` find it from the
+# .env itself rather than from a directory someone has to remember.
+set_env_value INSTALL_DIR "$INSTALL_DIR"
+# The API's token-signing secret: the image refuses to start without it, and
+# it must equal the API's own, so the installer records it, never invents it.
+[ -z "$VA_SECRET_KEY" ] || set_env_value VA_SECRET_KEY "$VA_SECRET_KEY"
+# The broker credential, kept out of the 0644 va.yaml.
+[ -z "$NATS_URL_WITH_CREDENTIALS" ] || set_env_value VA_NATS_URL_CREDENTIALED "$NATS_URL_WITH_CREDENTIALS"
+# Service selection (topology, not application config).
+for _flag in VA_KAMAILIO VA_FREESWITCH; do
+  eval "_flag_value=\${$_flag:-}"
+  [ -z "$_flag_value" ] || set_env_value "$_flag" "$_flag_value"
+done
+_flag_value=""
 
 # The broker the node will use is what va.yaml says (the container reads it
 # there at boot). Checked here, not recorded: a broker name that does not
@@ -1318,114 +1556,7 @@ commit_install_dir
 
 step "6/6  The node"
 if [ "$START" = "1" ]; then
-  # THE THREE VALUES THE IMAGE CANNOT DERIVE FROM va.yaml. Everything else the
-  # container needs it reads from the mounted YAML itself (the va-env oneshot
-  # runs `voipappz env --export --s6` before any service starts). These three
-  # are secrets: the CLI generated them into .env at setup and reads them back
-  # on a rerun, so a restart never rotates what the node already uses.
-  FS_PASSWORD="$(fs_cmd sed -n 's/^VA_FREESWITCH_PASSWORD=//p' "$INSTALL_DIR/.env" | head -1)"
-  LIC_JWT="$(fs_cmd sed -n 's/^VA_LICENSE_JWT_SECRET=//p' "$INSTALL_DIR/.env" | head -1)"
-  LIC_ENC="$(fs_cmd sed -n 's/^VA_LICENSE_ENCRYPTION_KEY=//p' "$INSTALL_DIR/.env" | head -1)"
-  # The service flags, recorded at install time (or by an earlier run).
-  NODE_KAMAILIO="$(fs_cmd sed -n 's/^VA_KAMAILIO=//p' "$INSTALL_DIR/.env" | head -1)"
-  NODE_FREESWITCH="$(fs_cmd sed -n 's/^VA_FREESWITCH=//p' "$INSTALL_DIR/.env" | head -1)"
-  # A credentialed broker URL, if the install recorded one (the bare URL is in
-  # va.yaml; the credential exists only here and in the container env).
-  NODE_NATS_URL="$(fs_cmd sed -n 's/^VA_NATS_URL_CREDENTIALED=//p' "$INSTALL_DIR/.env" | head -1)"
-  if [ -z "$FS_PASSWORD" ] || [ -z "$LIC_JWT" ] || [ -z "$LIC_ENC" ]; then
-    die "$INSTALL_DIR/.env is missing the FreeSWITCH or licence secrets; rerun the installer"
-  fi
-
-  # This installer owns the name `va-voip`: replacing it IS how a node is
-  # upgraded, and there is no other project to conflict with now that Compose
-  # is gone. Subscribers live in a named volume, so they survive the swap.
-  if docker_cmd inspect va-voip >/dev/null 2>&1; then
-    say "replacing the running node container"
-    docker_cmd rm -f va-voip >/dev/null 2>&1 || die "could not remove the existing va-voip container"
-  fi
-
-  # --network host: a SIP node advertises its own addresses and takes RTP on a
-  # wide port range; a bridge would rewrite neither. The capabilities are what
-  # FreeSWITCH needs to set thread priorities and lock memory, and kamailio to
-  # manage its own sockets.
-  #
-  # THE ULIMITS CAN ONLY COME FROM HERE. Nothing inside the image can raise its
-  # own rtprio or memlock, so a node installed without them runs FreeSWITCH with
-  # no real-time scheduling and no locked memory — fine while idle, jitter under
-  # load, and nothing names the cause. This set is va-crystal's
-  # scripts/run-node.sh, which calls itself "the one way a node runs" and is
-  # what its CI proof boots; until 2026-08-29 the thing that installs real nodes
-  # quietly used a smaller one. KEEP THE TWO IN STEP.
-  set -- docker_cmd run -d --name va-voip \
-    --network host \
-    --restart unless-stopped \
-    --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_RESOURCE \
-    --cap-add SYS_NICE --cap-add IPC_LOCK \
-    --security-opt seccomp=unconfined \
-    --ulimit rtprio=99 --ulimit nice=-19 \
-    --ulimit memlock=-1:-1 --ulimit nofile=999999:999999 \
-    -v "$INSTALL_DIR/config/va.yaml:/tmp/node.yaml:ro" \
-    -v voipappz-kamailio:/var/lib/kamailio \
-    -e VA_PATH=/tmp/node.yaml \
-    -e "FREESWITCH_PASSWORD=$FS_PASSWORD" \
-    -e "VA_FREESWITCH_PASSWORD=$FS_PASSWORD" \
-    -e "LICENSE_JWT_SECRET=$LIC_JWT" \
-    -e "LICENSE_ENCRYPTION_KEY=$LIC_ENC"
-  [ -n "${NODE_KAMAILIO:-}" ] && set -- "$@" -e "VA_KAMAILIO=$NODE_KAMAILIO"
-  [ -n "${NODE_FREESWITCH:-}" ] && set -- "$@" -e "VA_FREESWITCH=$NODE_FREESWITCH"
-  [ -n "${NODE_NATS_URL:-}" ] && set -- "$@" -e "NATS_URL=$NODE_NATS_URL"
-  if [ -n "$CA_BUNDLE" ]; then
-    set -- "$@" -v "$INSTALL_DIR/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
-      -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem
-  fi
-  # SHOW THE COMMAND. An operator who cannot see how their container was made
-  # cannot reproduce it, cannot tell whether it got the real-time limits, and
-  # has to read this script to find out. The three secrets are masked — their
-  # NAMES matter (they are what the image cannot derive), their values never
-  # appear anywhere, including here.
-  printf '  $ '
-  for _a in "$@" "$VA_VOIP_IMAGE"; do
-    case "$_a" in
-      docker_cmd) printf 'docker ' ;;
-      FREESWITCH_PASSWORD=*|VA_FREESWITCH_PASSWORD=*|LICENSE_JWT_SECRET=*|LICENSE_ENCRYPTION_KEY=*)
-        printf '%s=<generated> ' "${_a%%=*}" ;;
-      *) printf '%s ' "$_a" ;;
-    esac
-  done
-  printf '\n'
-  _a=""
-
-  "$@" "$VA_VOIP_IMAGE" >/dev/null || die "could not start the node container"
-  FS_PASSWORD=""; LIC_JWT=""; LIC_ENC=""
-  say "started va-voip from $VA_VOIP_IMAGE"
-
-  _attempt=0
-  while [ "$_attempt" -lt 40 ]; do
-    curl -fsS --max-time 3 http://127.0.0.1:4000/health >/dev/null 2>&1 && break
-    [ "$(docker_cmd inspect -f '{{.State.Running}}' va-voip 2>/dev/null)" = "false" ] \
-      && die "va-voip stopped before becoming healthy; run: docker logs va-voip"
-    _attempt=$((_attempt + 1))
-    sleep 3
-  done
-  curl -fsS --max-time 3 http://127.0.0.1:4000/health >/dev/null 2>&1 \
-    || die "va-voip did not become healthy; run: docker logs va-voip"
-  docker_cmd exec -e VA_CONFIG_PATH=/tmp/node.yaml \
-    va-voip voipappz sbc egress sync >/dev/null \
-    || die "the node CLI could not apply va.yaml to Kamailio"
-
-  _attempt=0
-  while [ "$_attempt" -lt 40 ]; do
-    docker_cmd exec va-voip voipappz health >/dev/null 2>&1 && break
-    _attempt=$((_attempt + 1))
-    sleep 3
-  done
-  if ! docker_cmd exec va-voip voipappz health >/dev/null 2>&1; then
-    # Show the verdict itself: which check is down is the whole diagnosis.
-    docker_cmd exec va-voip voipappz health 2>&1 | sed 's/^/    /' || true
-    die "va-voip did not pass node health (report above); run: docker exec va-voip voipappz health"
-  fi
-  say "va-voip is healthy"
-  say "docker health: $(docker_cmd inspect -f '{{.State.Health.Status}}' va-voip 2>/dev/null || printf 'starting')"
+  start_node
 else
   say "installed but not started (START=0)"
 fi
