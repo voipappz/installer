@@ -20,7 +20,7 @@ MAKEFLAGS   += --no-print-directory --no-builtin-rules --no-builtin-variables
 # Every target in one place so check-make can prove each still has a rule.
 # Add a target: add it here.
 PHONY_TARGETS := help check check-make test get install \
-                 setup up down logs health cli \
+                 setup verify up down logs health cli \
                  build cli-test install-cli
 .PHONY: $(PHONY_TARGETS)
 
@@ -45,7 +45,7 @@ help: ## Show this help
 
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from its
 # container when it is not installed, so this needs nothing but docker.
-SCRIPTS = install.sh scripts/common.sh scripts/setup.sh scripts/up.sh \
+SCRIPTS = install.sh scripts/common.sh scripts/setup.sh scripts/verify.sh scripts/up.sh \
           scripts/down.sh scripts/logs.sh scripts/health.sh scripts/cli.sh \
           scripts/install-cli.sh tests/clean-runner.sh \
           tests/test-install.sh tests/unit.sh tests/two-pbx.sh
@@ -194,6 +194,14 @@ NODE_ARGS = $(strip $(foreach v,$(NODE_VARS),$(call node_arg,$(v))))
 
 setup: ## The wizard: write ./.env and ./config/va.yaml
 	$(NODE_ARGS) sh scripts/setup.sh
+
+# BEFORE the start button. The image halts on a bad va.yaml or a missing
+# secret, so its report lands in the log of a container that is already gone;
+# this asks the same questions here, names every problem at once, and starts
+# nothing. Verifying an INSTALLED node is the same command with its two files:
+#   VA_ENV_FILE=/opt/voipappz/.env VA_CONFIG=/opt/voipappz/config/va.yaml make verify
+verify: ## Check ./.env and ./config/va.yaml against what the image requires
+	$(NODE_ARGS) sh scripts/verify.sh
 
 up: ## Start the node here from ./.env and ./config/va.yaml
 	$(NODE_ARGS) sh scripts/up.sh

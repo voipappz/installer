@@ -62,6 +62,7 @@ the secrets the image cannot derive) and `./config/va.yaml` (the node itself).
 
 ```sh
 make setup                          # the wizard: writes ./.env and ./config/va.yaml
+make verify                         # check those two files before starting anything
 make up                             # start the node from those two files
 make down                           # stop it, keeping its kamailio volume
 make logs                           # follow it (TAIL=all from the beginning)
@@ -90,6 +91,23 @@ paths, the container name and `TAIL`. The scripts read the credentials from
 STRICT, AND NOTHING IS GUESSED. There are no defaults: a value that is not in
 `./.env` or your environment is named and the run stops, pointing at `make
 setup`. Nothing pulls, loads or retags an image — `make get` does that.
+
+`make verify` is the one to run before `make up`, and it is the only one that
+changes nothing at all. The image fails loudly or not at all: a bad `va.yaml`
+or a missing secret halts the container before any service starts, so its
+report — which names every problem at once — ends up in the `docker logs` of
+something that is already dead. `verify` asks the same questions out here: the
+five values only `./.env` can carry (set or missing; never printed, and
+`VA_SECRET_KEY` compared against a local API container's when there is one),
+the image on this host, the contract's fields in `va.yaml` (a uuid, an
+`ip_address_internal` an interface here actually holds, 5060 for kamailio and
+5070/5090 for sofia, HTTPS to the mothership unless it is loopback, a broker
+URL), no secret leaked into the world-readable YAML, and the ports free. A `✗`
+fails the run; a `!` is a warning. It reads an installed node just as well:
+
+```sh
+VA_ENV_FILE=/opt/voipappz/.env VA_CONFIG=/opt/voipappz/config/va.yaml make verify
+```
 
 `make up` also validates the node it started rather than trusting a port.
 `--network host` means every `127.0.0.1` probe can be answered by a DIFFERENT

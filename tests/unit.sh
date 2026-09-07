@@ -545,7 +545,7 @@ check 'the installer runs the node with docker run'  'grep -q "docker_cmd run -d
 # is how nodes once lost their real-time limits.
 printf '\n── make setup/up/down/logs/health/cli are scripts\n'
 UP="$ROOT/scripts/up.sh"
-for cmd in setup up down logs health cli; do
+for cmd in setup verify up down logs health cli; do
   check "scripts/$cmd.sh exists and is executable" '[[ -x "$ROOT/scripts/$cmd.sh" ]]'
   check "make $cmd runs it"                        'grep -qE "^\s+@?..NODE_ARGS. sh scripts/$cmd.sh" "$ROOT/Makefile"'
   check "$cmd.sh sources common.sh"                'grep -q "common.sh" "$ROOT/scripts/$cmd.sh"'
@@ -574,6 +574,24 @@ check 'up.sh masks the secrets it prints'           'grep -q "<masked>" "$UP"'
 check 'setup.sh reads secrets without echo'         'grep -q "stty -echo" "$ROOT/scripts/setup.sh"'
 check 'setup.sh keeps .env 0600'                    'grep -q "chmod 0600" "$ROOT/scripts/setup.sh"'
 check 'setup.sh runs the CLI wizard, not its own'   'grep -q "VA_PATH=./work/" "$ROOT/scripts/setup.sh"'
+
+# BEFORE THE START BUTTON, AND ONLY READING. The image halts on a bad va.yaml
+# or a missing secret, so its report is in the log of a container that is
+# already gone. verify.sh asks the same questions out here — the contract's
+# fields, the four values that live only in ./.env, and the ports — and must
+# never be the thing that changes the node it is checking.
+printf '\n── make verify reads the configuration and changes nothing\n'
+VERIFY="$ROOT/scripts/verify.sh"
+check 'verify.sh starts, stops or removes nothing' '! grep -qE "docker (run|start|stop|rm|exec|pull|load)" "$VERIFY"'
+check 'verify.sh writes no file'                   '! grep -qE "^[[:space:]]*(mktemp|sed -i|chmod|tee|mv|cp|rm|touch) " "$VERIFY" && ! grep -qE "> *.?\$(VA_CONFIG|VA_ENV_FILE)" "$VERIFY"'
+check 'it checks every contract field'             'for f in uuid ip_address_internal ip_address_external sip_port mothership broker; do grep -q "$f" "$VERIFY" || exit 1; done'
+check 'it rejects a loopback or wildcard bind'     'grep -q "127.0.0.1|::1" "$VERIFY" && grep -q "0.0.0.0" "$VERIFY"'
+check 'it holds kamailio to 5060'                  'grep -q "5070|5090) bad" "$VERIFY"'
+check 'it keeps the HTTPS rule install.sh has'     'grep -q "http://localhost|http://localhost:\*|http://127.0.0.1|http://127.0.0.1:\*" "$VERIFY"'
+check 'it checks the ports the image names'        'for p in 5060 5070 5090 4000 8090 9060; do grep -q "$p" "$VERIFY" || exit 1; done'
+check 'it looks for a secret leaked into va.yaml'  'grep -q "LICENSE_JWT_SECRET LICENSE_ENCRYPTION_KEY SECRET_KEY" "$VERIFY"'
+check 'it never prints a secret value'             '! grep -qE "(ok|bad|warn|say) .*\$VA_(FREESWITCH_PASSWORD|LICENSE_JWT_SECRET|LICENSE_ENCRYPTION_KEY|SECRET_KEY)" "$VERIFY"'
+check 'a problem is a non-zero exit'               'grep -q "exit 1" "$VERIFY"'
 
 # VALIDATION, because a node that is not up must not report success. With
 # --network host every 127.0.0.1 probe can be answered by a DIFFERENT node
