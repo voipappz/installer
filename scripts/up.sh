@@ -25,6 +25,7 @@ VA_CONFIG=$(cd "$(dirname "$VA_CONFIG")" && pwd)/$(basename "$VA_CONFIG")
 require_docker
 require_image
 
+
 # ONE NODE PER HOST, and this is the check that was missing. --network host
 # means the node owns this machine's SIP, RTP and control ports; a second node
 # container holds them first, and the one you just started dies in an endless

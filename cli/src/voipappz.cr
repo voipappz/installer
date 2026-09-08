@@ -1,8 +1,19 @@
 require "admiral"
 require "./commands/*"
+require "./helpers/cli_context"
 require "./helpers/node_local"
 require "./helpers/project"
 require "./helpers/services"
+
+# WHICH NODE, said on the command line: `voipappz -f <va.yaml> --env-file <.env>`
+# before the sub-command. First, because everything below resolves through the
+# environment these two set. See VoIPAppz::CliContext.
+begin
+  VoIPAppz::CliContext.extract!(ARGV)
+rescue ex : VoIPAppz::CliContext::Error
+  STDERR.puts "voipappz: #{ex.message}"
+  exit 1
+end
 
 # THE LOCAL ENVIRONMENT FILES, so commands work without `sudo -E` or shell
 # sourcing. Existing process env always wins, so an explicit override still does.
@@ -11,6 +22,8 @@ require "./helpers/services"
 #
 #   ./.env                        the project or checkout you are standing in
 #   <INSTALL_DIR>/.env            the node install.sh made on this host
+#
+# ... or exactly one, when `--env-file` named it (VA_ENV_FILE): see below.
 #
 # The second is what lets the kamailio and PBX commands work from a shell on a
 # node box, where there is no checkout to stand in and the values they need
@@ -40,9 +53,16 @@ def load_env_file(path : String) : Nil
   end
 end
 
-load_env_file(File.join(Dir.current, ".env"))
-if !VoIPAppz::Project.found? && VoIPAppz::NodeLocal.installed?
-  load_env_file(VoIPAppz::NodeLocal.env_path)
+# `--env-file` REPLACES that search, as `docker compose --env-file` replaces
+# its default .env: a named file is an answer, and layering the directory's
+# .env under it would put another node's secrets behind this one's.
+if named = ENV["VA_ENV_FILE"]?.presence
+  load_env_file(named)
+else
+  load_env_file(File.join(Dir.current, ".env"))
+  if !VoIPAppz::Project.found? && VoIPAppz::NodeLocal.installed?
+    load_env_file(VoIPAppz::NodeLocal.env_path)
+  end
 end
 
 # Glue `--flag -<value>` → `--flag=-<value>` so negative-prefixed values
@@ -81,6 +101,19 @@ module VoIPAppz
   class CLI < Admiral::Command
     define_version "0.1.0"
     define_help description: "VoIPAppz Infrastructure CLI"
+
+    # DECLARED SO `--help` SHOWS THEM, consumed before Admiral sees them.
+    # VoIPAppz::CliContext takes both off ARGV at startup and turns them into
+    # the environment every reader already resolves through; a root flag
+    # Admiral parses is only readable in this command's `run`, which a
+    # sub-command invocation never reaches. Keep the two spellings in step —
+    # CliContext::YAML_FLAGS and ENV_FLAGS are the parser.
+    define_flag file : String,
+      description: "This node's va.yaml — before the command, as `docker compose -f`",
+      short: f, default: ""
+    define_flag env_file : String,
+      description: "This node's .env — replaces ./.env and the installed node's",
+      default: ""
 
     # Install & Setup
     register_sub_command setup, type: VoIPAppz::Commands::Setup
