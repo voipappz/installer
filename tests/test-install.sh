@@ -982,16 +982,17 @@ pass 'an authenticated Account without node rights fails before customer work'
 # provide an independent test broker, and verify the installed VoIP profile and
 # YAML mount without using mothership as a runtime test fixture.
 # The mothership STAYS UP: the node's health verdict includes reaching it
-# (control_mothership), as a real node must. Its NATS binds loopback; the
-# node's broker below binds the runner's address, so the two coexist.
+# (control_mothership), as a real node must. Its NATS publishes 0.0.0.0:4222
+# (voipappz/mothership 2056fc0, 2026-09-10), so the node's broker below takes
+# 4223 on the runner's address and the two coexist.
 # Bind the broker to the runner's own address, not loopback: a real node reaches
 # NATS over the network, and the node reads the broker from va.yaml, so a
 # loopback-only test would never exercise that path.
-docker run -d --name installer-ci-nats -p "$INTERNAL_IP:4222:4222" nats:alpine >/dev/null
+docker run -d --name installer-ci-nats -p "$INTERNAL_IP:4223:4222" nats:alpine >/dev/null
 BROKER_UP=1
-BROKER_URL="nats://$INTERNAL_IP:4222"
+BROKER_URL="nats://$INTERNAL_IP:4223"
 deadline=$((SECONDS + 60))
-until (exec 3<>"/dev/tcp/$INTERNAL_IP/4222") 2>/dev/null; do
+until (exec 3<>"/dev/tcp/$INTERNAL_IP/4223") 2>/dev/null; do
   ((SECONDS < deadline)) || die 'the remote test broker never accepted connections'
   sleep 2
 done
@@ -1014,7 +1015,7 @@ docker create --name va-voip alpine:3.20 sleep 3600 >/dev/null \
 
 # Docker refuses a name in extra_hosts, so a broker named by DNS has to reach
 # Compose as an address. START=0: this asserts the environment, not a runtime.
-BROKER_NAME_URL="nats://localhost:4222"
+BROKER_NAME_URL="nats://localhost:4223"
 cp "$NODE_DIR/config/va.yaml" "$RUN_ROOT/va.yaml.ip-broker"
 sed -i "/^broker:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 '$BROKER_NAME_URL'#" \
   "$NODE_DIR/config/va.yaml"
