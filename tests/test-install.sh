@@ -275,8 +275,8 @@ assert_full_mothership() {
     ((SECONDS < deadline)) || die "mothership services are not running:$missing"
     sleep 3
   done
-  [[ $(docker inspect -f '{{.State.ExitCode}}' va-db-init) == 0 ]] \
-    || die 'mothership db-init failed'
+  # No db-init check: voipappz/mothership removed that container on 2026-09-15
+  # (2920f6d). The API migrates its own databases at boot now.
   [[ $(docker inspect -f '{{.State.ExitCode}}' va-createbuckets) == 0 ]] \
     || die 'mothership bucket initialization failed'
   pass 'complete mothership app/storage environment is running'
@@ -410,7 +410,9 @@ if [[ -z $MOTHERSHIP_DIR ]]; then
   top=$(find "$RUN_ROOT" -maxdepth 1 -type d -name '*mothership-*' | head -1)
   [[ -n $top ]] || die 'the mothership tarball did not unpack'
   (cd "$top" && tar -cf - .) | (cd "$MOTHERSHIP_DIR" && tar -xf -)
-  for f in docker-compose.yaml config/va.yaml.example scripts/onboard-customer.sh; do
+  # config/va.yaml.example is not among them: voipappz/mothership deleted it on
+  # 2026-09-15 (2920f6d), and nothing in this test ever read it.
+  for f in docker-compose.yaml scripts/onboard-customer.sh; do
     [[ -f $MOTHERSHIP_DIR/$f ]] || die "the mothership tarball lacks $f"
   done
   pass 'mothership fixture downloaded (nothing cloned)'
