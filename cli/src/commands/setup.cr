@@ -101,7 +101,29 @@ module VoIPAppz::Commands
           "  temporary backup (container-local until restart) #{VoIPAppz::Colors::ARROW} #{backup}"
         )
       end
+      print_yaml(path)
       puts VoIPAppz::Colors.info("Restart the node container to apply address or port changes.")
+    end
+
+    # THE DOCUMENT ITSELF, READ BACK OFF DISK.
+    #
+    # The five summary lines above name what the wizard decided; this is the
+    # file the node actually parses, and it parses it whole and halts on the
+    # first thing it does not like — one report, in the log of a container that
+    # is then gone. Printing it here is the only moment an operator can compare
+    # what they meant with what was written without a second command, and it is
+    # the written bytes rather than the in-memory config, so a serializer that
+    # dropped a field shows up as a missing line.
+    #
+    # Nothing is withheld: va.yaml is world-readable by contract and carries no
+    # secret — those live in .env (0600) and the process environment.
+    private def print_yaml(path : String) : Nil
+      return unless File.exists?(path)
+      puts ""
+      puts VoIPAppz::Colors.header(path)
+      puts File.read(path)
+    rescue ex : File::Error
+      STDERR.puts VoIPAppz::Colors.dim("  could not read back #{path}: #{ex.message}")
     end
 
     # Load a KEY=VALUE answer file into ENV so a prepared env file drives setup

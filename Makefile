@@ -203,7 +203,23 @@ setup: ## The wizard: write ./.env and ./config/va.yaml
 verify: ## Check ./.env and ./config/va.yaml against what the image requires
 	$(NODE_ARGS) sh scripts/verify.sh
 
-up: ## Start the node here from ./.env and ./config/va.yaml
+# WHAT `up` READS, and the default of each:
+#
+#   VA_CONFIG    ./config/va.yaml   the node file, mounted read-only at
+#                                   /tmp/node.yaml and parsed at every boot by
+#                                   the va-env oneshot -- so a change to an
+#                                   address here needs a restart, not a rebuild
+#   VA_ENV_FILE  ./.env             the secrets, passed as environment and never
+#                                   written into va.yaml (it is world-readable)
+#
+# THE NODE RUNS ON THE HOST'S NETWORK AND TAKES ITS ADDRESS FROM va.yaml. That
+# address must be one this machine holds and keeps: kamailio's #!substdef
+# listeners, both sofia profiles, every RTP leg and the eventsocket bind it once
+# at boot. If it changes underneath a running node, the node keeps the socket it
+# already has and its own health checks stay green over it -- while nothing on
+# the wire can reach it and no phone can register. Pin it with a DHCP
+# reservation. See va.yaml.host.example.
+up: ## [VA_CONFIG=f] [VA_ENV_FILE=f] Start the node from those two files
 	$(NODE_ARGS) sh scripts/up.sh
 
 down: ## Stop it, keeping its identity and its kamailio volume

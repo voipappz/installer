@@ -48,7 +48,7 @@ jobs:
           # dropped from .PHONY. What the commands DO is proved by the
           # integration job, which has a node to run them against.
           for t in help check check-make get install \
-                   up down logs health cli node-preflight \
+                   setup verify up down logs health cli \
                    build cli-test install-cli; do
             echo "=== make $t ==="
             make -n "$t" || { echo "!! make $t does not resolve" >&2; exit 1; }
@@ -289,7 +289,13 @@ jobs:
   #     hole poked in the rules.
   container:
     name: Node starts with real-time limits / Ubuntu ${{ matrix.ubuntu }}
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Push, manual runs, and pull requests from THIS repository: those carry the
+    # registry secrets, so a change is proven before main has it. Fork PRs and
+    # Dependabot get no such secrets, so they skip, as they always have.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
     runs-on: ubuntu-${{ matrix.ubuntu }}
     timeout-minutes: 20
     strategy:
@@ -302,6 +308,12 @@ jobs:
       - name: A broker and a mothership that answers
         run: |
           set -eu
+          # The API token secret a current node image refuses to start without.
+          # install.sh records it and never invents it, and `make up` requires
+          # it by name, so the run brings its own: masked, never a real one.
+          key=$(openssl rand -hex 32)
+          echo "::add-mask::$key"
+          echo "VA_SECRET_KEY=$key" >> "$GITHUB_ENV"
           docker run -d --name ci-nats --network host nats:2-alpine >/dev/null
           mkdir -p stub && : > stub/health
           nohup python3 -m http.server 5000 --bind 127.0.0.1 --directory stub \
@@ -351,39 +363,55 @@ jobs:
             'grep -q "^Max locked memory *unlimited *unlimited" /proc/self/limits' \
             || { echo "!! memlock did not reach the process" >&2; exit 1; }
 
-      # THE MAKE TARGETS, RUN FOR REAL. The shell job proves they expand;
-      # only here is there a node to point them at. `up` recreates the
-      # container, so its guard matters more than the recipe: install.sh
-      # writes .env 0600 root-owned, and an unprivileged `make up` must refuse
-      # BEFORE `docker rm -f` — a guard that fires afterwards leaves the host
-      # with no node, which is exactly the bug this step exists to catch.
+      # THE MAKE TARGETS, RUN FOR REAL, AGAINST THE INSTALLATION. The shell job
+      # proves they expand; only here is there a node to point them at. `make up`
+      # reads ./.env and ./config/va.yaml by default (a checkout's node), so an
+      # installed node is named by its own two files, the form `make verify`
+      # documents. `up` recreates the container, so its guard matters more than
+      # the recipe: install.sh writes .env 0600 root-owned, and an unprivileged
+      # `make up` must refuse BEFORE `docker rm -f`. A guard that fires
+      # afterwards leaves the host with no node. Each refusal is held to its own
+      # message: refusing for the WRONG reason is how this step once passed
+      # while `make up` could not start anything at all.
       - name: make up / down / health drive the installed node
         run: |
           set -eu
-          # NOTHING INSTALLED THERE. The guard must refuse, and must not have
-          # touched the running node to find that out.
-          echo "=== make up INSTALL_DIR=/tmp/not-installed: must refuse ==="
-          if make up INSTALL_DIR=/tmp/not-installed; then
-            echo "!! make up should have refused" >&2; exit 1
-          fi
-          docker inspect -f '{{.State.Running}}' va-voip | grep -qx true \
-            || { echo "!! the refusal destroyed the container" >&2; exit 1; }
+          node_running() {
+            docker inspect -f '{{.State.Running}}' va-voip | grep -qx true \
+              || { echo "!! the refusal destroyed the container" >&2; exit 1; }
+          }
+          refuses() {  # expected message, make arguments...
+            want=$1; shift
+            if out=$(make up "$@" 2>&1); then
+              printf '%s\n' "$out"
+              echo "!! make up $* should have refused" >&2; exit 1
+            fi
+            printf '%s\n' "$out"
+            printf '%s\n' "$out" | grep -qF -- "$want" \
+              || { echo "!! make up refused, but not with: $want" >&2; exit 1; }
+            node_running
+          }
+
+          # NOTHING INSTALLED THERE.
+          echo "=== make up at /tmp/not-installed: must refuse ==="
+          refuses "no /tmp/not-installed/.env" \
+            VA_ENV_FILE=/tmp/not-installed/.env VA_CONFIG=/tmp/not-installed/config/va.yaml
 
           # THE LAYOUT AN OPERATOR ACTUALLY HAS. install.sh writes .env 0600
-          # owned by root whenever it had to elevate — but GitHub runners ship
+          # owned by root whenever it had to elevate, but GitHub runners ship
           # /opt world-writable, so here it correctly stayed unelevated and the
           # file is the runner's. Make it root's to get the real thing.
           sudo chown root:root /opt/voipappz/.env
           sudo chmod 600 /opt/voipappz/.env
           echo "=== make up, unprivileged, root-owned .env: must refuse ==="
-          if make up; then echo "!! make up read a root-only .env" >&2; exit 1; fi
-          docker inspect -f '{{.State.Running}}' va-voip | grep -qx true \
-            || { echo "!! the refusal destroyed the container" >&2; exit 1; }
+          refuses "cannot read /opt/voipappz/.env" \
+            VA_ENV_FILE=/opt/voipappz/.env VA_CONFIG=/opt/voipappz/config/va.yaml
 
           echo "=== sudo make down ==="
           sudo make down
-          echo "=== sudo make up ==="
-          sudo make up
+          echo "=== sudo make up (the installation's two files) ==="
+          sudo make up \
+            VA_ENV_FILE=/opt/voipappz/.env VA_CONFIG=/opt/voipappz/config/va.yaml
           for _ in $(seq 1 90); do
             [ "$(docker inspect -f '{{.State.Health.Status}}' va-voip)" = healthy ] && break
             sleep 2
@@ -399,7 +427,13 @@ jobs:
 
   integration:
     name: Clean install + real mothership / Ubuntu ${{ matrix.ubuntu }}
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Push, manual runs, and pull requests from THIS repository: those carry the
+    # registry secrets, so a change is proven before main has it. Fork PRs and
+    # Dependabot get no such secrets, so they skip, as they always have.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
     runs-on: ubuntu-${{ matrix.ubuntu }}
     timeout-minutes: 60
     strategy:

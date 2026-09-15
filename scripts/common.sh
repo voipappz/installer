@@ -14,9 +14,23 @@ NODE="${NODE:-va-voip}"
 VA_ENV_FILE="${VA_ENV_FILE:-./.env}"
 VA_CONFIG="${VA_CONFIG:-./config/va.yaml}"
 
+# COLOR, BUT ONLY WHERE THERE IS SOMETHING TO COLOR. Escape codes belong on a
+# terminal; `make verify > report.txt`, a pipe and a CI log get plain text
+# instead of [32m litter. NO_COLOR=1 turns it off everywhere (no-color.org),
+# FORCE_COLOR=1 turns it back on for a pipe you are going to read yourself.
+# shellcheck disable=SC2034  # the palette is used by the scripts that source this
+if [ -n "${NO_COLOR:-}" ] || { [ -z "${FORCE_COLOR:-}" ] && [ ! -t 1 ]; }; then
+  C_BOLD=''; C_DIM=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_OFF=''
+else
+  C_BOLD=$(printf '\033[1m');   C_DIM=$(printf '\033[2m')
+  C_RED=$(printf '\033[31m');   C_GREEN=$(printf '\033[32m')
+  C_YELLOW=$(printf '\033[33m')
+  C_OFF=$(printf '\033[0m')
+fi
+
 say() { printf '  %s\n' "$*"; }
-step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
-die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
+step() { printf '\n%s%s%s\n' "$C_BOLD" "$*" "$C_OFF"; }
+die() { printf '\n%s✘ %s%s\n' "$C_RED$C_BOLD" "$*" "$C_OFF" >&2; exit 1; }
 
 # THE ENV FILE IS THE CONFIGURATION. KEY=VALUE lines, one layer of matching
 # quotes stripped, comments and blanks skipped; anything else is an error

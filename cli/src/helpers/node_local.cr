@@ -44,22 +44,40 @@ module VoIPAppz
       ENV["INSTALL_DIR"]?.presence || DEFAULT_INSTALL_DIR
     end
 
+    # THE NODE DOCUMENT THIS COMMAND IS ABOUT. `voipappz -f <va.yaml>` names
+    # one (VoIPAppz::CliContext sets VA_PATH from it, and so does the `docker
+    # run` that mounts the file into the image); with nothing named it is the
+    # node install.sh put on this host. A host is about to carry more than one
+    # — one va.yaml per network — so "the installed node" and "the node you
+    # asked about" stopped being the same file.
     def yaml_path : String
+      ENV["VA_PATH"]?.presence || installed_yaml_path
+    end
+
+    # ... and this is the installed one specifically, whatever was named.
+    def installed_yaml_path : String
       File.join(install_dir, VA_YAML)
     end
 
+    # Same two-file pair for the secrets: `voipappz --env-file <.env>` names
+    # one, else the installed node's.
     def env_path : String
-      File.join(install_dir, ENV_FILE)
+      ENV["VA_ENV_FILE"]?.presence || File.join(install_dir, ENV_FILE)
     end
 
     # A node is installed here when its va.yaml is.
     #
-    # The .env deliberately does NOT count. It is mode 0600 owned by root on
-    # purpose — it holds the FreeSWITCH and licence secrets — so an
+    # The INSTALLED file, never the named one: this answers "does this host
+    # have a node of its own" — for the .env auto-load, for `start_hint`, for
+    # Docker.installed_node? — and `-f /tmp/some.yaml` does not install a node
+    # on the box, it only says which document to read.
+    #
+    # The .env deliberately does NOT count either. It is mode 0600 owned by
+    # root on purpose — it holds the FreeSWITCH and licence secrets — so an
     # unprivileged operator cannot see it, and keying off it would report "no
     # node here" on a box that plainly has one.
     def installed? : Bool
-      File.exists?(yaml_path)
+      File.exists?(installed_yaml_path)
     end
 
     # `sed -n 's/^KEY=//p' | head -1` is how install.sh reads this file when it
@@ -77,9 +95,10 @@ module VoIPAppz
       File.exists?(env_path) && File::Info.readable?(env_path)
     end
 
-    # The node's own va.yaml, or nil when nothing is installed here.
+    # The node's own va.yaml, or nil when there is no document to read —
+    # the one `-f` named, else the installed one.
     def config : VoIPAppz::DeployConfig?
-      return nil unless installed?
+      return nil unless File.exists?(yaml_path)
       VoIPAppz::DeployConfig.load(yaml_path)
     rescue
       nil

@@ -71,7 +71,7 @@ diagnostics() {
   docker info >/dev/null 2>&1 || return 0
   echo '--- docker containers' >&2
   docker ps -a >&2 || true
-  for container in va-postgres va-db-init va-app va-nats va-minio va-kong va-ingress va-voip; do
+  for container in va-postgres va-api va-nats va-minio va-kong va-sbc va-voip; do
     docker inspect "$container" >/dev/null 2>&1 || continue
     echo "--- $container (last 80 lines)" >&2
     # mod_amqp retries three times a second and logs CRIT every time, with no
@@ -275,8 +275,8 @@ assert_full_mothership() {
     ((SECONDS < deadline)) || die "mothership services are not running:$missing"
     sleep 3
   done
-  [[ $(docker inspect -f '{{.State.ExitCode}}' va-db-init) == 0 ]] \
-    || die 'mothership db-init failed'
+  # No db-init check: voipappz/mothership removed that container on 2026-09-15
+  # (2920f6d). The API migrates its own databases at boot now.
   [[ $(docker inspect -f '{{.State.ExitCode}}' va-createbuckets) == 0 ]] \
     || die 'mothership bucket initialization failed'
   pass 'complete mothership app/storage environment is running'
@@ -410,7 +410,9 @@ if [[ -z $MOTHERSHIP_DIR ]]; then
   top=$(find "$RUN_ROOT" -maxdepth 1 -type d -name '*mothership-*' | head -1)
   [[ -n $top ]] || die 'the mothership tarball did not unpack'
   (cd "$top" && tar -cf - .) | (cd "$MOTHERSHIP_DIR" && tar -xf -)
-  for f in docker-compose.yaml config/va.yaml.example scripts/onboard-customer.sh; do
+  # config/va.yaml.example is not among them: voipappz/mothership deleted it on
+  # 2026-09-15 (2920f6d), and nothing in this test ever read it.
+  for f in docker-compose.yaml scripts/onboard-customer.sh; do
     [[ -f $MOTHERSHIP_DIR/$f ]] || die "the mothership tarball lacks $f"
   done
   pass 'mothership fixture downloaded (nothing cloned)'
@@ -627,7 +629,9 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # Customer::Init correctly homes the bootstrap customer on the app node. Make
 # that test fixture unassigned so the installer can exercise its existing-
 # customer link path without weakening the rule that forbids implicit moves.
-docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-app sh -c \
+# va-api: voipappz/mothership renamed the API container from va-app on
+# 2026-09-15 (1383418).
+docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
   'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "Customer.find_by_uuid(ENV.fetch(%q{CI_CUSTOMER_UUID})).update(node_uuid: nil)"' \
   >/dev/null
 customer=$(api GET "/customers/$FIRST_UUID")
@@ -978,16 +982,17 @@ pass 'an authenticated Account without node rights fails before customer work'
 # provide an independent test broker, and verify the installed VoIP profile and
 # YAML mount without using mothership as a runtime test fixture.
 # The mothership STAYS UP: the node's health verdict includes reaching it
-# (control_mothership), as a real node must. Its NATS binds loopback; the
-# node's broker below binds the runner's address, so the two coexist.
+# (control_mothership), as a real node must. Its NATS publishes 0.0.0.0:4222
+# (voipappz/mothership 2056fc0, 2026-09-10), so the node's broker below takes
+# 4223 on the runner's address and the two coexist.
 # Bind the broker to the runner's own address, not loopback: a real node reaches
 # NATS over the network, and the node reads the broker from va.yaml, so a
 # loopback-only test would never exercise that path.
-docker run -d --name installer-ci-nats -p "$INTERNAL_IP:4222:4222" nats:alpine >/dev/null
+docker run -d --name installer-ci-nats -p "$INTERNAL_IP:4223:4222" nats:alpine >/dev/null
 BROKER_UP=1
-BROKER_URL="nats://$INTERNAL_IP:4222"
+BROKER_URL="nats://$INTERNAL_IP:4223"
 deadline=$((SECONDS + 60))
-until (exec 3<>"/dev/tcp/$INTERNAL_IP/4222") 2>/dev/null; do
+until (exec 3<>"/dev/tcp/$INTERNAL_IP/4223") 2>/dev/null; do
   ((SECONDS < deadline)) || die 'the remote test broker never accepted connections'
   sleep 2
 done
@@ -1010,7 +1015,7 @@ docker create --name va-voip alpine:3.20 sleep 3600 >/dev/null \
 
 # Docker refuses a name in extra_hosts, so a broker named by DNS has to reach
 # Compose as an address. START=0: this asserts the environment, not a runtime.
-BROKER_NAME_URL="nats://localhost:4222"
+BROKER_NAME_URL="nats://localhost:4223"
 cp "$NODE_DIR/config/va.yaml" "$RUN_ROOT/va.yaml.ip-broker"
 sed -i "/^broker:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 '$BROKER_NAME_URL'#" \
   "$NODE_DIR/config/va.yaml"

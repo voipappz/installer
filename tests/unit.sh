@@ -553,8 +553,16 @@ done
 check 'make check syntax-checks every script'       'grep -q "for s in scripts/\*.sh" "$ROOT/Makefile"'
 check 'shellcheck sees them'                        'grep -q "scripts/common.sh" <<<"$(sed -n "/^SCRIPTS = /,/^$/p" "$ROOT/Makefile")"'
 check 'the Makefile starts no container itself' '! grep -q "docker run -d" "$ROOT/Makefile"'
-check 'make shows ./.env in the command it runs'     '[[ "$(cd "$ROOT" && make -n up)" == VA_VOIP_IMAGE=*" sh scripts/up.sh" ]]'
-check 'an override wins and is shown'               '[[ "$(cd "$ROOT" && make -n up VA_VOIP_IMAGE=unit/test:tag)" == "VA_VOIP_IMAGE=unit/test:tag sh scripts/up.sh" ]]'
+# HERMETIC. The Makefile reads ./.env from wherever make runs, so these run it
+# from directories this test owns. A developer's own ./.env must not decide
+# them, and CI has none — which is how the first check passed on a laptop and
+# failed on every runner.
+MK_ENV="$TMP/make-with-env";  mkdir -p "$MK_ENV";  printf 'VA_VOIP_IMAGE=unit/from:env\n' > "$MK_ENV/.env"
+MK_NONE="$TMP/make-no-env";   mkdir -p "$MK_NONE"
+mk_up() { (cd "$1" && shift && make -f "$ROOT/Makefile" -n up "$@"); }
+check 'make shows ./.env in the command it runs'     '[[ "$(mk_up "$MK_ENV")" == "VA_VOIP_IMAGE=unit/from:env sh scripts/up.sh" ]]'
+check 'an override wins and is shown'               '[[ "$(mk_up "$MK_ENV" VA_VOIP_IMAGE=unit/test:tag)" == "VA_VOIP_IMAGE=unit/test:tag sh scripts/up.sh" ]]'
+check 'with no ./.env nothing is invented'          '[[ "$(mk_up "$MK_NONE")" == "sh scripts/up.sh" ]]'
 check 'no secret is ever put on a command line'     '! grep -E "^NODE_VARS" "$ROOT/Makefile" | grep -qE "PASSWORD|SECRET|TOKEN|_KEY"'
 check 'install.sh still starts the installed node'  'grep -q "START_ONLY. = 1 .; then" "$ROOT/install.sh"'
 check '--start-only calls the same function'        '[[ $(grep -c "^ *start_node$" "$ROOT/install.sh") == 2 ]]'
@@ -582,7 +590,20 @@ check 'setup.sh runs the CLI wizard, not its own'   'grep -q "VA_PATH=./work/" "
 # never be the thing that changes the node it is checking.
 printf '\n── make verify reads the configuration and changes nothing\n'
 VERIFY="$ROOT/scripts/verify.sh"
-check 'verify.sh starts, stops or removes nothing' '! grep -qE "docker (run|start|stop|rm|exec|pull|load)" "$VERIFY"'
+# A docker verb in COMMAND position: at the start of a line, or after ; & | ( {
+# or $( . A hint that TELLS the operator what to type ("stop it first: docker
+# stop va-voip") is output, not an action, and must not trip this — while a
+# real call anywhere on a line still does, which the second check proves.
+DOCKER_VERB='(^|[;&|({]|\$\()[[:space:]]*docker (run|start|stop|rm|exec|pull|load)'
+cat > "$TMP/docker-verbs.sh" <<'EOF'
+docker rm -f va-voip
+x=$(docker exec va-voip true)
+running && docker stop va-voip
+say "stop it first: docker stop va-voip"
+# docker run in a comment
+EOF
+check 'verify.sh starts, stops or removes nothing' '! grep -qE "$DOCKER_VERB" "$VERIFY"'
+check '... and that check catches a real call'     '[[ $(grep -cE "$DOCKER_VERB" "$TMP/docker-verbs.sh") == 3 ]]'
 check 'verify.sh writes no file'                   '! grep -qE "^[[:space:]]*(mktemp|sed -i|chmod|tee|mv|cp|rm|touch) " "$VERIFY" && ! grep -qE "> *.?\$(VA_CONFIG|VA_ENV_FILE)" "$VERIFY"'
 check 'it checks every contract field'             'for f in uuid ip_address_internal ip_address_external sip_port mothership broker; do grep -q "$f" "$VERIFY" || exit 1; done'
 check 'it rejects a loopback or wildcard bind'     'grep -q "127.0.0.1|::1" "$VERIFY" && grep -q "0.0.0.0" "$VERIFY"'
