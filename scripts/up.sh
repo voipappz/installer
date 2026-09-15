@@ -12,6 +12,11 @@
 # node you are working on, here, from the tag you wrote down. The docker run is
 # the same one, flag for flag — if you change one, change the other (and
 # va-crystal's scripts/run-node.sh).
+#
+# Pointed at an installation's own two files —
+#   sudo make up VA_ENV_FILE=/opt/voipappz/.env VA_CONFIG=/opt/voipappz/config/va.yaml
+# — it restarts that node, and CI's "Node starts with real-time limits" job
+# drives exactly that.
 set -eu
 # shellcheck source=scripts/common.sh
 . "$(dirname "$0")/common.sh"
@@ -105,8 +110,11 @@ set -- docker run -d --name "$NODE" \
 [ -z "${VA_FREESWITCH:-}" ] || set -- "$@" -e "VA_FREESWITCH=$VA_FREESWITCH"
 [ -z "${VA_NATS_URL_CREDENTIALED:-}" ] \
   || set -- "$@" -e "NATS_URL=$VA_NATS_URL_CREDENTIALED"
-if [ -f ./config/ca-bundle.pem ]; then
-  set -- "$@" -v "$(pwd)/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
+# The pinned CA bundle sits beside the va.yaml it belongs to: ./config for a
+# checkout, /opt/voipappz/config for an installation named with VA_CONFIG=.
+CA_BUNDLE="$(dirname "$VA_CONFIG")/ca-bundle.pem"
+if [ -f "$CA_BUNDLE" ]; then
+  set -- "$@" -v "$CA_BUNDLE:/etc/ssl/va-ca-bundle.pem:ro" \
     -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem
 fi
 

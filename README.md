@@ -158,9 +158,15 @@ voipappz test scenario call --to 1001  # a real SIPp call, aimed at this node
 ```
 
 `INSTALL_DIR=…` points it at a node installed somewhere other than the default.
-Starting and stopping the container is not the CLI's job — that is `make up` /
-`make down`, which run `install.sh --start-only` so the node is always started
-by the installer's own `docker run`.
+Starting and stopping the container is not the CLI's job. `sh install.sh
+--start-only` starts the installed node with the installer's own `docker run`;
+`make up` / `make down` do the same from a checkout when you name the
+installation's two files:
+
+```sh
+sudo make up VA_ENV_FILE=/opt/voipappz/.env VA_CONFIG=/opt/voipappz/config/va.yaml
+sudo make down
+```
 
 ## Reinstall and upgrade
 
