@@ -169,8 +169,8 @@ Two layers, mirroring `.github/workflows/ci.yml`:
    runs `tests/clean-runner.sh`, which purges Docker from the runner; that
    script refuses to run outside GitHub Actions on purpose.
 
-   On a workstation, run it in a throwaway VM; otherwise push a branch and let
-   Actions run it on Ubuntu 22.04 and 24.04.
+   On a workstation, run it in a throwaway VM; otherwise push a branch, open a
+   pull request, and let Actions run it on Ubuntu 22.04 and 24.04.
 
 Adding a test: append to `tests/test-install.sh` using `run_installer
 <success|failure> <label> VAR=… VAR=…`, then assert with `grep` on `$LAST_LOG`
@@ -179,21 +179,45 @@ secrets automatically.
 
 ## CI
 
-`.github/workflows/ci.yml`:
+`.github/workflows/ci.yml`, seven jobs:
 
-- **Shell / Ubuntu 22.04, 24.04** — `make check`, on every push and PR.
+- **Shell / Ubuntu 22.04, 24.04** — `make check` and the `make -n` target
+  expansions, on every push and pull request.
 - **cli · specs + static link + SIPp round-trip** — `make cli-test`, `make
   build`, the command-surface check, and a real SIPp round trip through
-  `voipappz test scenario`. The binary is kept as an
-  artifact for a day; the mothership's CI builds its own from a clone of
-  this repo.
-- **Clean install + real mothership / Ubuntu 22.04, 24.04** — the
-  integration test, on pushes and manual dispatch only (fork PRs cannot
-  receive the registry secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`).
-  It checks out only this repository.
+  `voipappz test scenario`, on every push and pull request. The binary is kept
+  as an artifact for a week, and a push to `main` also replaces the rolling
+  `latest` release.
+- **Node starts with real-time limits / Ubuntu 22.04, 24.04** — installs a node
+  against a stub mothership, checks the container's capabilities and ulimits
+  reached the process, then drives `make up`, `make down` and `make health`
+  against that installation.
+- **Clean install + real mothership / Ubuntu 22.04, 24.04** — the integration
+  test, `tests/test-install.sh`, against a downloaded mothership.
 
-Watch a run: `gh run list --limit 1` then `gh run watch <id>`. A change is
-"done" when every job is green.
+The last two need the registry secrets (`DOCKERHUB_USERNAME`,
+`DOCKERHUB_TOKEN`) and `MOTHERSHIP_TOKEN`. They run on pushes, manual dispatch,
+and pull requests opened from this repository. Pull requests from forks and
+Dependabot receive no secrets, so those two jobs skip themselves there.
+
+Watch a run: `gh pr checks <number>`, or `gh run list --limit 1` then
+`gh run watch <id>`. A change is "done" when every job is green.
+
+## Landing a change
+
+`main` is protected by the `protect-main` repository ruleset:
+
+- no direct pushes: every change arrives as a pull request;
+- all seven CI jobs above must pass, on a branch that is up to date with `main`;
+- review threads must be resolved; merge or squash, no rebase merges;
+- no force pushes, and `main` cannot be deleted.
+
+So the loop is: branch, `make check`, push, open a pull request, wait for the
+seven checks, merge, then confirm the run on `main` is green too.
+
+The integration test downloads the mothership's `main`, so a mothership change
+can turn this repository's CI red with no change here. When it does, fix the
+test to follow the mothership in a pull request like any other.
 
 `.github/workflows/release.yml` runs on a `v*` tag and publishes the CLI
 binaries and checksums. Nothing in `install.sh` consumes them; va-crystal and
