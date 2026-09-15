@@ -71,7 +71,7 @@ diagnostics() {
   docker info >/dev/null 2>&1 || return 0
   echo '--- docker containers' >&2
   docker ps -a >&2 || true
-  for container in va-postgres va-db-init va-app va-nats va-minio va-kong va-ingress va-voip; do
+  for container in va-postgres va-api va-nats va-minio va-kong va-sbc va-voip; do
     docker inspect "$container" >/dev/null 2>&1 || continue
     echo "--- $container (last 80 lines)" >&2
     # mod_amqp retries three times a second and logs CRIT every time, with no
@@ -629,7 +629,9 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # Customer::Init correctly homes the bootstrap customer on the app node. Make
 # that test fixture unassigned so the installer can exercise its existing-
 # customer link path without weakening the rule that forbids implicit moves.
-docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-app sh -c \
+# va-api: voipappz/mothership renamed the API container from va-app on
+# 2026-09-15 (1383418).
+docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
   'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "Customer.find_by_uuid(ENV.fetch(%q{CI_CUSTOMER_UUID})).update(node_uuid: nil)"' \
   >/dev/null
 customer=$(api GET "/customers/$FIRST_UUID")
