@@ -335,9 +335,12 @@ va-crystal pins one of those tags for the binary it bakes into
 ## More
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) — changing the installer: `make check`,
-  `make install`, `make test`.
-- CI runs on Ubuntu 22.04 and 24.04 on every push: unit tests, a clean-host
-  install (Docker Hub, local archive, URL archive), a full install driven
-  through a real terminal, registration and customer handling against a real
-  mothership, and the running node's health and SIP. The CLI job runs the
-  spec suite, links both static binaries, and drives a SIPp round trip.
+  `make install`, `make test`, and how a change lands.
+- CI runs on Ubuntu 22.04 and 24.04 on every push and pull request: unit tests,
+  a clean-host install (Docker Hub, local archive, URL archive), registration
+  and customer handling against a real mothership, the node's real-time limits
+  and `make up` / `make down` against an installation, and the running node's
+  health and SIP. The CLI job runs the spec suite, links the static binary, and
+  drives a SIPp round trip.
+- Contributing: `main` is protected. Open a pull request; it merges once all
+  seven CI jobs are green. See DEVELOPMENT.md, "Landing a change".
