@@ -1,0 +1,25 @@
+[Unit]
+Description=VoIPAppz first-boot configuration
+# The stack is docker compose, so docker must be up before setup writes .env
+# and `up` is called. network-online, not just network: the address derivation
+# reads IMDS over the network, and cloud-init may still be assigning the
+# interface when plain network.target fires.
+After=docker.service network-online.target cloud-init.service
+Wants=network-online.target
+Requires=docker.service
+# Cheap guard so the unit does not even start on subsequent boots; the script
+# checks the same stamp itself, because a unit condition is not a lock.
+ConditionPathExists=!/var/lib/voipappz/firstboot.done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/voipappz-firstboot
+# Bringing a full profile up pulls nothing (images are baked) but still starts
+# ~15 containers and waits on health checks.
+TimeoutStartSec=1800
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

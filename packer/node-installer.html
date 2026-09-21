@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoIPAppz Offline Installer</title>
+<style>
+  :root {
+    --bg: #FFFFFF; --fg: #1B1F24; --dim: #5C6470; --rule: #DFE3E8;
+    --code-bg: #F4F6F8; --pre-bg: #1C2128; --pre-fg: #D8DEE6; --link: #8A5510;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14181D; --fg: #E3E8EE; --dim: #99A2AE; --rule: #2B323B;
+      --code-bg: #1E242B; --pre-bg: #0C0F13; --pre-fg: #CDD5DF; --link: #D9A25C;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181D; --fg: #E3E8EE; --dim: #99A2AE; --rule: #2B323B;
+    --code-bg: #1E242B; --pre-bg: #0C0F13; --pre-fg: #CDD5DF; --link: #D9A25C;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--sans); font-size: 15.5px; line-height: 1.55;
+  }
+  main { max-width: 42rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 .25rem; }
+  h2 {
+    font-size: 1rem; font-weight: 600; margin: 2rem 0 .6rem;
+    padding-bottom: .3rem; border-bottom: 1px solid var(--rule);
+  }
+  p { margin: 0 0 .7rem; }
+  .sub { color: var(--dim); margin-bottom: 0; }
+  ol { margin: 0; padding-left: 1.4rem; }
+  ol > li { margin-bottom: 1.1rem; }
+  ul { margin: .3rem 0 0; padding-left: 1.1rem; }
+  code {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--code-bg); padding: .1em .35em; border-radius: 3px;
+  }
+  pre {
+    background: var(--pre-bg); color: var(--pre-fg); font-family: var(--mono);
+    font-size: .82rem; line-height: 1.5; padding: .7rem .9rem;
+    border-radius: 5px; margin: .5rem 0; overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; color: inherit; }
+  .cm { color: #8B95A3; }
+  .warn { color: var(--link); font-weight: 600; }
+  .tw { overflow-x: auto; margin: .5rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  td { padding: .35rem .7rem .35rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td:first-child { font-family: var(--mono); font-size: .84rem; white-space: nowrap; color: var(--dim); }
+  footer { margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid var(--rule); font-size: .82rem; color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>VoIPAppz Offline Installer</h1>
+<p class="sub">Boot the disc, get a node. No internet.</p>
+
+<h2>Install</h2>
+<ol>
+
+<li><strong>Make a VM.</strong> 80 GB disk, 8 GB RAM, 4 CPU.
+<p class="warn">Tick "Skip Unattended Installation" — otherwise VirtualBox installs its own
+machine instead of the node.</p></li>
+
+<li><strong>Attach the ISO and start.</strong> 10–25 min of scrolling text, no questions.
+Long pauses are normal. Then it powers off by itself.</li>
+
+<li><strong>Remove the disc, then start again.</strong>
+Settings → Storage → optical drive → Remove Disk from Virtual Drive.
+<p class="warn">Leave it in and it reinstalls, wiping what it just built.</p></li>
+
+<li><strong>Wait for first boot.</strong> A few minutes loading the node image. It stops at a login
+prompt saying <code>leaving this node unconfigured</code> — that's expected.
+<p>Log in <code>voipappz</code> / <code>voipappz</code>. It forces a new password.</p></li>
+
+<li><strong>Bring it up.</strong>
+<pre><code>cd /opt/voipappz
+sudo voipappz bootstrap</code></pre>
+<p>Runs the setup wizard, starts the app, health-checks it. Nothing downloads.</p></li>
+
+<li><strong>Seed both Kamailios.</strong>
+<pre><code>sudo voipappz sbc ingress sync
+sudo voipappz sbc egress sync</code></pre>
+<p class="warn">Both. Separate stores — skipping the ingress 404s every call.</p></li>
+
+</ol>
+
+<h2>What you end up with</h2>
+<pre><code>$ which docker voipappz sngrep tcpdump
+/usr/bin/docker
+/usr/local/bin/voipappz
+/usr/bin/sngrep
+/usr/bin/tcpdump
+
+$ docker --version
+Docker version 29.7.2
+
+$ docker images | wc -l
+19          <span class="cm"># 18 + header</span></code></pre>
+<p>Plus Ubuntu 24.04.4 and 22 more packages. The CLI is there from the install; the images
+arrive on first boot.</p>
+
+<h2>If something looks wrong</h2>
+<div class="tw">
+<table>
+<tbody>
+<tr><td>long silence</td><td>copying 4.6 GB off the disc</td></tr>
+<tr><td>powers off</td><td>finished — remove the disc</td></tr>
+<tr><td>asks a question</td><td>VirtualBox's own installer is on; remake the VM</td></tr>
+<tr><td>no wizard</td><td>run <code>voipappz setup</code></td></tr>
+<tr><td>"unconfigured"</td><td>expected — it won't guess your domain</td></tr>
+<tr><td>password rejected</td><td>expired on purpose; set a new one</td></tr>
+<tr><td>TLS warnings</td><td>offline can't get a real cert; <code>voipappz cert</code> confirms</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>Build a new ISO</h2>
+<pre><code>make iso-payload    <span class="cm"># once, ~60 min</span>
+make iso            <span class="cm"># ~90 sec after that</span></code></pre>
+<div class="tw">
+<table>
+<tbody>
+<tr><td>ISO_DEST=</td><td>where it lands</td></tr>
+<tr><td>ISO_NETWORK=</td><td>static IP instead of DHCP</td></tr>
+<tr><td>-var installer_env=</td><td>answer sheet — no login needed at all</td></tr>
+</tbody>
+</table>
+</div>
+
+<footer>packer/README.md · packer/os-image.pkr.hcl</footer>
+
+</main>
+
+</body>
+</html>

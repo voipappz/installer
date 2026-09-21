@@ -1,0 +1,29 @@
+[Unit]
+Description=VoIPAppz — load container images shipped on the install media
+# docker.service, because `docker load` needs a running daemon — the whole
+# reason this is a boot unit and not a late-command: curtin can dpkg-install
+# docker into /target but cannot start it.
+After=docker.service
+Requires=docker.service
+# Before firstboot, which runs `voipappz up` and would otherwise try to PULL the
+# images this unit is about to load — the exact network round-trip an offline
+# ISO exists to avoid. Declared here rather than as an After= in
+# voipappz-firstboot.service on purpose: that unit is shared with the Packer
+# bake, where the images are already in the layer store and this unit does not
+# exist. A Before= from the optional side orders the pair when both are present
+# and is simply inert when it is not.
+Before=voipappz-firstboot.service
+ConditionPathExists=!/var/lib/voipappz/images.loaded
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/voipappz-load-images
+# Decompressing and unpacking ~18GB of layers onto a cold page cache. The
+# default 90s kills it partway through and leaves a half-populated layer store.
+TimeoutStartSec=3600
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

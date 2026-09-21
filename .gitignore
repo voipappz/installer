@@ -17,3 +17,12 @@ tests/lab.yml
 /config/
 .env.bak.*
 /secrets/
+
+# The ISO build. Everything under packer/build/ is generated (the payload, the
+# staging tree and the 8GB discs themselves) and packer/cache/ holds the base
+# Ubuntu ISO, which is downloaded, not authored. `make iso-clean` clears the
+# first without touching the payload.
+packer/build/
+packer/cache/
+packer/crash.log
+packer/installer.*.env
