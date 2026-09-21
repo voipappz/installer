@@ -174,7 +174,10 @@ jobs:
         run: |
           cp -r cli/spec/fixtures/project /tmp/project
           echo "MS=/tmp/project" >> "$GITHUB_ENV"
-          sudo apt-get install -y -qq expect >/dev/null
+          # Update first: act's image ships an empty package list (see the
+          # shell job), and a GitHub runner already has expect.
+          command -v expect >/dev/null || { sudo apt-get update -qq \
+            && sudo apt-get install -y -qq expect >/dev/null; }
 
       - name: The CLI answers at a real terminal, a to z
         run: expect tests/tty-cli.exp "$PWD/bin/voipappz" "$MS" /tmp/tty-cli.log
@@ -461,3 +464,51 @@ jobs:
         # The mothership fixture is DOWNLOADED, never cloned — the same tarball
         # its own installer fetches.
         run: tests/test-install.sh
+
+  # One mail per push to main, pass or fail, so a red main does not wait
+  # to be noticed. Pull requests report on their own page and stay quiet.
+  # SES credentials are repository secrets; without SMTP_PASSWORD the step
+  # notices and skips rather than failing the run.
+  notify:
+    name: release email
+    runs-on: ubuntu-latest
+    needs: [shell, cli, container, integration]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Check SMTP credentials
+        id: smtp
+        env:
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          if [ -z "$SMTP_PASSWORD" ]; then
+            echo "::notice::Release email skipped: no SMTP_PASSWORD repository secret"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send the release email
+        if: steps.smtp.outputs.ready == 'true'
+        uses: dawidd6/action-send-mail@v4
+        with:
+          server_address: ${{ secrets.SMTP_ADDRESS }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          secure: false
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: VoipAppz CI <${{ secrets.SMTP_FROM }}>
+          to: ${{ secrets.SMTP_TO }}
+          subject: >-
+            installer ${{ contains(needs.*.result, 'failure') && 'FAILED' || 'passed' }}:
+            gh-${{ github.run_number }}
+          body: |
+            ${{ github.repository }} on main — ${{ github.sha }}
+
+            shell             : ${{ needs.shell.result }}
+            cli               : ${{ needs.cli.result }}
+            container         : ${{ needs.container.result }}
+            integration       : ${{ needs.integration.result }}
+
+            ${{ github.event.head_commit.message }}
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
