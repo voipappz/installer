@@ -179,7 +179,7 @@ secrets automatically.
 
 ## CI
 
-`.github/workflows/ci.yml`, seven jobs:
+`.github/workflows/ci.yml`, nine jobs:
 
 - **Shell / Ubuntu 22.04, 24.04** — `make check` and the `make -n` target
   expansions, on every push and pull request.
@@ -194,6 +194,19 @@ secrets automatically.
   against that installation.
 - **Clean install + real mothership / Ubuntu 22.04, 24.04** — the integration
   test, `tests/test-install.sh`, against a downloaded mothership.
+- **Media / templates validate** — `make image-validate`: `packer validate`
+  over both `.pkr.hcl` files, in the builder container, so the runner needs
+  Docker and nothing else. Every push. Locally: `make act-packer` (~45s).
+- **Media / cut an image-less ISO** — cuts a disc end to end with
+  `with_images=false`, then proves it is one: El Torito for BIOS *and* UEFI,
+  and the `/voipappz` payload present. Manual only (it writes gigabytes).
+  Locally: `make act-iso-base` once for Canonical's ISO, then `make act-iso`.
+
+  `with_images=false` is what makes a cut runnable in CI: the payload's image
+  is private and gigabytes, while everything a cut can get wrong — the
+  autoinstall, the package closure, the remaster, the boot records — is in the
+  rest of the disc. A disc WITH the image is `make iso` on a machine that has
+  the registry credential.
 
 The last two need the registry secrets (`DOCKERHUB_USERNAME`,
 `DOCKERHUB_TOKEN`) and `MOTHERSHIP_TOKEN`. They run on pushes, manual dispatch,
