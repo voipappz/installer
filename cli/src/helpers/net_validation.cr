@@ -91,6 +91,54 @@ module VoIPAppz
 
     # An https:// URL with a real host — used for webhook inputs, where a
     # plain-http or truncated paste silently breaks alerting.
+    # ── Interface addresses, parsed ────────────────────────────────────────
+    #
+    # Two shapes because there are two sources. `ip -4 -o addr show` is the
+    # good one: it names the interface, so docker bridges can be dropped.
+    # `hostname -I` is the fallback for a host with no iproute2 — act's runner
+    # image (catthehacker/ubuntu) ships none, and neither does a minimal
+    # Debian, and there setup used to exit 1 with "No non-loopback IPv4
+    # address detected" on a box that plainly had an address.
+    #
+    # Parsers, not detection: no I/O here, so both shapes are unit-testable
+    # (cli/spec/net_validation_spec.cr). setup.cr does the running.
+
+    # "2: eth0  inet 10.0.0.5/24 brd ... scope global eth0"
+    def interface_ips_from_ip_output(text : String) : Array(NamedTuple(iface: String, ip: String))
+      out = [] of NamedTuple(iface: String, ip: String)
+      text.strip.split("\n").each do |line|
+        parts = line.split
+        next if parts.size < 4
+        iface = parts[1].rstrip(':')
+        next unless bindable_iface?(iface)
+        ip = parts[3].split("/").first
+        next unless usable_node_ipv4?(ip)
+        out << {iface: iface, ip: ip}
+      end
+      out
+    end
+
+    # "10.0.0.5 172.17.0.1 fe80::1" — addresses only, in an order that has
+    # been seen to put a stale lease first, so the interface name is lost and
+    # with it the chance to drop a docker bridge. Good enough as a fallback:
+    # it only runs where `ip` is absent, which in practice is inside a
+    # container whose one address IS its eth0.
+    def interface_ips_from_hostname_output(text : String) : Array(NamedTuple(iface: String, ip: String))
+      text.split.compact_map do |field|
+        next unless usable_node_ipv4?(field)
+        next if field.starts_with?("169.254.")   # link-local: no route anywhere
+        {iface: "host", ip: field}
+      end
+    end
+
+    # docker0, br-*, veth* are never a bind target for SIP or HTTP, and lo
+    # would make every local health check pass while no phone could reach it.
+    def bindable_iface?(iface : String) : Bool
+      return false if iface == "lo" || iface == "docker0"
+      return false if iface.starts_with?("br-") || iface.starts_with?("veth")
+      true
+    end
+
     def valid_https_url?(s : String) : Bool
       return false unless s.starts_with?("https://")
       rest = s[8..]
