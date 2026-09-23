@@ -49,7 +49,10 @@ jobs:
           # integration job, which has a node to run them against.
           for t in help check check-make get install \
                    setup verify up down logs health cli \
-                   build cli-test install-cli; do
+                   build cli-test install-cli \
+                   iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
+                   iso-upload image-cloud image-ami image-virtualbox \
+                   image-disk-direct image-disk-from-iso image-validate; do
             echo "=== make $t ==="
             make -n "$t" || { echo "!! make $t does not resolve" >&2; exit 1; }
           done
@@ -64,6 +67,13 @@ jobs:
           make -n build                   | grep -q crystallang/crystal
           make -n build RELEASE=1         | grep -q -- 'install-cli.sh --release'
           make -n build RELEASE=v0.2.0    | grep -q -- '--release v0.2.0'
+          # The media targets' knobs, same idea: QUICK re-cuts from an
+          # unchanged payload, ISO_DEST decides where the disc lands, and an
+          # ISO_HOST-less delivery must refuse rather than build.
+          make -n iso QUICK=1             | grep -q "refresh_packages=false"
+          make -n iso ISO_DEST=/tmp/isos  | grep -q "dest_dir=/tmp/isos"
+          if make -n iso | grep -q "dest_dir="; then echo "!! iso names a dest_dir with none set" >&2; exit 1; fi
+          make -n iso-deliver             | grep -q 'set ISO_HOST'
           make check-make
 
   # THE CLI, built and tested here since 2026-09-03, when cli/ moved in from
@@ -512,3 +522,74 @@ jobs:
             ${{ github.event.head_commit.message }}
 
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  # THE MEDIA TEMPLATES. `packer validate` parses both .pkr.hcl files with
+  # every variable and provisioner resolved — the cheapest thing that can fail
+  # on a template edit, and it builds nothing. `make check` already asserts
+  # that each -only= target names a source packer declares; this asserts the
+  # sources themselves are valid.
+  #
+  # It runs in packer/Dockerfile.builder (build.sh builds it), so the runner
+  # needs Docker and nothing else — no packer, no qemu, no xorriso.
+  packer:
+    name: Media / templates validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: packer validate
+        run: make image-validate
+
+  # THE DISC ITSELF — cut end to end, WITHOUT the node image.
+  #
+  # with_images=false is what makes this runnable in CI at all: the payload's
+  # images are private and gigabytes, while everything this job is here to
+  # catch — the autoinstall, the package closure, the remaster, the boot
+  # records — is in the other 3GB. A disc that cannot boot fails here; a disc
+  # missing its image fails `make iso` on a machine that has the credential.
+  #
+  # Manual, because it downloads Canonical's ISO and writes several GB.
+  iso:
+    name: Media / cut an image-less ISO
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      # Canonical's ISO is the one input this cannot produce. Cached, because
+      # it is 3GB and never changes for a given point release — and fetched
+      # with `-C -` because Packer's own downloader does not resume.
+      - name: The base ISO
+        id: base
+        run: |
+          iso=$(grep -oE 'ubuntu-[0-9.]+-live-server-amd64\.iso' packer/os-image.pkr.hcl | head -1)
+          echo "name=$iso" >> "$GITHUB_OUTPUT"
+          echo "release=$(echo "$iso" | sed -E 's/ubuntu-([0-9]+\.[0-9]+).*/\1/')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: packer/cache
+          key: base-iso-${{ steps.base.outputs.name }}
+      - name: Fetch it if the cache was cold
+        run: |
+          iso=packer/cache/${{ steps.base.outputs.name }}
+          [ -f "$iso" ] && { echo "cached: $(du -h "$iso" | cut -f1)"; exit 0; }
+          mkdir -p packer/cache
+          curl -fL -C - --retry 10 -o "$iso" \
+            "https://releases.ubuntu.com/${{ steps.base.outputs.release }}/${{ steps.base.outputs.name }}"
+          du -h "$iso"
+
+      - name: Cut it
+        run: make iso ISO_VARS="-var with_images=false"
+
+      # A disc is not a file that exists: it has to carry both boot records, or
+      # it installs on neither BIOS nor UEFI and the only symptom is a machine
+      # that will not boot from it.
+      - name: It is a bootable disc, and it carries the installer payload
+        run: |
+          iso=$(find packer/build/iso -name 'voipappz-os-*.iso' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2)
+          ls -lh "$iso"
+          sudo apt-get update -qq && sudo apt-get install -y -qq xorriso >/dev/null
+          xorriso -indev "$iso" -report_el_torito plain 2>&1 | tee /tmp/torito
+          grep -q 'El Torito' /tmp/torito
+          xorriso -indev "$iso" -find /voipappz -type f 2>&1 | tee /tmp/payload
+          grep -q 'debs' /tmp/payload

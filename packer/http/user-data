@@ -1,0 +1,49 @@
+#cloud-config
+# Ubuntu Server 24.04 unattended install, served to the installer by Packer's
+# built-in HTTP server (http_directory) and pointed at by the boot_command's
+# `autoinstall ds=nocloud-net;s=http://...`.
+#
+# VirtualBox only. The AMI build starts from Canonical's official cloud image
+# and never runs an installer at all — that asymmetry is inherent: EC2 gives
+# you a ready root volume, a .vdi has to be installed onto blank disk first.
+autoinstall:
+  version: 1
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  identity:
+    hostname: voipappz-node
+    username: voipappz
+    # "voipappz" — a BUILD-TIME credential only. Packer needs a way in over SSH
+    # before any key exists, and bake.sh locks the account (`passwd -l`) before
+    # the disk is finalised, so it is not a usable login in the shipped image.
+    # Give the node a real key or a console user through cloud-init at deploy
+    # time.
+    password: "$6$packerbake$f0YbX2Ce8MZlxHNQLX8oH3XD4R4GdxY1DSvx3MD4NHMFXed.J4rAjxjSC2HJxMbHUocmVULssJ6Mxg6O/C.RX/"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  # Nothing else is installed here. Docker and the CLI come from bake.sh, which
+  # runs identically on the AMI — putting them in this file would give the two
+  # targets different provenance for the same software, which is the exact
+  # drift the shared build block exists to prevent.
+  packages:
+    - curl
+    - ca-certificates
+
+  storage:
+    layout:
+      name: lvm
+
+  user-data:
+    disable_root: true
+
+  late-commands:
+    # Packer's shell provisioner needs passwordless sudo; the installer's
+    # default requires a password and every provisioner step would hang.
+    - echo 'voipappz ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/voipappz
+    - chmod 0440 /target/etc/sudoers.d/voipappz

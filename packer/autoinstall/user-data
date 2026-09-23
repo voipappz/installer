@@ -1,0 +1,298 @@
+#cloud-config
+# Unattended install for the OFFLINE OS ISO (packer/make-installer-iso.sh).
+#
+# SCOPE: this ISO installs an OPERATING SYSTEM and nothing else — Ubuntu plus
+# every package a VoIPAppz node needs, including docker. It does NOT install the
+# VoIPAppz platform. That is the CLI's job (`voipappz bootstrap`), run afterwards
+# against a machine that already has everything it needs to run it.
+#
+# The split is deliberate, and it is not a style preference:
+#
+#   * A late-command that fails ABORTS THE WHOLE INSTALL. That is not a theory —
+#     `dpkg -i` returning 100 threw away a completed partition, bootloader and
+#     base system because one package would not unpack. Keeping the OS phase to
+#     "install packages from a local repo" keeps the blast radius there.
+#   * Node identity and secrets must never be baked. `voipappz setup` writes
+#     .env and config/va.yaml; putting that in an image clones one set of
+#     secrets onto every machine built from it.
+#   * "Ubuntu did not install" and "VoIPAppz did not install" become two
+#     different, separately debuggable failures.
+#
+# Not the same file as packer/http/user-data: that one is served over HTTP to a
+# Packer-driven VM. This one runs on an operator's hardware with no network at
+# all, and installs from /cdrom.
+autoinstall:
+  version: 1
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+# The whole `network:` key, substituted by make-installer-iso.sh from the file
+# given to `--network` (default: autoinstall/network.default.yaml, DHCP).
+#
+# It is a placeholder rather than a literal block because network settings are
+# the one thing that is per-SITE: an ISO with a static address baked in is an
+# ISO that can build exactly one machine. Keeping it in its own file means the
+# addressing plan is a small reviewable artifact next to the build, not a diff
+# against this file every time a node moves.
+#
+# The key configures the INSTALLER and is written through to the installed
+# system as /etc/netplan/00-installer-config.yaml — so a static address is live
+# before anything else runs. That ordering matters: `voipappz bootstrap` (and
+# firstboot, on the Packer targets) derives the node's internal address from
+# whatever interface holds the default route, and a node configured on a DHCP
+# lease it later loses binds kamailio to an address that is gone. Same class of
+# failure as the outage in CLAUDE.md, arrived at from the other direction.
+#
+# Column 0 and alone on its line: that is what the substitution matches.
+@NETWORK@
+
+  identity:
+    hostname: voipappz-node
+    username: voipappz
+    # "voipappz" — a first-login credential only, expired on first boot
+    # (`chage -d 0`) so the shipped image has no usable default password while
+    # staying administrable from the console.
+    password: "$6$packerbake$f0YbX2Ce8MZlxHNQLX8oH3XD4R4GdxY1DSvx3MD4NHMFXed.J4rAjxjSC2HJxMbHUocmVULssJ6Mxg6O/C.RX/"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  # Empty on purpose. `packages:` fetches from the archive mirror, which does
+  # not exist here — everything comes from the local repository in
+  # late-commands instead.
+  packages: []
+
+  # THE flag that makes this ISO work on a machine with no internet.
+  #
+  # subiquity tests the archive mirror before installing, and the default
+  # fallback when that test fails is `abort` — so on an offline target the
+  # install stops dead at "Mirror/apply_autoinstall_config", having partitioned
+  # nothing, and the failure names the mirror rather than the missing network.
+  # `offline-install` tells it to carry on and install from the CD pool.
+  #
+  # geoip off for the same reason: the mirror-selection lookup is a network
+  # round-trip that can only time out here.
+  apt:
+    fallback: offline-install
+    geoip: false
+
+  # Third-party drivers are fetched from the network — another lookup that can
+  # only hang on an isolated box, for something no VoIPAppz node needs.
+  drivers:
+    install: false
+
+  # No snap seeding; snapd would try to reach the store.
+  snaps: []
+
+  # `direct`, not `lvm`. Ubuntu's lvm layout leaves most of the volume group
+  # unallocated, so a 100GB disk installs a root LV a fraction of that size —
+  # and this node will hold a full container image store. A too-small root shows
+  # up much later as a `docker pull` that dies at 80%, hours after the disk
+  # choice was made.
+  storage:
+    layout:
+      name: direct
+
+  user-data:
+    disable_root: true
+
+  # POWER OFF when the install finishes, do not reboot.
+  #
+  # An auto-installer that reboots into the media it is still booting from
+  # installs forever: the firmware picks the CD again, subiquity finds
+  # /autoinstall.yaml again, and it wipes the machine it just built. Observed
+  # here — three full passes before anyone noticed, because each one looks
+  # exactly like the first. Powering off breaks the loop with no timing
+  # assumption and nobody watching for the right moment.
+  shutdown: poweroff
+
+  # Shown BEFORE the install starts. Without it the first thing an operator sees
+  # is a wall of subiquity log lines with no statement of what is running, how
+  # long it takes, or whether it is going to ask them anything — which is what
+  # makes a working unattended install look like a hang.
+  #
+  # /dev/console, not stdout: subiquity captures the latter into its own log.
+  early-commands:
+    - |
+      cat > /dev/console <<'BANNER'
+
+      ================================================================
+        VoIPAppz Node Installer   —   Ubuntu 24.04.4, fully offline
+      ================================================================
+
+        Installing, unattended. You will not be asked anything.
+
+          * Ubuntu Server + docker, sngrep, tcpdump, ngrep, chrony
+          * the voipappz CLI
+          * the node container image  (this is the slow part)
+
+        Takes 10-25 minutes. Long silent pauses are NORMAL - it is
+        copying 4.6 GB off the disc.
+
+        THE DISK WILL BE ERASED.
+
+        When it finishes the machine POWERS ITSELF OFF.
+
+      ================================================================
+
+      BANNER
+
+  late-commands:
+    # Passwordless sudo for the operator account, matching what install.sh
+    # assumes when it re-execs itself with $SUDO.
+    - echo 'voipappz ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/voipappz
+    - chmod 0440 /target/etc/sudoers.d/voipappz
+
+    # The package repository, copied off the CD and KEPT. It stays wired up
+    # because it is the only apt source an air-gapped node has — removing it
+    # would leave the box unable to reinstall its own packages.
+    - mkdir -p /target/var/lib/voipappz/debs
+    - cp -a /cdrom/voipappz/debs/. /target/var/lib/voipappz/debs/
+    - echo 'deb [trusted=yes] file:/var/lib/voipappz/debs ./' > /target/etc/apt/sources.list.d/voipappz-local.list
+
+    # Install from it with apt, NOT `dpkg -i`: dpkg cannot satisfy pre-depends
+    # ordering (systemd-sysv pre-depends on systemd, python3 on
+    # python3-minimal), and its usual repair `apt-get -f install` has nothing to
+    # reach for offline. A real repository lets apt order the unpacking itself
+    # and install only what this target is actually missing.
+    #
+    # `[trusted=yes]` because the repository is unsigned — it came off the same
+    # read-only medium as the installer, so there is no separate trust decision.
+    #
+    # The two Dir::Etc overrides point apt at ONLY this source. Left out,
+    # `apt-get update` also tries archive.ubuntu.com, and on an offline node
+    # that is minutes of DNS and connect timeouts before it reaches the local
+    # repo it could have used immediately.
+    - curtin in-target --target=/target -- apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/voipappz-local.list -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0 update
+    - curtin in-target --target=/target -- env DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/voipappz-local.list -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0 install -y --no-install-recommends @OS_PACKAGES@
+    - curtin in-target --target=/target -- systemctl enable docker.service containerd.service
+
+    # The operator account is in `docker` so `voipappz` runs without sudo — the
+    # CLI shells out to docker constantly and every call would otherwise prompt.
+    - curtin in-target --target=/target -- usermod -aG docker voipappz
+
+    # The CLI itself — the binary plus the stack templates it drives, unpacked
+    # to /opt/voipappz and symlinked onto PATH exactly as install.sh does it.
+    #
+    # This is still the OS phase, not the platform: what lands here is an
+    # installed TOOL. It writes no secrets, pulls no images and starts nothing.
+    # Running `voipappz bootstrap` afterwards is what installs the platform, and
+    # that stays a deliberate act on a machine that already has everything it
+    # needs to succeed.
+    #
+    # The binary ships rather than being downloaded because this node may have
+    # no route out, and install.sh's `curl` of the release asset is precisely
+    # the step that cannot work here.
+    - mkdir -p /target/opt/voipappz
+    - tar -xzf /cdrom/voipappz/stack.tar.gz -C /target/opt/voipappz
+    - chmod +x /target/opt/voipappz/bin/voipappz
+    - ln -sf /opt/voipappz/bin/voipappz /target/usr/local/bin/voipappz
+
+    # SETUP, as a first-boot unit — not a late-command.
+    #
+    # It cannot run here and the reasons are hard ones: there is no docker
+    # daemon in the installer's /target chroot (curtin can dpkg-install docker
+    # but cannot start it), and `voipappz setup` writes .env and config/va.yaml,
+    # which are secrets plus node identity. Writing them into the image clones
+    # one set of secrets onto every machine built from it — DeployManifest
+    # already marks both HOST_GENERATED for exactly that reason.
+    #
+    # So the install stages the unit and the first boot runs it, on a machine
+    # that has its own addresses, its own machine-id and a running docker.
+    #
+    # With no /etc/voipappz/installer.env the unit deliberately stops and says
+    # so, leaving an unconfigured node rather than one that guessed a domain and
+    # looks configured. Drop that file in and reboot — it re-arms itself,
+    # because the "already done" stamp is only written on success.
+    # The container images, staged onto the disk. NOT loaded here: `docker load`
+    # needs a running daemon and there is none in the installer's chroot. They
+    # arrive as 2000MB parts because the 4.6GB archive exceeds what a single
+    # ISO9660 file can hold; voipappz-load-images cats them back together on the
+    # first boot, before the stack is brought up.
+    - mkdir -p /target/var/lib/voipappz/images
+    - cp -a /cdrom/voipappz/images/. /target/var/lib/voipappz/images/
+    - cp /cdrom/voipappz/images.list /target/var/lib/voipappz/images.list
+    - install -m 0755 /cdrom/voipappz/load-images.sh /target/usr/local/sbin/voipappz-load-images
+    - install -m 0644 /cdrom/voipappz/voipappz-loadimages.service /target/etc/systemd/system/voipappz-loadimages.service
+    - curtin in-target --target=/target -- systemctl enable voipappz-loadimages.service
+
+    - install -m 0755 /cdrom/voipappz/firstboot.sh /target/usr/local/sbin/voipappz-firstboot
+    - install -m 0644 /cdrom/voipappz/voipappz-firstboot.service /target/etc/systemd/system/voipappz-firstboot.service
+    - curtin in-target --target=/target -- systemctl enable voipappz-firstboot.service
+
+    # The answer sheet, if this ISO was cut with one (--installer-env). Absent is
+    # the normal case and is not an error.
+    - bash -c 'if [ -f /cdrom/voipappz/installer.env ]; then mkdir -p /target/etc/voipappz && install -m 0600 /cdrom/voipappz/installer.env /target/etc/voipappz/installer.env; fi'
+
+    # Provenance. Says what this ISO was, so a node can answer where it came
+    # from without guessing.
+    - cp /cdrom/voipappz/voipappz-image /target/etc/voipappz-image
+    # WHAT TO TYPE, on screen at every login. A node is a console with no
+    # browser and no documentation on it; an operator who has just watched an
+    # unattended install finish has no way to know the next command is
+    # `voipappz bootstrap` unless the machine says so. /etc/motd rather than
+    # update-motd.d: it survives a machine with no network and needs no
+    # scripting, and Ubuntu prints it before the shell prompt.
+    - |
+      # The version IN the banner, not a command that would tell you. Someone
+      # looking at a node wants to know what it is running before they know
+      # which command asks — and the first question about any machine that
+      # misbehaves is which disc built it. The values come from the disc's own
+      # /cdrom/voipappz/voipappz-image, copied to /etc/voipappz-image above.
+      . /cdrom/voipappz/voipappz-image
+      cat > /target/etc/motd <<MOTD
+
+        VoIPAppz node  ${image_version}
+        CLI ${cli_build}   built ${built}   commit ${commit}
+
+          sudo voipappz bootstrap     install the platform (run this first)
+          sudo voipappz status        what is running, one screen
+          sudo voipappz health        the node's own verdict
+          sudo voipappz logs          follow kamailio + FreeSWITCH + node
+          sudo voipappz cert          which TLS certificate is in use
+          sudo voipappz --version     the CLI's version
+
+          cat /etc/voipappz-image     what this machine was installed from
+          sudo sngrep                 watch SIP on the wire
+
+        Every voipappz command needs sudo: secrets/ is 0700, and a run
+        without it reads nothing and reports that there are no secrets.
+
+      MOTD
+
+    # LAST, so it is the final thing on screen before the machine powers off.
+    # The media has to come out before the next boot or the firmware picks the
+    # disc again and reinstalls over the machine that was just built — the one
+    # step this installer cannot do for itself, so it has to be unmissable.
+    - |
+      cat > /dev/console <<'DONE'
+
+      ================================================================
+        INSTALL COMPLETE  -  powering off in a moment
+      ================================================================
+
+        DO THIS NEXT:
+
+          1. REMOVE THE DISC / ISO
+             VirtualBox: Settings > Storage > optical drive >
+                         Remove Disk from Virtual Drive
+
+          2. Power the machine back on
+
+        Leave the disc in and it will install all over again,
+        erasing what was just built.
+
+        First boot loads the node container image and takes
+        5-15 minutes before the login prompt appears.
+
+        Log in:  voipappz / voipappz   (you must change it)
+        Then:    cd /opt/voipappz && sudo voipappz bootstrap
+
+        The same commands are on the screen at every login.
+
+      ================================================================
+
+      DONE

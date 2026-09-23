@@ -2,6 +2,13 @@
 #
 #   act -j shell          the POSIX gates: syntax, shellcheck, unit tests (~1m)
 #   act -j cli --bind     specs, the binary, the tty a-to-z, SIPp (~10m)
+#   make act-packer       the media templates validate (~1m)
+#   make act-iso          cut a disc with no container image on it (~20m)
+#
+# The two media targets go through make rather than `act -j` because they need
+# --pull=false (act force-pulls the runner image and dies on a stale
+# workstation Docker Hub login) and, for the ISO, Canonical's base image
+# fetched once by `make act-iso-base`.
 #   act -n -j <job>       parse and list the steps, run nothing
 #
 # --bind for `cli`: `make build` compiles in a NESTED `docker run -v

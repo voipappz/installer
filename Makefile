@@ -21,7 +21,12 @@ MAKEFLAGS   += --no-print-directory --no-builtin-rules --no-builtin-variables
 # Add a target: add it here.
 PHONY_TARGETS := help check check-make test get install \
                  setup verify up down logs health cli \
-                 build cli-test install-cli
+                 build cli-test install-cli \
+                 iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
+                 iso-upload image-cloud image-ami image-virtualbox \
+                 image-disk-direct image-disk-from-iso image-validate \
+                 act-packer act-iso act-iso-base act-guard \
+                 iso-release
 .PHONY: $(PHONY_TARGETS)
 
 # ONE list, generated from the `##` comments on the rules themselves, so it can
@@ -47,7 +52,9 @@ help: ## Show this help
 # container when it is not installed, so this needs nothing but docker.
 SCRIPTS = install.sh scripts/common.sh scripts/setup.sh scripts/verify.sh scripts/up.sh \
           scripts/down.sh scripts/logs.sh scripts/health.sh scripts/cli.sh \
-          scripts/install-cli.sh tests/clean-runner.sh \
+          scripts/install-cli.sh scripts/node-images.sh \
+          scripts/check-packer-targets.sh scripts/iso-upload.sh \
+          scripts/extract-casper.sh tests/clean-runner.sh \
           tests/test-install.sh tests/unit.sh tests/two-pbx.sh
 
 check: ## Everything CI runs first: syntax, shellcheck, clean diff, no python, unit tests
@@ -75,6 +82,8 @@ check: ## Everything CI runs first: syntax, shellcheck, clean diff, no python, u
 	! grep -Eq 'python(3)?' install.sh
 	@printf '\n\033[1m6. unit tests\033[0m — install.sh'"'"'s own functions, and the scripts/ contract\n'
 	bash tests/unit.sh
+	@printf '\n\033[1m7. packer\033[0m — every -only= target names a source packer declares\n'
+	sh scripts/check-packer-targets.sh
 	@printf '\n\033[1mcheck green\033[0m — this is the "Shell" CI job; the integration job is `make test`\n\n'
 
 # A .PHONY target with no rule silently does nothing, so a deleted rule looks
@@ -313,3 +322,276 @@ bin/voipappz:
 install-cli: ## [PREFIX=dir] [RELEASE=1|v0.2.0] Put the voipappz CLI on PATH
 	@PREFIX="$(if $(PREFIX),$(PREFIX),/usr/local/bin)" sh scripts/install-cli.sh \
 	  $(if $(RELEASE),--release $(filter-out 1,$(RELEASE)))
+
+
+##@ Node media (ISO)
+#
+# A bootable, offline Ubuntu installer carrying docker, the SIP tooling, the
+# CLI and the node container image. Operator instructions ship beside the disc
+# as packer/node-installer.html; the build's own notes are packer/README.md.
+#
+# THIS MOVED HERE FROM THE MOTHERSHIP REPO (2026-09). It always cut NODE media
+# — the mothership's Makefile said so in a comment for weeks — but it lived
+# beside the mothership's docker-compose.yaml and took its image list from it.
+# Here the list is scripts/node-images.sh: one image, the one scripts/up.sh
+# runs. That is the whole reason the payload is a fraction of what it was.
+#
+#   make iso-payload      # ONCE — pull and save the node image
+#   make iso              # cut the disc
+#   make iso QUICK=1      # skip package re-resolution; touches the network not at all
+#   make iso ISO_DEST=/mnt/d/isos
+DOCKER ?= docker
+
+# Where the finished ISO is copied to. UNSET means "leave it in
+# packer/build/iso/", which is the answer for anyone who is not the person this
+# used to be hardcoded for — a Windows path under one developer's home
+# directory is not a default a public repository can carry.
+ISO_DEST ?=
+ISO_NETWORK ?= autoinstall/network.default.yaml
+
+# Use an image already in the local layer store instead of pulling it — for
+# cutting a disc around an image built by hand (`make -C ../va-crystal
+# node-image`) that exists nowhere else yet, where a pull would fail or, worse,
+# quietly replace it with an older published one.
+VOIPAPPZ_LOCAL_IMAGES ?=
+export VOIPAPPZ_LOCAL_IMAGES
+
+# THE WHOLE CHAIN, for a disc anyone is going to boot: compile the CLI from
+# source, run its specs, and only then stage a payload and cut media around it.
+#
+# `make iso` on its own bakes whatever binary happens to sit in bin/ — which
+# may be a release someone downloaded, or a build from a branch, proved by
+# nothing. A disc is the one artifact nobody can patch afterwards: it goes to a
+# machine with no route out, and the next chance to fix the binary on it is a
+# site visit.
+#
+#   make iso-release                       # pins nothing: bin/voipappz is `latest`
+#   make iso-release CLI_VERSION=v0.2.0    # ... and the disc records that tag
+iso-release: build cli-test iso-payload iso ## Build the CLI, run its specs, then cut a disc around it
+
+# NO SIP ROUND TRIP HERE. The scenarios need SIPp, and driving real calls
+# belongs to the node image's own build in ../va-crystal — a disc is media
+# around a binary, and making it wait on a call generator puts two projects'
+# test infrastructure in the path of cutting one.
+
+# The expensive half: the node image saved into one archive. Needed ONCE —
+# re-runs skip the save unless the resolved digest actually moved.
+iso-payload: ## Pull and save the node image into the offline payload
+	packer/scripts/stage-payload.sh images
+
+# QUICK=1 skips the package re-resolution — for an autoinstall or script change.
+# It touches the network not at all. A flag rather than a second target: same
+# action, same output, one knob.
+# ISO_VARS passes anything else through to Packer — `-var with_images=false`
+# for a disc with no container image on it, which is what CI cuts: the payload
+# images are private and gigabytes, and everything a cut can get wrong (the
+# autoinstall, the package closure, the remaster, the boot records) is in the
+# rest of the disc.
+ISO_VARS ?=
+
+iso: ## [QUICK=1] Cut the offline installer ISO — also ISO_DEST= ISO_NETWORK= ISO_VARS=
+	VOIPAPPZ_ISO_DEST="$(ISO_DEST)" packer/build.sh build \
+		$(if $(ISO_DEST),-var 'dest_dir=$(ISO_DEST)') -var 'network=$(ISO_NETWORK)' \
+		$(if $(QUICK),-var 'refresh_packages=false') $(ISO_VARS) \
+		-only='voipappz-os.null.iso' .
+
+# The cut ISOs and staging tree, NOT the payload (an hour to re-fetch).
+# In a container because Packer ran as root and owns the files.
+iso-clean: ## Remove the cut ISOs and staging tree (keeps the payload)
+	$(DOCKER) run --rm -v "$(CURDIR)/packer:/w" alpine:3.22 \
+		sh -c 'rm -rf /w/build/iso /w/build/msgtest /w/build/boottest'
+
+# --- delivering a cut ISO
+#
+# Packer owns the SSH (`voipappz-deliver`, a null source with a real
+# communicator), so there is no ssh/scp wrapper here to keep in step with it.
+#
+#   make iso-deliver ISO_HOST=192.168.1.1 ISO_PASSWORD=secret
+#   make iso-deliver ISO_HOST=node20 ISO_KEY=~/.ssh/id_ed25519 INSTALL=1
+#   make iso-ship    ISO_HOST=node20 ISO_KEY=~/.ssh/id_ed25519   # cut, then send
+#
+# A key beats a password: the password lands in shell history and the process
+# list, and `deliver_password` is only marked sensitive INSIDE Packer.
+ISO_HOST ?=
+ISO_USER ?= voipappz
+ISO_KEY ?=
+ISO_PASSWORD ?=
+ISO_REMOTE_DIR ?= /home/$(ISO_USER)/isos
+
+# BOTH may travel, and for a key-authenticated install both are NEEDED: the key
+# authenticates SSH, the password answers sudo. Packer's "only one of
+# ssh_agent_auth, ssh_password, and ssh_private_key_file" is resolved inside the
+# HCL — ssh_password is nulled the moment a key is named — so suppressing one
+# here is not necessary.
+ISO_AUTH_VARS = $(if $(ISO_KEY),-var 'deliver_key=$(ISO_KEY)') \
+	$(if $(ISO_PASSWORD),-var 'deliver_password=$(ISO_PASSWORD)')
+
+# INSTALL=1 also installs: offline apt repo off the disc, packages, docker,
+# `docker load` of the node image, CLI on PATH. Then one command short:
+# `voipappz bootstrap`. It CHANGES the target where a plain deliver only copies
+# to it, hence a flag you have to type and deliver_install=false by default.
+# Needs root there: passwordless sudo, or ISO_PASSWORD (used for sudo too).
+iso-deliver: ## [ISO_HOST=x] Send the newest ISO to a host — ISO_KEY=|ISO_PASSWORD=, INSTALL=1 also installs
+	@test -n "$(ISO_HOST)" || { \
+		echo "!! set ISO_HOST=<target>   e.g. make iso-deliver ISO_HOST=192.168.1.1 ISO_KEY=~/.ssh/id_ed25519" >&2; \
+		exit 1; }
+	@test -n "$(ISO_KEY)$(ISO_PASSWORD)" || { \
+		echo "!! set ISO_KEY=<path> or ISO_PASSWORD=<pw>" >&2; exit 1; }
+	packer/build.sh build -only='voipappz-deliver.null.deliver' \
+		-var 'deliver_host=$(ISO_HOST)' \
+		-var 'deliver_user=$(ISO_USER)' \
+		-var 'deliver_dir=$(ISO_REMOTE_DIR)' \
+		$(if $(INSTALL),-var 'deliver_install=true') \
+		$(ISO_AUTH_VARS) \
+		.
+
+# Sequenced in the recipe, not as two prerequisites: ordering those needs
+# `.NOTPARALLEL: <target>`, honoured only on GNU Make >= 4.4 — on 4.3 it
+# serialises the whole file instead, and `make -j` would send a stale ISO.
+iso-ship: ## [ISO_HOST=x] Cut the ISO, then send it (iso + iso-deliver)
+	$(MAKE) iso
+	$(MAKE) iso-deliver
+
+# Install onto a machine that ALREADY HAS the disc — no transfer at all:
+#
+#   make iso-node-install ISO_HOST=192.168.137.10 ISO_PASSWORD=secret
+#
+# packer/scripts/ssh-install.sh uploads and runs the same
+# packer/scripts/remote-install.sh the Packer build does. Re-sending 8.4GB to
+# run a five-minute install is the expensive way to do nothing (~15 min on a
+# slow link). The target needs no internet; ssh/sshpass/python3 stay in the
+# container.
+iso-node-install: ## Install onto a machine that already has the disc — ISO_HOST=
+	@test -n "$(ISO_HOST)" || { \
+		echo "!! set ISO_HOST=<target>   e.g. make iso-node-install ISO_HOST=192.168.137.10 ISO_PASSWORD=secret" >&2; \
+		exit 1; }
+	@test -n "$(ISO_KEY)$(ISO_PASSWORD)" || { \
+		echo "!! set ISO_KEY=<path> or ISO_PASSWORD=<pw>" >&2; exit 1; }
+	$(DOCKER) run --rm -v "$(CURDIR)/packer:/w" \
+		$$([ -d "$$HOME/.ssh" ] && echo "-v $$HOME/.ssh:/root/.ssh:ro" || true) \
+		--entrypoint bash voipappz-packer:local /w/scripts/ssh-install.sh \
+		--host '$(ISO_HOST)' --user '$(ISO_USER)' --iso-dir '$(ISO_REMOTE_DIR)' \
+		$(if $(ISO_KEY),--key '$(ISO_KEY)') \
+		$(if $(ISO_PASSWORD),--password '$(ISO_PASSWORD)')
+
+# Newest cut ISO to S3. Credentials from ~/.aws (mounted read-only) or the
+# environment, never a file in the repo.
+S3_BUCKET ?= voipappz-assets-il
+S3_PREFIX ?= isos
+S3_REGION ?= il-central-1
+
+iso-upload: ## Upload the newest cut ISO to S3 — needs AWS credentials
+	@DOCKER="$(DOCKER)" S3_BUCKET="$(S3_BUCKET)" S3_PREFIX="$(S3_PREFIX)" S3_REGION="$(S3_REGION)" \
+		scripts/iso-upload.sh
+
+##@ Disk images
+#
+# The five DISK sources in packer/voipappz.pkr.hcl — a disk only helps a
+# hypervisor that imports one; `make iso` above cuts the media bare metal wants.
+# All five share ONE `build` block, so none can drift from packer/scripts/bake.sh,
+# and every declared source must be reachable from a target here —
+# scripts/check-packer-targets.sh checks both directions.
+#
+# NOTE packer/README.md is blunt about this half: it has never been built. Treat
+# every target below as unverified until one of them produces a disk.
+#
+#   make image-cloud CLI_VERSION=v1.2.3 STACK_SOURCE=release
+STACK_SOURCE ?= local
+CLI_VERSION  ?= latest
+PACKER_VARS   = -var 'stack_source=$(STACK_SOURCE)' -var 'cli_version=$(CLI_VERSION)'
+
+# Preferred: drives no installer, so the GRUB race cannot happen.
+image-cloud: ## KVM disk from Canonical's cloud image — PREFER THIS. STACK_SOURCE= CLI_VERSION=
+	packer/build.sh build -only='voipappz.qemu.voipappz' $(PACKER_VARS) .
+
+# Costs money and runs IN EC2. Check credentials before Packer launches an
+# instance — a build that dies on auth halfway still leaves billed resources.
+image-ami: ## AWS AMI; needs credentials, and the bake runs in EC2 (costs money)
+	@test -f "$$HOME/.aws/credentials" -o -n "$$AWS_ACCESS_KEY_ID" || { \
+		echo "!! no AWS credentials — write ~/.aws/credentials or export AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY" >&2; \
+		exit 1; }
+	packer/build.sh build -only='voipappz.amazon-ebs.voipappz' $(PACKER_VARS) .
+
+# Needs VirtualBox ON THIS HOST — never WSL2, never CI, where it otherwise fails
+# deep inside Packer talking about VBoxManage rather than the environment.
+#
+# `if`, not `grep ... && { ...; } || true`: under `-e` the && form fails the
+# recipe on every MISS, which is the case that should proceed.
+image-virtualbox: ## VirtualBox disk; VirtualBox must be on THIS host (never WSL2, never CI)
+	@if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then \
+		echo "!! image-virtualbox cannot run under WSL2 — VirtualBox must be on the host" >&2; \
+		echo "   use 'make image-cloud' (qcow2 -> .vdi, imports natively)" >&2; \
+		exit 1; \
+	fi
+	@command -v VBoxManage >/dev/null 2>&1 || { \
+		echo "!! VBoxManage not found — VirtualBox must be installed on this host" >&2; exit 1; }
+	packer/build.sh build -only='voipappz.virtualbox-iso.voipappz' $(PACKER_VARS) .
+
+# Same ISO as image-disk-from-iso, but qemu boots the kernel directly so GRUB
+# never runs and there is nothing to type — the deterministic answer to the race
+# below. scripts/extract-casper.sh pulls vmlinuz+initrd out of the ISO.
+CASPER = packer/cache/casper
+
+image-disk-direct: ## KVM disk, kernel booted directly — deterministic, no GRUB. ISO_DIR=
+	@DOCKER="$(DOCKER)" ISO_DIR="$(ISO_DIR)" CASPER="$(CASPER)" scripts/extract-casper.sh
+	VOIPAPPZ_ISO_DIR="$(ISO_DIR)" packer/build.sh build \
+		-only='voipappz.qemu.direct' $(PACKER_VARS) .
+
+# FLAKY, not broken: keys typed before GRUB is listening go nowhere, the menu
+# times out into the INTERACTIVE installer, and Packer waits out its whole
+# ssh_timeout for an SSH server that never starts — so it presents as a hang.
+# Prefer image-cloud, or image-disk-direct if it has to be this ISO. ISO_DIR is
+# checked here rather than eight minutes in: the target mounts it at /iso.
+image-disk-from-iso: ## KVM disk through the ISO installer — FLAKY, see the GRUB race. ISO_DIR=
+	@test -n "$(ISO_DIR)" || { \
+		echo "!! set ISO_DIR=<dir holding ubuntu-*-live-server-amd64.iso>" >&2; \
+		echo "   e.g. make image-disk-from-iso ISO_DIR=packer/cache" >&2; exit 1; }
+	VOIPAPPZ_ISO_DIR="$(ISO_DIR)" packer/build.sh build \
+		-only='voipappz.qemu.installer' $(PACKER_VARS) .
+
+image-validate: ## packer validate — writes nothing, builds no disk
+	packer/build.sh validate .
+
+##@ CI locally (act)
+#
+# The workflows on this machine, with nektos/act — .actrc holds the flags that
+# are not optional (the runner images, and an EMPTY --env-file so act does not
+# inject this repo's real .env into a job).
+#
+#   make act-packer     the templates validate — a minute, needs only Docker
+#   make act-iso        cut a disc with no container image on it — ~20 minutes
+#   act -j shell        the POSIX gates
+#
+# --bind for both (ACT_FLAGS): packer/build.sh runs its own `docker run -v`
+# against the HOST daemon, so the workspace has to BE a host path. Without it
+# act copies the workspace into the container, the mounts resolve to nothing on
+# the host, and the build writes its ISO somewhere the job cannot see.
+ACT ?= act
+# --pull=false: act force-pulls the runner image on every run, and that fails
+# outright when the workstation's cached Docker Hub login has expired —
+# "authentication required - incorrect username or password", about an image
+# that is already in the local store and needs no credential at all. GitHub
+# runners pull anonymously; a stale local credential is an act-only failure.
+# Append --pull=true to refresh it deliberately.
+ACT_FLAGS ?= --bind --pull=false
+
+act-guard:
+	@command -v $(ACT) >/dev/null 2>&1 || { 		echo "!! act not found — https://github.com/nektos/act (curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash -s -- -b /usr/local/bin)" >&2; 		exit 1; }
+
+act-packer: act-guard ## The media templates job locally (act): packer validate
+	$(ACT) workflow_dispatch -j packer $(ACT_FLAGS) $(ARGS)
+
+# workflow_dispatch, not push: the iso job is `if: workflow_dispatch` so that
+# GitHub does not cut an 8GB disc on every commit. Under push act would skip it
+# and report success having built nothing.
+act-iso: act-iso-base act-guard ## The ISO job locally (act): cut an image-less disc and check it
+	$(ACT) workflow_dispatch -j iso $(ACT_FLAGS) $(ARGS)
+
+# The base ISO, once. The job caches it on GitHub (actions/cache); locally the
+# cache does not exist, so a bare `act -j iso` would download 3GB on every run
+# — and Packer's downloader does not resume, so an interrupted one starts over.
+BASE_ISO = $(shell grep -oE 'ubuntu-[0-9.]+-live-server-amd64\.iso' packer/os-image.pkr.hcl | head -1)
+act-iso-base: ## Fetch the base Ubuntu ISO into packer/cache (once, ~3GB, resumable)
+	@test -n "$(BASE_ISO)" || { echo "!! could not read the base ISO name out of packer/os-image.pkr.hcl" >&2; exit 1; }
+	@mkdir -p packer/cache
+	@if [ -f "packer/cache/$(BASE_ISO)" ]; then 		echo "base ISO: packer/cache/$(BASE_ISO) ($$(du -h packer/cache/$(BASE_ISO) | cut -f1))"; 	else 		rel=$$(echo "$(BASE_ISO)" | sed -E 's/ubuntu-([0-9]+\.[0-9]+).*/\1/'); 		echo ">> fetching $(BASE_ISO) (~3GB, resumable)"; 		curl -fL -C - --retry 10 -o "packer/cache/$(BASE_ISO)" 			"https://releases.ubuntu.com/$$rel/$(BASE_ISO)"; 	fi

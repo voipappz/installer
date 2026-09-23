@@ -1,0 +1,23 @@
+#cloud-config
+# NoCloud seed for the qemu build. Packer packs this plus meta-data into a CD
+# labelled `cidata`, which is where cloud-init looks by default.
+#
+# Note how much smaller this is than http/user-data: Canonical's cloud image is
+# ALREADY installed, so there is no disk layout, no locale, no package
+# selection — only "make a user Packer can SSH in as". Everything else is
+# bake.sh, shared with the AMI and the VirtualBox build.
+users:
+  - name: voipappz
+    groups: [sudo]
+    shell: /bin/bash
+    # Build-time credential only. bake.sh leaves it in place because Packer
+    # still needs SSH for shutdown_command; firstboot.sh expires it so the
+    # shipped image has no standing default password.
+    passwd: "$6$packerbake$f0YbX2Ce8MZlxHNQLX8oH3XD4R4GdxY1DSvx3MD4NHMFXed.J4rAjxjSC2HJxMbHUocmVULssJ6Mxg6O/C.RX/"
+    lock_passwd: false
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+
+# The cloud image ships with password auth off; Packer has no key here, so turn
+# it on for the build. It stays on in the image — supply a key via cloud-init
+# at deploy time if you want it off.
+ssh_pwauth: true

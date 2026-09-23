@@ -249,7 +249,18 @@ mothership, or run `va-node-install --no-register` and register later.
 
 The disc is restricted media: it holds a private container image in the clear,
 so it is distributed by presigned link and must not be re-hosted.
-The disc is cut and published from the voipappz/mothership repository.
+The disc is cut **here** (it moved from voipappz/mothership in 2026-09, where
+it had always built node media):
+
+```console
+$ make iso-payload     # once — pull and save the node image
+$ make iso             # cut the disc
+$ make iso ISO_DEST=/mnt/d/isos
+```
+
+`packer/README.md` is the build's own account of itself, including the gotchas
+that cost real time. `make iso-ship ISO_HOST=…` sends a cut disc to a machine;
+`make iso-node-install ISO_HOST=…` installs onto one that already has it.
 
 ## What it guarantees
 
