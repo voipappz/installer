@@ -168,4 +168,29 @@ describe VoIPAppz::NetValidation do
       VoIPAppz::NetValidation.safe_mothership_transport?("https", nil).should be_false
     end
   end
+  # The host's own addresses, from either source. Setup used to shell out to
+  # `ip` only and treat a missing binary as "no address on this host", which is
+  # how the tty test died inside act: catthehacker/ubuntu ships no iproute2.
+  describe "interface address parsing" do
+    it "reads ip -4 -o addr show, keeping the interface name" do
+      text = <<-OUT
+        1: lo    inet 127.0.0.1/8 scope host lo
+        2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0
+        3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0
+        4: br-abc123    inet 172.19.0.1/16 scope global br-abc123
+        OUT
+      VoIPAppz::NetValidation.interface_ips_from_ip_output(text).should eq([{iface: "eth0", ip: "10.0.0.5"}])
+    end
+
+    it "falls back to hostname -I, dropping loopback and link-local" do
+      parsed = VoIPAppz::NetValidation.interface_ips_from_hostname_output("127.0.0.1 172.17.0.4 169.254.1.1 fe80::1")
+      parsed.should eq([{iface: "host", ip: "172.17.0.4"}])
+    end
+
+    it "gives nothing back for output with no address in it" do
+      VoIPAppz::NetValidation.interface_ips_from_ip_output("").empty?.should be_true
+      VoIPAppz::NetValidation.interface_ips_from_hostname_output(" \n").empty?.should be_true
+    end
+  end
+
 end

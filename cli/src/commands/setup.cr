@@ -574,30 +574,29 @@ module VoIPAppz::Commands
     end
 
     # Get list of network interface IPs
+    # `ip` where there is one, `hostname -I` where there is not. A host with no
+    # iproute2 (act's runner image, a minimal Debian, most containers) used to
+    # land here with an empty list, and detect_ip below then exited 1 with "No
+    # non-loopback IPv4 address detected" on a box that had an address all
+    # along. Parsing and filtering live in NetValidation, which is unit-tested.
     private def list_interface_ips : Array(NamedTuple(iface: String, ip: String))
-      result = [] of NamedTuple(iface: String, ip: String)
-      stdout = IO::Memory.new
-      process = Process.new("ip", ["-4", "-o", "addr", "show"], output: stdout, error: Process::Redirect::Close)
-      return result unless process.wait.success?
-
-      stdout.to_s.strip.split("\n").each do |line|
-        # Format: "2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0"
-        parts = line.split
-        next if parts.size < 4
-        iface = parts[1].rstrip(':')
-        next if iface == "lo"
-        # Filter docker-managed bridges — they're never the right bind target
-        # for SIP/HTTP and just clutter the menu.
-        next if iface == "docker0"
-        next if iface.starts_with?("br-")
-        next if iface.starts_with?("veth")
-        ip_cidr = parts[3]
-        ip = ip_cidr.split("/").first
-        next unless ip =~ /^\d+\.\d+\.\d+\.\d+$/
-        result << {iface: iface, ip: ip}
+      ips = run_and_parse("ip", ["-4", "-o", "addr", "show"]) do |text|
+        VoIPAppz::NetValidation.interface_ips_from_ip_output(text)
       end
+      return ips unless ips.empty?
 
-      result
+      run_and_parse("hostname", ["-I"]) do |text|
+        VoIPAppz::NetValidation.interface_ips_from_hostname_output(text)
+      end
+    end
+
+    # A missing binary raises on spawn rather than exiting non-zero, and either
+    # one means "ask the next source", not "this host has no address".
+    private def run_and_parse(command : String, args : Array(String), &block : String -> Array(NamedTuple(iface: String, ip: String))) : Array(NamedTuple(iface: String, ip: String))
+      stdout = IO::Memory.new
+      process = Process.new(command, args, output: stdout, error: Process::Redirect::Close)
+      return [] of NamedTuple(iface: String, ip: String) unless process.wait.success?
+      block.call(stdout.to_s)
     rescue
       [] of NamedTuple(iface: String, ip: String)
     end
