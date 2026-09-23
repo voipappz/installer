@@ -24,7 +24,8 @@ PHONY_TARGETS := help check check-make test get install \
                  build cli-test install-cli \
                  iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
                  iso-upload image-cloud image-ami image-virtualbox \
-                 image-disk-direct image-disk-from-iso image-validate
+                 image-disk-direct image-disk-from-iso image-validate \
+                 act-packer act-iso act-iso-base act-guard
 .PHONY: $(PHONY_TARGETS)
 
 # ONE list, generated from the `##` comments on the rules themselves, so it can
@@ -362,10 +363,17 @@ iso-payload: ## Pull and save the node image into the offline payload
 # QUICK=1 skips the package re-resolution — for an autoinstall or script change.
 # It touches the network not at all. A flag rather than a second target: same
 # action, same output, one knob.
-iso: ## [QUICK=1] Cut the offline installer ISO — also ISO_DEST= ISO_NETWORK=
+# ISO_VARS passes anything else through to Packer — `-var with_images=false`
+# for a disc with no container image on it, which is what CI cuts: the payload
+# images are private and gigabytes, and everything a cut can get wrong (the
+# autoinstall, the package closure, the remaster, the boot records) is in the
+# rest of the disc.
+ISO_VARS ?=
+
+iso: ## [QUICK=1] Cut the offline installer ISO — also ISO_DEST= ISO_NETWORK= ISO_VARS=
 	VOIPAPPZ_ISO_DEST="$(ISO_DEST)" packer/build.sh build \
 		$(if $(ISO_DEST),-var 'dest_dir=$(ISO_DEST)') -var 'network=$(ISO_NETWORK)' \
-		$(if $(QUICK),-var 'refresh_packages=false') \
+		$(if $(QUICK),-var 'refresh_packages=false') $(ISO_VARS) \
 		-only='voipappz-os.null.iso' .
 
 # The cut ISOs and staging tree, NOT the payload (an hour to re-fetch).
@@ -524,3 +532,47 @@ image-disk-from-iso: ## KVM disk through the ISO installer — FLAKY, see the GR
 
 image-validate: ## packer validate — writes nothing, builds no disk
 	packer/build.sh validate .
+
+##@ CI locally (act)
+#
+# The workflows on this machine, with nektos/act — .actrc holds the flags that
+# are not optional (the runner images, and an EMPTY --env-file so act does not
+# inject this repo's real .env into a job).
+#
+#   make act-packer     the templates validate — a minute, needs only Docker
+#   make act-iso        cut a disc with no container image on it — ~20 minutes
+#   act -j shell        the POSIX gates
+#
+# --bind for both (ACT_FLAGS): packer/build.sh runs its own `docker run -v`
+# against the HOST daemon, so the workspace has to BE a host path. Without it
+# act copies the workspace into the container, the mounts resolve to nothing on
+# the host, and the build writes its ISO somewhere the job cannot see.
+ACT ?= act
+# --pull=false: act force-pulls the runner image on every run, and that fails
+# outright when the workstation's cached Docker Hub login has expired —
+# "authentication required - incorrect username or password", about an image
+# that is already in the local store and needs no credential at all. GitHub
+# runners pull anonymously; a stale local credential is an act-only failure.
+# Append --pull=true to refresh it deliberately.
+ACT_FLAGS ?= --bind --pull=false
+
+act-guard:
+	@command -v $(ACT) >/dev/null 2>&1 || { 		echo "!! act not found — https://github.com/nektos/act (curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash -s -- -b /usr/local/bin)" >&2; 		exit 1; }
+
+act-packer: act-guard ## The media templates job locally (act): packer validate
+	$(ACT) workflow_dispatch -j packer $(ACT_FLAGS) $(ARGS)
+
+# workflow_dispatch, not push: the iso job is `if: workflow_dispatch` so that
+# GitHub does not cut an 8GB disc on every commit. Under push act would skip it
+# and report success having built nothing.
+act-iso: act-iso-base act-guard ## The ISO job locally (act): cut an image-less disc and check it
+	$(ACT) workflow_dispatch -j iso $(ACT_FLAGS) $(ARGS)
+
+# The base ISO, once. The job caches it on GitHub (actions/cache); locally the
+# cache does not exist, so a bare `act -j iso` would download 3GB on every run
+# — and Packer's downloader does not resume, so an interrupted one starts over.
+BASE_ISO = $(shell grep -oE 'ubuntu-[0-9.]+-live-server-amd64\.iso' packer/os-image.pkr.hcl | head -1)
+act-iso-base: ## Fetch the base Ubuntu ISO into packer/cache (once, ~3GB, resumable)
+	@test -n "$(BASE_ISO)" || { echo "!! could not read the base ISO name out of packer/os-image.pkr.hcl" >&2; exit 1; }
+	@mkdir -p packer/cache
+	@if [ -f "packer/cache/$(BASE_ISO)" ]; then 		echo "base ISO: packer/cache/$(BASE_ISO) ($$(du -h packer/cache/$(BASE_ISO) | cut -f1))"; 	else 		rel=$$(echo "$(BASE_ISO)" | sed -E 's/ubuntu-([0-9]+\.[0-9]+).*/\1/'); 		echo ">> fetching $(BASE_ISO) (~3GB, resumable)"; 		curl -fL -C - --retry 10 -o "packer/cache/$(BASE_ISO)" 			"https://releases.ubuntu.com/$$rel/$(BASE_ISO)"; 	fi
