@@ -60,7 +60,13 @@ stage_stack() {
   local staging; staging="$(mktemp -d)"
   trap 'rm -rf "$staging"' RETURN
 
-  git -C "$REPO_ROOT" archive --format=tar HEAD > "$staging/stack.tar"
+  # Same exclusions as packer/build.sh: a node runs install.sh, scripts/ and
+  # the binary — not the CLI's source, the media tooling or the test suites.
+  git -C "$REPO_ROOT" archive --format=tar HEAD -- . \
+    ':(exclude)cli' ':(exclude)packer' ':(exclude)tests' ':(exclude)spec' \
+    ':(exclude).github' ':(exclude).agents' ':(exclude).codex' ':(exclude)docs' \
+    ':(exclude)DEVELOPMENT.md' ':(exclude).actrc' ':(exclude).gitignore' \
+    > "$staging/stack.tar"
   mkdir -p "$staging/bin"
   cp "$REPO_ROOT/bin/voipappz" "$staging/bin/voipappz"
   tar -rf "$staging/stack.tar" -C "$staging" bin/voipappz
@@ -233,7 +239,7 @@ stage_debs() {
   # package that is on the CD but never installed (or worse, the reverse).
   #
   # The fallback is only for running this script by hand.
-  : "${OS_PACKAGES:=docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin sngrep tcpdump ngrep chrony openssl ca-certificates htop iotop lsof strace jq vim git curl wget unzip net-tools ethtool traceroute mtr-tiny bind9-dnsutils}"
+  : "${OS_PACKAGES:=docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin sngrep tcpdump ngrep chrony openssl ca-certificates htop iotop lsof strace jq vim git curl wget unzip net-tools ethtool traceroute mtr-tiny bind9-dnsutils iputils-ping iputils-tracepath make}"
   export OS_PACKAGES
 
   log "downloading $(echo "$OS_PACKAGES" | wc -w) OS packages for offline install"

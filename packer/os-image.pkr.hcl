@@ -66,6 +66,14 @@ variable "os_packages" {
     "htop", "iotop", "lsof", "strace",
     "jq", "vim", "git", "curl", "wget", "unzip",
     "net-tools", "ethtool", "traceroute", "mtr-tiny", "bind9-dnsutils",
+    # ping, and the rest of iputils. Ubuntu Server's minimal install does NOT
+    # have it, and on an air-gapped node there is no apt to fetch it from — so
+    # the first thing anyone reaches for when a node cannot talk to its
+    # mothership is missing exactly when it is needed.
+    "iputils-ping", "iputils-tracepath",
+    # make, because every command this platform documents is a make target and
+    # the stack ships its Makefile.
+    "make",
   ]
   description = "Every package baked into the OS image. Single source of truth for both the download and the install."
 }

@@ -25,7 +25,8 @@ PHONY_TARGETS := help check check-make test get install \
                  iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
                  iso-upload image-cloud image-ami image-virtualbox \
                  image-disk-direct image-disk-from-iso image-validate \
-                 act-packer act-iso act-iso-base act-guard
+                 act-packer act-iso act-iso-base act-guard \
+                 iso-release
 .PHONY: $(PHONY_TARGETS)
 
 # ONE list, generated from the `##` comments on the rules themselves, so it can
@@ -354,6 +355,24 @@ ISO_NETWORK ?= autoinstall/network.default.yaml
 # quietly replace it with an older published one.
 VOIPAPPZ_LOCAL_IMAGES ?=
 export VOIPAPPZ_LOCAL_IMAGES
+
+# THE WHOLE CHAIN, for a disc anyone is going to boot: compile the CLI from
+# source, run its specs, and only then stage a payload and cut media around it.
+#
+# `make iso` on its own bakes whatever binary happens to sit in bin/ — which
+# may be a release someone downloaded, or a build from a branch, proved by
+# nothing. A disc is the one artifact nobody can patch afterwards: it goes to a
+# machine with no route out, and the next chance to fix the binary on it is a
+# site visit.
+#
+#   make iso-release                       # pins nothing: bin/voipappz is `latest`
+#   make iso-release CLI_VERSION=v0.2.0    # ... and the disc records that tag
+iso-release: build cli-test iso-payload iso ## Build the CLI, run its specs, then cut a disc around it
+
+# NO SIP ROUND TRIP HERE. The scenarios need SIPp, and driving real calls
+# belongs to the node image's own build in ../va-crystal — a disc is media
+# around a binary, and making it wait on a call generator puts two projects'
+# test infrastructure in the path of cutting one.
 
 # The expensive half: the node image saved into one archive. Needed ONCE —
 # re-runs skip the save unless the resolved digest actually moved.

@@ -46,7 +46,21 @@ build_stack_tarball() {
   staging="$(mktemp -d)"
   trap 'rm -rf "$staging"' RETURN
 
-  git -C "$REPO_ROOT" archive --format=tar HEAD > "$staging/stack.tar"
+  # WHAT A NODE NEEDS, not this whole repository. `git archive HEAD` took
+  # everything tracked: cli/ (149 files of Crystal source), packer/ (the media
+  # tooling that built this very disc), tests/, .github/, docs/ — none of which
+  # a node runs, and all of which ship the build system to every machine
+  # installed from the disc. The binary is what a node uses; its source is not.
+  #
+  # Exclusions rather than an allow-list: a new top-level file a node DOES need
+  # (a config example, another script) then ships by default, and the failure
+  # mode of forgetting one is a missing file at install time rather than a
+  # silently fatter disc.
+  git -C "$REPO_ROOT" archive --format=tar HEAD -- . \
+    ':(exclude)cli' ':(exclude)packer' ':(exclude)tests' ':(exclude)spec' \
+    ':(exclude).github' ':(exclude).agents' ':(exclude).codex' ':(exclude)docs' \
+    ':(exclude)DEVELOPMENT.md' ':(exclude).actrc' ':(exclude).gitignore' \
+    > "$staging/stack.tar"
   mkdir -p "$staging/bin"
   cp "$REPO_ROOT/bin/voipappz" "$staging/bin/voipappz"
   tar -rf "$staging/stack.tar" -C "$staging" bin/voipappz

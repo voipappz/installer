@@ -185,9 +185,26 @@ else
   log "      sheet, or on the node run: voipappz up -p voip"
 fi
 
+# WHAT THE BAKED BINARY SAYS IT IS, not what was asked for. CLI_VERSION is an
+# input and defaults to `latest`, which names nothing a month later: two discs
+# cut a week apart both say "latest" and carry different binaries. The version
+# is taken from the binary that is actually on this disc, by running it.
+#
+# Static, so it runs in this container whatever the container is. A failure
+# here is not fatal — an unreadable version is worth less than a cut disc — but
+# it is recorded as `unknown` rather than quietly inheriting CLI_VERSION.
+cli_build=unknown
+if tar -xzOf "$PAYLOAD/stack.tar.gz" bin/voipappz > "$WORK/voipappz.bin" 2>/dev/null; then
+  chmod +x "$WORK/voipappz.bin"
+  cli_build="$("$WORK/voipappz.bin" --version 2>/dev/null | head -1 | tr -d '\r')"
+  [ -n "$cli_build" ] || cli_build=unknown
+fi
+log "CLI on this disc: $cli_build"
+
 cat > "$ADD/voipappz/voipappz-image" <<EOF
 image_version=$VERSION
 cli_version=$CLI_VERSION
+cli_build=$cli_build
 source=installer-iso
 built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 commit=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)

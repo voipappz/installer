@@ -230,6 +230,38 @@ autoinstall:
     # Provenance. Says what this ISO was, so a node can answer where it came
     # from without guessing.
     - cp /cdrom/voipappz/voipappz-image /target/etc/voipappz-image
+    # WHAT TO TYPE, on screen at every login. A node is a console with no
+    # browser and no documentation on it; an operator who has just watched an
+    # unattended install finish has no way to know the next command is
+    # `voipappz bootstrap` unless the machine says so. /etc/motd rather than
+    # update-motd.d: it survives a machine with no network and needs no
+    # scripting, and Ubuntu prints it before the shell prompt.
+    - |
+      # The version IN the banner, not a command that would tell you. Someone
+      # looking at a node wants to know what it is running before they know
+      # which command asks — and the first question about any machine that
+      # misbehaves is which disc built it. The values come from the disc's own
+      # /cdrom/voipappz/voipappz-image, copied to /etc/voipappz-image above.
+      . /cdrom/voipappz/voipappz-image
+      cat > /target/etc/motd <<MOTD
+
+        VoIPAppz node  ${image_version}
+        CLI ${cli_build}   built ${built}   commit ${commit}
+
+          sudo voipappz bootstrap     install the platform (run this first)
+          sudo voipappz status        what is running, one screen
+          sudo voipappz health        the node's own verdict
+          sudo voipappz logs          follow kamailio + FreeSWITCH + node
+          sudo voipappz cert          which TLS certificate is in use
+          sudo voipappz --version     the CLI's version
+
+          cat /etc/voipappz-image     what this machine was installed from
+          sudo sngrep                 watch SIP on the wire
+
+        Every voipappz command needs sudo: secrets/ is 0700, and a run
+        without it reads nothing and reports that there are no secrets.
+
+      MOTD
 
     # LAST, so it is the final thing on screen before the machine powers off.
     # The media has to come out before the next boot or the firmware picks the
@@ -258,6 +290,8 @@ autoinstall:
 
         Log in:  voipappz / voipappz   (you must change it)
         Then:    cd /opt/voipappz && sudo voipappz bootstrap
+
+        The same commands are on the screen at every login.
 
       ================================================================
 
