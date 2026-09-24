@@ -1,5 +1,6 @@
 require "./spec_helper"
 require "http/server"
+require "base64"
 require "../src/helpers/mailbox"
 
 # `voipappz test mail` was scripts/check-auth-mail.sh, and tests/unit.sh tested
@@ -107,6 +108,43 @@ describe VoIPAppz::Mailbox do
       VoIPAppz::Mailbox.mail.should eq("http://127.0.0.1:18025")
     ensure
       ENV.delete("VA_MAILPIT_PORT")
+    end
+  end
+
+  # The mailbox UI is published behind MP_UI_AUTH, which covers its API: a read
+  # without the password is a 401, and the CLI reported that as "nothing
+  # answers" — the reset-code check could no longer see any mail.
+  it "sends the mailbox password, from VA_MAILPIT_UI_PASSWORD" do
+    ENV["VA_MAILPIT_UI_PASSWORD"] = "s3cret"
+    begin
+      with_mailbox(->(ctx : HTTP::Server::Context) {
+        if ctx.request.headers["Authorization"]? == "Basic #{Base64.strict_encode("admin:s3cret")}"
+          ctx.response.print %({"Version":"v1"})
+        else
+          ctx.response.status_code = 401
+        end
+        nil
+      }) do
+        VoIPAppz::Mailbox.get("#{VoIPAppz::Mailbox.mail}/api/v1/info").should_not be_nil
+      end
+    ensure
+      ENV.delete("VA_MAILPIT_UI_PASSWORD")
+    end
+  end
+
+  it "sends credentials given in MAILPIT_URL" do
+    with_mailbox(->(ctx : HTTP::Server::Context) {
+      ctx.response.status_code = 401 unless ctx.request.headers["Authorization"]? == "Basic #{Base64.strict_encode("admin:p@ss")}"
+      nil
+    }) do
+      port = URI.parse(VoIPAppz::Mailbox.mail).port
+      VoIPAppz::Mailbox.get("http://admin:p%40ss@127.0.0.1:#{port}/api/v1/info").should_not be_nil
+    end
+  end
+
+  it "still reports a mailbox that refuses it, rather than an empty one" do
+    with_mailbox(->(ctx : HTTP::Server::Context) { ctx.response.status_code = 401; nil }) do
+      VoIPAppz::Mailbox.get("#{VoIPAppz::Mailbox.mail}/api/v1/info").should be_nil
     end
   end
 end

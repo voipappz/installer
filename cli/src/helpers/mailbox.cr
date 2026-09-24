@@ -39,10 +39,26 @@ module VoIPAppz
       client = HTTP::Client.new(uri)
       client.connect_timeout = 2.seconds
       client.read_timeout = 5.seconds
+      if (auth = credentials(uri))
+        client.basic_auth(*auth)
+      end
       response = client.get(uri.request_target)
       response.success? ? response.body : nil
     rescue
       nil
+    end
+
+    # The mailbox UI is published, so it has a password (MP_UI_AUTH, which
+    # covers its API too). Credentials in the URL win — HTTP::Client ignores
+    # them on its own — then user `admin` with VA_MAILPIT_UI_PASSWORD, resolved
+    # like every other setting. Mailbox reads only: the API gets none.
+    def credentials(uri : URI) : {String, String}?
+      if (user = uri.user.presence)
+        return {URI.decode_www_form(user), URI.decode_www_form(uri.password || "")}
+      end
+      return nil unless uri.host == URI.parse(mail).host && uri.port == URI.parse(mail).port
+      password = setting("VA_MAILPIT_UI_PASSWORD", "")
+      password.empty? ? nil : {"admin", password}
     end
 
     # Form-encoded, the way the admin SPA sends it.
