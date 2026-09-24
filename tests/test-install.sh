@@ -631,8 +631,11 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # customer link path without weakening the rule that forbids implicit moves.
 # va-api: voipappz/mothership renamed the API container from va-app on
 # 2026-09-15 (1383418).
+# PAST VALIDATION, on the dataset: since voipappz/api e6160ad a customer's
+# node_uuid "cannot be removed" through the model, which is the rule for real
+# callers. This is fixture setup, as the API's own specs do it.
 docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
-  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "Customer.find_by_uuid(ENV.fetch(%q{CI_CUSTOMER_UUID})).update(node_uuid: nil)"' \
+  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "Customer.dataset.where(uuid: ENV.fetch(%q{CI_CUSTOMER_UUID})).update(node_uuid: nil)"' \
   >/dev/null
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
