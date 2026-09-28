@@ -173,6 +173,10 @@ module VoIPAppz
     property codecs : String = ""
     property ptime : Int32? = nil
     property maxptime : Int32? = nil
+    # The node reads both (va-crystal TrunkConfig); without them here, sync
+    # dropped them from va.yaml. [ED-137 req 4: no CN; req 8-11: headers]
+    property comfort_noise : Bool = true
+    property headers : Hash(String, String) = {} of String => String
     property enabled : Bool = true
 
     def initialize(@name = "", @address = "")

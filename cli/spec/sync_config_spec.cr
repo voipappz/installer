@@ -122,6 +122,37 @@ describe VoIPAppz::SyncConfig do
     )
   end
 
+  it "keeps the mothership's ed137 role and the trunk's ED-137 settings" do
+    remote = remote_yaml.sub("roles: [switch]", "roles: [switch, ed137]")
+                        .sub("    gateways:\n", <<-TRUNK + "\n    gateways:\n")
+        trunks:
+          - name: atm-1
+            address: '192.0.2.20'
+            port: '5060'
+            codecs: PCMA
+            ptime: 20
+            maxptime: 30
+            comfort_noise: false
+            headers:
+              WG67-Version: phone.02
+    TRUNK
+    remote.should contain("atm-1") # the fixture really carries the trunk
+    merged = VoIPAppz::SyncConfig.merge(remote, VoIPAppz::DeployConfig.from_yaml(current_yaml), node_uuid)
+    merged.nodes.first.roles.should contain("ed137")
+    merged.nodes.first.roles.should contain("switch")
+
+    # What the node reads is the file sync writes, so assert the round trip.
+    written = VoIPAppz::DeployConfig.from_yaml(merged.to_yaml)
+    trunk = written.sip_interfaces.first.trunks.first
+    trunk.name.should eq("atm-1")
+    trunk.codecs.should eq("PCMA")
+    trunk.ptime.should eq(20)
+    trunk.maxptime.should eq(30)
+    trunk.comfort_noise.should be_false
+    trunk.headers["WG67-Version"].should eq("phone.02")
+    written.nodes.first.roles.should contain("ed137")
+  end
+
   it "rejects a response for a different node" do
     expect_raises(ArgumentError, /does not contain requested node/) do
       VoIPAppz::SyncConfig.merge(remote_yaml, nil, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
