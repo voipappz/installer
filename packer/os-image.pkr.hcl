@@ -4,9 +4,10 @@
 #   packer/build.sh build -only='voipappz-os.null.iso' .
 #
 # SCOPE: this builds an OPERATING SYSTEM. Ubuntu 24.04.4, docker, the SIP and
-# network tooling a node is debugged with, and the voipappz CLI binary. It does
-# NOT install the VoIPAppz platform — `voipappz bootstrap` does that afterwards,
-# against a machine that already has everything it needs to run it.
+# network tooling a node is debugged with, the voipappz CLI, install.sh and the
+# node image on disk. It does NOT make the machine a node — `va-node-install`
+# (install.sh) does that afterwards, against a machine that already has
+# everything it needs to run it.
 #
 # The split is why a docker packaging failure can no longer throw away a
 # completed OS install. It did exactly that once: a late-command returning 100
@@ -74,6 +75,13 @@ variable "os_packages" {
     # make, because every command this platform documents is a make target and
     # the stack ships its Makefile.
     "make",
+    # The firewall. Named here rather than assumed from Ubuntu's server seed: a
+    # minimised install does not carry it, and an air-gapped node cannot fetch
+    # it later. INSTALLED, NOT ENABLED — the node runs on the host network and
+    # takes SIP on 5060 and RTP on a wide UDP range, so a firewall switched on
+    # before its rules are written is a node that registers nobody. Turning it
+    # on is a site decision made with those ports in hand.
+    "ufw",
   ]
   description = "Every package baked into the OS image. Single source of truth for both the download and the install."
 }
@@ -101,14 +109,13 @@ variable "installer_env" {
   type    = string
   default = ""
 
-  # An answer sheet for `voipappz setup`, baked to /etc/voipappz/installer.env.
-  # Empty is the normal case: the node then installs and waits, unconfigured,
-  # rather than guessing a domain and looking configured when it is not.
+  # install.sh's answer file (KEY=VALUE), baked to /etc/voipappz/installer.env.
+  # Empty is the normal case: the machine then installs and waits, rather than
+  # guessing a mothership and looking configured when it is not.
   #
-  # Filled in, it makes the node self-configuring — and makes the ISO a SECRET,
-  # because the file carries the Cloudflare token and SMTP password. Cut one per
-  # tenant.
-  description = "Path to a voipappz setup answer sheet to bake in. Empty = node waits for `voipappz setup`."
+  # Filled in, the first boot runs `va-node-install` with it — and an Account
+  # credential in it makes the ISO a SECRET. Cut one per site.
+  description = "Path to an install.sh answer file to bake in. Empty = the machine waits for `va-node-install`."
 }
 
 variable "network" {
@@ -124,7 +131,7 @@ variable "network" {
 variable "with_images" {
   type        = bool
   default     = true
-  description = "Bake the node container image onto the ISO so the node needs no registry. false = the node pulls at `up` time."
+  description = "Bake the node container image onto the ISO so the node needs no registry. false = va-node-install fetches it."
 }
 
 variable "refresh_packages" {
@@ -309,7 +316,7 @@ build {
       "set -euo pipefail",
       "cd ${path.root}",
       "test '${var.deliver_host}' != 'unset.invalid' || { echo '!! set -var deliver_host=<target>' >&2; exit 1; }",
-      "iso=$(ls -t build/iso/voipappz-os-*.iso 2>/dev/null | head -1)",
+      "iso=$(ls -t build/iso/voipappz-node-*.iso 2>/dev/null | head -1)",
       "test -n \"$iso\" || { echo '!! no ISO in build/iso — run make iso first' >&2; exit 1; }",
       "rm -rf build/deliver && mkdir -p build/deliver",
       "ln -f \"$iso\" \"build/deliver/$(basename \"$iso\")\" 2>/dev/null || cp \"$iso\" build/deliver/",
@@ -332,7 +339,7 @@ build {
   provisioner "shell" {
     inline = [
       "ls -l '${var.deliver_dir}'",
-      "sha256sum '${var.deliver_dir}'/voipappz-os-*.iso",
+      "sha256sum '${var.deliver_dir}'/voipappz-node-*.iso",
     ]
   }
 

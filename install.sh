@@ -1149,6 +1149,64 @@ start_node() {
   say "docker health: $(docker_cmd inspect -f '{{.State.Health.Status}}' va-voip 2>/dev/null || printf 'starting')"
 }
 
+# THE NODE AS A systemd UNIT. `voipappz-node.service` is the handle an operator
+# already knows: `systemctl status|stop|start voipappz-node`, enabled at boot,
+# stopped in order at shutdown.
+#
+# IT STARTS THE CONTAINER start_node MADE; IT DOES NOT MAKE ONE. The unit is
+# `docker start va-voip` and `docker stop va-voip` and nothing else, so there
+# is no third copy of the `docker run` to keep in step with the two that exist
+# (start_node here, scripts/up.sh), and no script that has to be on disk at
+# boot — which the one-line curl install never leaves there.
+#
+# It sits beside `--restart unless-stopped` without fighting it. A clean
+# shutdown runs ExecStop, Docker records the container as stopped and leaves it
+# alone at the next boot, and the unit starts it — once. After a power cut
+# Docker brings it back itself and the unit's `docker start` finds it running,
+# which is a no-op. A crash is still Docker's to restart; this unit is not a
+# second supervisor. What changes: a node stopped by hand (`docker stop`,
+# `make down`) comes back at the next boot, like any enabled service —
+# `systemctl disable voipappz-node` is how it stays down.
+NODE_UNIT=voipappz-node.service
+node_unit_text() {
+  _docker="$(command -v docker 2>/dev/null || true)"
+  [ -n "$_docker" ] || _docker=/usr/bin/docker
+  cat <<EOF
+[Unit]
+Description=VoIPAppz node (the va-voip container)
+Documentation=https://github.com/voipappz/installer
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=$_docker start va-voip
+ExecStop=-$_docker stop va-voip
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# Never fatal: the node is already up and registered by the time this runs,
+# and a host without systemd (a container, an init of another kind) is still a
+# host with a working node on it.
+install_node_unit() {
+  [ -d /run/systemd/system ] || return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+  if node_unit_text | root_cmd tee "/etc/systemd/system/$NODE_UNIT" >/dev/null \
+     && root_cmd chmod 0644 "/etc/systemd/system/$NODE_UNIT" \
+     && root_cmd systemctl daemon-reload \
+     && root_cmd systemctl enable --now "$NODE_UNIT" >/dev/null 2>&1; then
+    say "systemd:   $NODE_UNIT enabled — the node starts at boot"
+  else
+    say "WARNING: could not install $NODE_UNIT; the node still restarts through Docker"
+  fi
+}
+
 # START ONLY, and stop. `make up`, a reboot, a node that was stopped: the
 # container comes back from what $INSTALL_DIR already holds — its va.yaml, its
 # 0600 .env, its pinned CA bundle — with no download, no setup, no
@@ -1557,6 +1615,7 @@ commit_install_dir
 step "6/6  The node"
 if [ "$START" = "1" ]; then
   start_node
+  install_node_unit
 else
   say "installed but not started (START=0)"
 fi
@@ -1567,6 +1626,7 @@ say "node:      $NODE_UUID"
 say "va.yaml:   $VA_YAML -> /tmp/node.yaml (Docker bind mount)"
 if [ "$START" = "1" ]; then
   say "container: va-voip"
+  [ ! -f "/etc/systemd/system/$NODE_UNIT" ] || say "service:   systemctl status ${NODE_UNIT%.service}"
   say "health:    http://127.0.0.1:4000/health"
 else
   say "start:     rerun this installer, or docker start va-voip once it exists"

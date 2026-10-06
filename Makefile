@@ -336,10 +336,18 @@ install-cli: ## [PREFIX=dir] [RELEASE=1|v0.2.0] Put the voipappz CLI on PATH
 # Here the list is scripts/node-images.sh: one image, the one scripts/up.sh
 # runs. That is the whole reason the payload is a fraction of what it was.
 #
-#   make iso-payload      # ONCE — pull and save the node image
-#   make iso              # cut the disc
-#   make iso QUICK=1      # skip package re-resolution; touches the network not at all
+#   make iso              # stage the node image if it moved, then cut the disc
+#   make iso QUICK=1      # re-cut from the payload as it is; touches the network not at all
 #   make iso ISO_DEST=/mnt/d/isos
+#
+# A disc around an image you built here (`make -C ../va-crystal build`), which
+# exists in no registry — name it, and say it is local so nothing pulls over it:
+#
+#   VA_VOIP_IMAGE=nirlevi/va-crystal:2026.09.23-1790692372 VOIPAPPZ_LOCAL_IMAGES=1 make iso
+#
+# THE DISC'S VERSION is va-crystal's shape for a build nobody minted:
+# <YYYY.MM.DD>-<unix time>, so the file is voipappz-node-<version>.iso and no
+# two cuts share a name. VA_ISO_VERSION=… overrides it.
 DOCKER ?= docker
 
 # Where the finished ISO is copied to. UNSET means "leave it in
@@ -389,7 +397,15 @@ iso-payload: ## Pull and save the node image into the offline payload
 # rest of the disc.
 ISO_VARS ?=
 
-iso: ## [QUICK=1] Cut the offline installer ISO — also ISO_DEST= ISO_NETWORK= ISO_VARS=
+# THE IMAGE IS STAGED BY THE CUT, not remembered by the person cutting. The
+# payload is a cache: `make iso` used to bake whatever images.tar.gz held, so a
+# disc cut after a new node build shipped the previous one and said nothing.
+# Staging is cheap when nothing moved — the save is skipped on a digest match.
+# Not with QUICK=1 (no network, by definition) and not for an image-less disc;
+# make-installer-iso.sh still refuses a payload that is not the image named.
+ISO_STAGE = $(if $(or $(QUICK),$(findstring with_images=false,$(ISO_VARS))),,iso-payload)
+
+iso: $(ISO_STAGE) ## [QUICK=1] Stage the node image, then cut the offline installer ISO — also ISO_DEST= ISO_NETWORK= ISO_VARS=
 	VOIPAPPZ_ISO_DEST="$(ISO_DEST)" packer/build.sh build \
 		$(if $(ISO_DEST),-var 'dest_dir=$(ISO_DEST)') -var 'network=$(ISO_NETWORK)' \
 		$(if $(QUICK),-var 'refresh_packages=false') $(ISO_VARS) \
@@ -474,13 +490,16 @@ iso-node-install: ## Install onto a machine that already has the disc — ISO_HO
 		$(if $(ISO_KEY),--key '$(ISO_KEY)') \
 		$(if $(ISO_PASSWORD),--password '$(ISO_PASSWORD)')
 
-# Newest cut ISO to S3. Credentials from ~/.aws (mounted read-only) or the
-# environment, never a file in the repo.
+# Newest cut ISO to S3, the way va-crystal publishes the image archive: the
+# versioned object, its .sha256, and a moving voipappz-node-latest.iso that is
+# a server-side copy of it. Credentials from ~/.aws or the environment, never a
+# file in the repo. NO PUBLIC ACL, ever: the disc carries the private node
+# image in the clear, so it is handed out by presigned URL.
 S3_BUCKET ?= voipappz-assets-il
-S3_PREFIX ?= isos
+S3_PREFIX ?= iso
 S3_REGION ?= il-central-1
 
-iso-upload: ## Upload the newest cut ISO to S3 — needs AWS credentials
+iso-upload: ## Upload the newest cut ISO to S3 (versioned + latest + sha256) — needs AWS credentials
 	@DOCKER="$(DOCKER)" S3_BUCKET="$(S3_BUCKET)" S3_PREFIX="$(S3_PREFIX)" S3_REGION="$(S3_REGION)" \
 		scripts/iso-upload.sh
 

@@ -22,7 +22,7 @@ APT_OPTS=(-o "Dir::Etc::sourcelist=/etc/apt/sources.list.d/voipappz-local.list"
           -o "Dir::Etc::sourceparts=/dev/null"
           -o "APT::Get::List-Cleanup=0")
 
-iso=$(ls -t "$ISO_DIR"/voipappz-os-*.iso 2>/dev/null | head -1)
+iso=$(ls -t "$ISO_DIR"/voipappz-node-*.iso 2>/dev/null | head -1)
 [ -n "$iso" ] || { echo "!! no ISO in $ISO_DIR" >&2; exit 1; }
 echo ">> installing from $(basename "$iso")"
 
@@ -78,18 +78,20 @@ if [ -n "$(ls -A "$MNT/voipappz/images" 2>/dev/null)" ]; then
   [ -f "$MNT/voipappz/images.list" ] && cp "$MNT/voipappz/images.list" /etc/voipappz-images
   echo ">> $(docker images -q | sort -u | wc -l) images in the local store"
 else
-  echo ">> no images on the disc (--no-images build) — compose will pull"
+  echo ">> no image on the disc (--no-images build) — va-node-install will fetch one"
 fi
 
-# ---------------------------------------------------------------- the CLI
-# What `voipappz bootstrap` needs to exist before it can run. Deliberately NOT
-# `voipappz setup`: that writes .env and config/va.yaml, which are secrets plus
-# node identity, and belong to whoever operates the node.
+# ---------------------------------------------------------------- the installer
+# What `va-node-install` needs to exist before it can run: install.sh, the CLI
+# and the wrapper. Deliberately NOT the install itself: that writes .env and
+# config/va.yaml, which are secrets plus node identity, and belong to whoever
+# operates the node.
 mkdir -p /opt/voipappz
 tar -xzf "$MNT/voipappz/stack.tar.gz" -C /opt/voipappz
 chmod +x /opt/voipappz/bin/voipappz
 ln -sf /opt/voipappz/bin/voipappz /usr/local/bin/voipappz
+install -m 0755 "$MNT/voipappz/va-node-install" /usr/local/sbin/va-node-install
 echo ">> CLI: $(voipappz --version 2>/dev/null || echo installed)"
 
 umount "$MNT" || true
-echo ">> done — run 'voipappz bootstrap' on this machine to bring the stack up"
+echo ">> done — run 'sudo va-node-install' on this machine to make it a node"

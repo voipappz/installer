@@ -1,0 +1,86 @@
+#!/bin/sh
+# Make this machine a node, with the installer and the image that came on the
+# disc.
+#
+#   sudo va-node-install
+#   sudo va-node-install --no-register     # no mothership in reach yet
+#
+# THIS IS NOT AN INSTALLER. It names the image the disc carried and execs
+# /opt/voipappz/install.sh, which is the installer — the same script the public
+# one-line curl fetches, unmodified. Setup, registration, the `docker run` and
+# the systemd unit are all its; reimplementing any of them here would put two
+# installers on one disc.
+#
+# What it adds is the one thing only the disc knows: WHICH image. A disc
+# carries a pinned build (nirlevi/va-crystal:<version>), loaded into the layer
+# store at first boot by voipappz-loadimages, and install.sh's default tag is a
+# different name. Left alone, VA_IMAGE_SOURCE=local stops with "no
+# nirlevi/va-crystal:node on this host" on a machine that plainly has a node
+# image — so the tag is read from the manifest the disc shipped.
+#
+# Every other setting is install.sh's own (README.md, "Useful controls"):
+# pass them in the environment, or in /opt/voipappz/.env before the first run.
+#
+# The image is offline; registration is not. That step has to reach the
+# mothership, or use --no-register and register later.
+set -eu
+
+INSTALL_DIR=/opt/voipappz
+INSTALLER=$INSTALL_DIR/install.sh
+# Where load-images.sh leaves the manifest once the load succeeded, and where
+# the autoinstall staged it. The second is the fallback for a first boot whose
+# load has not finished yet.
+LOADED=/etc/voipappz-images
+STAGED=/var/lib/voipappz/images.list
+
+# Root, because the installed .env is 0600 root-owned on purpose (it holds the
+# FreeSWITCH and licence secrets) and a rerun reads it from this directory.
+# -E keeps the caller's settings: VA_API_URL=… sudo va-node-install must not
+# arrive with an empty environment.
+[ "$(id -u)" -eq 0 ] || exec sudo -E "$0" "$@"
+
+[ -f "$INSTALLER" ] || {
+  printf '!! %s is missing — this machine was not built from a VoIPAppz node disc\n' "$INSTALLER" >&2
+  exit 1
+}
+
+manifest=""
+for _f in "$LOADED" "$STAGED"; do
+  [ -s "$_f" ] && { manifest=$_f; break; }
+done
+
+cd "$INSTALL_DIR"
+
+if [ -z "$manifest" ]; then
+  # A disc cut with -var with_images=false. Still a working installer — it
+  # just fetches the image like any other host, which needs a route out.
+  printf '   this disc carried no node image — the installer will fetch one\n'
+  exec sh "$INSTALLER" "$@"
+fi
+
+# `repository:tag@digest`, one line: the node is one image.
+image="$(sed -n '1s/@.*//p' "$manifest")"
+[ -n "$image" ] || {
+  printf '!! %s names no image — the disc manifest is damaged\n' "$manifest" >&2
+  exit 1
+}
+
+# The load runs at first boot and takes minutes; an operator can be at the
+# prompt before it is done. `systemctl start` on a unit that is still
+# activating WAITS for it, on one that failed runs it again, and on one that
+# finished does nothing — which is every case this needs.
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  printf '   loading the node image off the disk (several minutes)\n'
+  systemctl start voipappz-loadimages.service || true
+fi
+docker image inspect "$image" >/dev/null 2>&1 || {
+  printf '!! %s is not in the image store, and loading it did not put it there\n' "$image" >&2
+  printf '   journalctl -u voipappz-loadimages\n' >&2
+  exit 1
+}
+
+VA_VOIP_IMAGE=$image
+VA_IMAGE_SOURCE=local
+export VA_VOIP_IMAGE VA_IMAGE_SOURCE
+
+exec sh "$INSTALLER" "$@"

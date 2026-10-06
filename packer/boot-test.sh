@@ -50,7 +50,7 @@ log() { echo ">> $*"; }
 die() { echo "!! $*" >&2; exit 1; }
 
 newest_iso() {
-  ls -t "$HERE"/build/iso/voipappz-os-*.iso 2>/dev/null | head -1
+  ls -t "$HERE"/build/iso/voipappz-node-*.iso 2>/dev/null | head -1
 }
 
 # QMP, spoken from python3 inside the container — the socket is in the container's

@@ -70,6 +70,21 @@ docker stop va-voip                       # stop it (config and data stay)
 docker start va-voip                      # start it again
 ```
 
+On a host with systemd the installer also leaves **`voipappz-node.service`**,
+enabled, so the node starts at boot and stops in order at shutdown:
+
+```sh
+systemctl status voipappz-node            # the service
+sudo systemctl stop voipappz-node         # the same as docker stop va-voip
+sudo systemctl disable voipappz-node      # keep a stopped node down across reboots
+```
+
+The unit only runs `docker start va-voip` / `docker stop va-voip` — it never
+creates the container, so there is no second copy of the `docker run`. A crash
+is still restarted by Docker (`--restart unless-stopped`). One thing changes:
+a node you stopped by hand comes back at the next boot unless you `disable`
+the unit.
+
 If the container is gone rather than stopped — a failed upgrade, a removed
 container, a host that came up without it — `sh install.sh --start-only`
 recreates it from what `/opt/voipappz` already holds (its `va.yaml`, its
@@ -236,16 +251,18 @@ else. Through the one-liner: `curl -fsSL … | sh -s -- --no-register`.
 For a machine with no route out, there is a bootable disc. It carries Ubuntu
 24.04, Docker Engine, the node image and this `install.sh`, and it installs the
 *machine* — the operator then runs one command, which is this installer again,
-loading the image off the local disk:
+with the image the disc already loaded:
 
 ```console
-$ va-node-install
+$ sudo va-node-install
 ```
 
-That is `VA_IMAGE_SOURCE=archive` with `VA_IMAGE_ARCHIVE` pointing at the disc's
-copy of the image; nothing about installation is reimplemented on the disc. The
-image is offline, **registration is not** — that step still has to reach your
-mothership, or run `va-node-install --no-register` and register later.
+That is `VA_IMAGE_SOURCE=local` with `VA_VOIP_IMAGE` naming the build the disc
+carried; nothing about installation is reimplemented on the disc. The image is
+offline, **registration is not** — that step still has to reach your
+mothership, or run `sudo va-node-install --no-register` and register later.
+`/etc/voipappz-image` says which disc and which node image the machine came
+from, and the login banner prints both.
 
 The disc is restricted media: it holds a private container image in the clear,
 so it is distributed by presigned link and must not be re-hosted.
@@ -253,10 +270,14 @@ The disc is cut **here** (it moved from voipappz/mothership in 2026-09, where
 it had always built node media):
 
 ```console
-$ make iso-payload     # once — pull and save the node image
-$ make iso             # cut the disc
+$ make iso             # stage the node image if it moved, then cut the disc
 $ make iso ISO_DEST=/mnt/d/isos
+$ VA_VOIP_IMAGE=nirlevi/va-crystal:<version> VOIPAPPZ_LOCAL_IMAGES=1 make iso   # a local build
+$ make iso-upload      # versioned + latest + sha256, private, to S3
 ```
+
+A disc is named `voipappz-node-<YYYY.MM.DD>-<unix time>.iso` — va-crystal's
+version shape for a local build, so no two cuts share a name.
 
 `packer/README.md` is the build's own account of itself, including the gotchas
 that cost real time. `make iso-ship ISO_HOST=…` sends a cut disc to a machine;

@@ -65,7 +65,7 @@ stage_stack() {
   git -C "$REPO_ROOT" archive --format=tar HEAD -- . \
     ':(exclude)cli' ':(exclude)packer' ':(exclude)tests' ':(exclude)spec' \
     ':(exclude).github' ':(exclude).agents' ':(exclude).codex' ':(exclude)docs' \
-    ':(exclude)DEVELOPMENT.md' ':(exclude).actrc' ':(exclude).gitignore' \
+    ':(exclude)DEVELOPMENT.md' ':(exclude)CLAUDE.md' ':(exclude).actrc' ':(exclude).gitignore' \
     > "$staging/stack.tar"
   mkdir -p "$staging/bin"
   cp "$REPO_ROOT/bin/voipappz" "$staging/bin/voipappz"
@@ -170,6 +170,12 @@ stage_images() {
     [ -z "$img" ] && continue
     digest=$(docker image inspect "$img" \
       --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null | sed 's/.*@//')
+    # A LOCALLY BUILT image has no RepoDigest on the classic image store — it
+    # has never been to a registry. Its ID identifies it just as well, and
+    # unlike a constant placeholder it CHANGES when the image is rebuilt under
+    # the same tag, which is what the cache test below depends on: a
+    # placeholder there would skip the save and ship the previous build.
+    [ -n "$digest" ] || digest=$(docker image inspect "$img" --format '{{.Id}}' 2>/dev/null)
     echo "${img}@${digest:-<no-digest>}"
   done <<< "$imgs" | sort -u >> "$manifest"
 
@@ -239,7 +245,7 @@ stage_debs() {
   # package that is on the CD but never installed (or worse, the reverse).
   #
   # The fallback is only for running this script by hand.
-  : "${OS_PACKAGES:=docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin sngrep tcpdump ngrep chrony openssl ca-certificates htop iotop lsof strace jq vim git curl wget unzip net-tools ethtool traceroute mtr-tiny bind9-dnsutils iputils-ping iputils-tracepath make}"
+  : "${OS_PACKAGES:=docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin sngrep tcpdump ngrep chrony openssl ca-certificates htop iotop lsof strace jq vim git curl wget unzip net-tools ethtool traceroute mtr-tiny bind9-dnsutils iputils-ping iputils-tracepath make ufw}"
   export OS_PACKAGES
 
   log "downloading $(echo "$OS_PACKAGES" | wc -w) OS packages for offline install"

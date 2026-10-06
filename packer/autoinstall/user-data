@@ -2,9 +2,10 @@
 # Unattended install for the OFFLINE OS ISO (packer/make-installer-iso.sh).
 #
 # SCOPE: this ISO installs an OPERATING SYSTEM and nothing else — Ubuntu plus
-# every package a VoIPAppz node needs, including docker. It does NOT install the
-# VoIPAppz platform. That is the CLI's job (`voipappz bootstrap`), run afterwards
-# against a machine that already has everything it needs to run it.
+# every package a VoIPAppz node needs, including docker, and the node image on
+# disk. It does NOT make the machine a node. That is install.sh's job, reached
+# through `va-node-install`, run afterwards against a machine that already has
+# everything it needs to run it.
 #
 # The split is deliberate, and it is not a style preference:
 #
@@ -12,7 +13,7 @@
 #     `dpkg -i` returning 100 threw away a completed partition, bootloader and
 #     base system because one package would not unpack. Keeping the OS phase to
 #     "install packages from a local repo" keeps the blast radius there.
-#   * Node identity and secrets must never be baked. `voipappz setup` writes
+#   * Node identity and secrets must never be baked. The installer writes
 #     .env and config/va.yaml; putting that in an image clones one set of
 #     secrets onto every machine built from it.
 #   * "Ubuntu did not install" and "VoIPAppz did not install" become two
@@ -39,11 +40,10 @@ autoinstall:
 #
 # The key configures the INSTALLER and is written through to the installed
 # system as /etc/netplan/00-installer-config.yaml — so a static address is live
-# before anything else runs. That ordering matters: `voipappz bootstrap` (and
-# firstboot, on the Packer targets) derives the node's internal address from
-# whatever interface holds the default route, and a node configured on a DHCP
-# lease it later loses binds kamailio to an address that is gone. Same class of
-# failure as the outage in CLAUDE.md, arrived at from the other direction.
+# before anything else runs. That ordering matters: the node's setup derives its
+# internal address from whatever interface holds the default route, and a node
+# configured on a DHCP lease it later loses binds kamailio to an address that is
+# gone.
 #
 # Column 0 and alone on its line: that is what the substitution matches.
 @NETWORK@
@@ -130,7 +130,7 @@ autoinstall:
           * the node container image  (this is the slow part)
 
         Takes 10-25 minutes. Long silent pauses are NORMAL - it is
-        copying 4.6 GB off the disc.
+        copying the node image off the disc.
 
         THE DISK WILL BE ERASED.
 
@@ -174,47 +174,48 @@ autoinstall:
     # CLI shells out to docker constantly and every call would otherwise prompt.
     - curtin in-target --target=/target -- usermod -aG docker voipappz
 
-    # The CLI itself — the binary plus the stack templates it drives, unpacked
-    # to /opt/voipappz and symlinked onto PATH exactly as install.sh does it.
+    # The installer and the CLI — install.sh, scripts/, the Makefile and the
+    # voipappz binary, unpacked to /opt/voipappz with the CLI symlinked onto
+    # PATH. /opt/voipappz is also where install.sh installs the node, so the
+    # same directory ends up holding the node's config/va.yaml and .env beside
+    # the tools that read them (`make up`, `make verify`, `voipappz health`).
     #
-    # This is still the OS phase, not the platform: what lands here is an
-    # installed TOOL. It writes no secrets, pulls no images and starts nothing.
-    # Running `voipappz bootstrap` afterwards is what installs the platform, and
-    # that stays a deliberate act on a machine that already has everything it
-    # needs to succeed.
+    # This is still the OS phase: what lands here is installed TOOLS. It writes
+    # no secrets and starts nothing. `va-node-install` is what makes the
+    # machine a node, and that stays a deliberate act on a machine that already
+    # has everything it needs to succeed.
     #
-    # The binary ships rather than being downloaded because this node may have
-    # no route out, and install.sh's `curl` of the release asset is precisely
-    # the step that cannot work here.
+    # Both ship rather than being downloaded because this machine may have no
+    # route out.
     - mkdir -p /target/opt/voipappz
     - tar -xzf /cdrom/voipappz/stack.tar.gz -C /target/opt/voipappz
     - chmod +x /target/opt/voipappz/bin/voipappz
     - ln -sf /opt/voipappz/bin/voipappz /target/usr/local/bin/voipappz
+    - install -m 0755 /cdrom/voipappz/va-node-install /target/usr/local/sbin/va-node-install
 
-    # SETUP, as a first-boot unit — not a late-command.
+    # THE NODE IS INSTALLED AFTER THE FIRST BOOT — not by a late-command.
     #
-    # It cannot run here and the reasons are hard ones: there is no docker
+    # It cannot happen here and the reasons are hard ones: there is no docker
     # daemon in the installer's /target chroot (curtin can dpkg-install docker
-    # but cannot start it), and `voipappz setup` writes .env and config/va.yaml,
+    # but cannot start it), and the installer writes .env and config/va.yaml,
     # which are secrets plus node identity. Writing them into the image clones
-    # one set of secrets onto every machine built from it — DeployManifest
-    # already marks both HOST_GENERATED for exactly that reason.
+    # one set of secrets onto every machine built from it.
     #
-    # So the install stages the unit and the first boot runs it, on a machine
-    # that has its own addresses, its own machine-id and a running docker.
-    #
-    # With no /etc/voipappz/installer.env the unit deliberately stops and says
-    # so, leaving an unconfigured node rather than one that guessed a domain and
-    # looks configured. Drop that file in and reboot — it re-arms itself,
-    # because the "already done" stamp is only written on success.
+    # So the install stages two units. voipappz-loadimages puts the node image
+    # into docker's store on the first boot; voipappz-firstboot retires the
+    # build password and, when /etc/voipappz/installer.env exists, runs
+    # `va-node-install` unattended with it. With no answer sheet it stops and
+    # says what to type, leaving an un-provisioned machine rather than one that
+    # guessed a mothership and looks configured.
     # The container images, staged onto the disk. NOT loaded here: `docker load`
     # needs a running daemon and there is none in the installer's chroot. They
-    # arrive as 2000MB parts because the 4.6GB archive exceeds what a single
-    # ISO9660 file can hold; voipappz-load-images cats them back together on the
-    # first boot, before the stack is brought up.
+    # arrive as 2000MB parts because a single ISO9660 file cannot exceed 4GB and
+    # the archive has been over it; voipappz-load-images checks them against the
+    # checksums the disc shipped and cats them back together on the first boot.
     - mkdir -p /target/var/lib/voipappz/images
     - cp -a /cdrom/voipappz/images/. /target/var/lib/voipappz/images/
     - cp /cdrom/voipappz/images.list /target/var/lib/voipappz/images.list
+    - cp /cdrom/voipappz/images.sha256 /target/var/lib/voipappz/images.sha256
     - install -m 0755 /cdrom/voipappz/load-images.sh /target/usr/local/sbin/voipappz-load-images
     - install -m 0644 /cdrom/voipappz/voipappz-loadimages.service /target/etc/systemd/system/voipappz-loadimages.service
     - curtin in-target --target=/target -- systemctl enable voipappz-loadimages.service
@@ -233,33 +234,36 @@ autoinstall:
     # WHAT TO TYPE, on screen at every login. A node is a console with no
     # browser and no documentation on it; an operator who has just watched an
     # unattended install finish has no way to know the next command is
-    # `voipappz bootstrap` unless the machine says so. /etc/motd rather than
+    # `va-node-install` unless the machine says so. /etc/motd rather than
     # update-motd.d: it survives a machine with no network and needs no
     # scripting, and Ubuntu prints it before the shell prompt.
     - |
-      # The version IN the banner, not a command that would tell you. Someone
-      # looking at a node wants to know what it is running before they know
-      # which command asks — and the first question about any machine that
-      # misbehaves is which disc built it. The values come from the disc's own
+      # The versions IN the banner, not a command that would tell you. The
+      # first question about any machine that misbehaves is which disc built
+      # it and which node image it carries. The values come from the disc's own
       # /cdrom/voipappz/voipappz-image, copied to /etc/voipappz-image above.
       . /cdrom/voipappz/voipappz-image
       cat > /target/etc/motd <<MOTD
 
-        VoIPAppz node  ${image_version}
+        VoIPAppz node media  ${iso_version}
+        node image ${node_image}
         CLI ${cli_build}   built ${built}   commit ${commit}
 
-          sudo voipappz bootstrap     install the platform (run this first)
-          sudo voipappz status        what is running, one screen
-          sudo voipappz health        the node's own verdict
-          sudo voipappz logs          follow kamailio + FreeSWITCH + node
-          sudo voipappz cert          which TLS certificate is in use
-          sudo voipappz --version     the CLI's version
+          sudo va-node-install          make this machine a node (run this first)
+          sudo va-node-install --no-register    ... with no mothership in reach
 
-          cat /etc/voipappz-image     what this machine was installed from
-          sudo sngrep                 watch SIP on the wire
+        Once it is a node:
 
-        Every voipappz command needs sudo: secrets/ is 0700, and a run
-        without it reads nothing and reports that there are no secrets.
+          systemctl status voipappz-node    the service that starts it at boot
+          sudo voipappz health              the node's own verdict
+          sudo voipappz sbc egress status   kamailio
+          docker logs -f va-voip            kamailio + FreeSWITCH + node
+          sudo sngrep                       watch SIP on the wire
+
+          cat /etc/voipappz-image           what this machine was installed from
+
+        The image is on this disk; registration still has to reach your
+        mothership. /opt/voipappz/.env is 0600 root, so the CLI needs sudo.
 
       MOTD
 
@@ -289,7 +293,7 @@ autoinstall:
         5-15 minutes before the login prompt appears.
 
         Log in:  voipappz / voipappz   (you must change it)
-        Then:    cd /opt/voipappz && sudo voipappz bootstrap
+        Then:    sudo va-node-install
 
         The same commands are on the screen at every login.
 

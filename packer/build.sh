@@ -59,7 +59,7 @@ build_stack_tarball() {
   git -C "$REPO_ROOT" archive --format=tar HEAD -- . \
     ':(exclude)cli' ':(exclude)packer' ':(exclude)tests' ':(exclude)spec' \
     ':(exclude).github' ':(exclude).agents' ':(exclude).codex' ':(exclude)docs' \
-    ':(exclude)DEVELOPMENT.md' ':(exclude).actrc' ':(exclude).gitignore' \
+    ':(exclude)DEVELOPMENT.md' ':(exclude)CLAUDE.md' ':(exclude).actrc' ':(exclude).gitignore' \
     > "$staging/stack.tar"
   mkdir -p "$staging/bin"
   cp "$REPO_ROOT/bin/voipappz" "$staging/bin/voipappz"
@@ -309,7 +309,7 @@ ISO_DEST="${VOIPAPPZ_ISO_DEST:-}"
 delivery_only() { case "$*" in *voipappz-deliver*) return 0 ;; *) return 1 ;; esac; }
 
 if [ "${1:-}" = "build" ] && [ "$status" -eq 0 ] && [ -d "$ISO_DEST" ] && ! delivery_only "$@"; then
-  for iso in "$HERE"/build/iso/voipappz-os-*.iso; do
+  for iso in "$HERE"/build/iso/voipappz-node-*.iso; do
     [ -e "$iso" ] || continue
     [ -e "$ISO_DEST/$(basename "$iso")" ] && continue
     echo ">> delivering $(basename "$iso") to $ISO_DEST (9p — this takes a while)"

@@ -120,6 +120,25 @@ check 'the container sees the authorization in its environment' '[[ $out == *"en
 check 'the authorization is not a docker argument'             '[[ $out != *"args=*c2VjcmV0*"* ]] && [[ $out == *"args=run --rm img node register"* ]]'
 
 
+# ── the systemd unit ─────────────────────────────────────────────────────────
+# It manages the container start_node made and must never grow a `docker run`
+# of its own: that would be a third copy to keep in step with start_node and
+# scripts/up.sh, and the only one nothing tests against a real node.
+printf '\n── node_unit_text\n'
+{ lift node_unit_text; } > "$TMP/unit-lib.sh"
+# shellcheck disable=SC1091
+source "$TMP/unit-lib.sh"
+unit=$(PATH="$FAKEBIN:$PATH" node_unit_text)
+check 'the unit starts the container the installer made' '[[ $unit == *"ExecStart=$FAKEBIN/docker start va-voip"* ]]'
+check 'a container that is already gone is not a failed stop' '[[ $unit == *"ExecStop=-$FAKEBIN/docker stop va-voip"* ]]'
+check 'the unit carries no docker run of its own'       '[[ $unit != *"docker run"* ]]'
+check 'the unit waits for the docker daemon'            '[[ $unit == *"After=docker.service"* && $unit == *"Requires=docker.service"* ]]'
+check 'the unit is wanted at boot'                      '[[ $unit == *"WantedBy=multi-user.target"* ]]'
+check 'no secret can reach the unit file'               '[[ $unit != *SECRET* && $unit != *PASSWORD* ]]'
+check 'install.sh installs the unit only after the node started' \
+  'grep -A1 "^  start_node$" "$INSTALLER" | grep -q "^  install_node_unit$"'
+
+
 # ── customer resolution against a fake mothership API ────────────────────────
 # The live MTN install found this: a root Account sees every customer, so the
 # count-based fallback cannot pick one. resolve_customer now reads the

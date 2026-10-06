@@ -6,12 +6,14 @@
 #
 # What comes out is Ubuntu Server 24.04.4 remastered so that booting it installs
 # an OPERATING SYSTEM with no network at all: Ubuntu, docker, the SIP and
-# network tooling a node is debugged with, and the voipappz CLI binary.
+# network tooling a node is debugged with, the voipappz CLI, install.sh, and
+# the node container image.
 #
-# It does NOT install the VoIPAppz platform. `voipappz bootstrap` does that,
-# afterwards, against a machine that already has everything it needs to run it.
-# The split is why a docker packaging failure can no longer throw away a
-# completed OS install — which it did, once, and cost the whole build.
+# It does NOT make the machine a node. `va-node-install` does that, afterwards,
+# against a machine that already has everything it needs to run it — and it is
+# install.sh, not a second installer. The split is why a docker packaging
+# failure can no longer throw away a completed OS install — which it did, once,
+# and cost the whole build.
 #
 # Why an ISO and not the .vdi/AMI the Packer template builds: those are disk
 # images, which is the wrong shape for bare metal and for a hypervisor that
@@ -91,13 +93,16 @@ SRC_ISO_ABS() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s' "$(cd "$(dir
 
 SRC_ISO="$(SRC_ISO_ABS "$SRC_ISO")"
 
-VERSION="${CLI_VERSION}-$(date -u +%Y%m%d-%H%M)"
-# No scope in the name any more. The name used to carry one because this
-# tooling cut media for two planes out of the mothership's compose file, and an
-# app-only disc that looked like a full one was an air-gapped node with no image
-# to start. In this repository there is one plane and one image, so every disc
-# carries the same thing and the plain name is honest again.
-NAME="voipappz-os-${VERSION}.iso"
+# THE DISC'S OWN VERSION, in va-crystal's shape for a build nobody minted:
+# <YYYY.MM.DD>-<unix time>, exactly what scripts/build-image.sh there gives a
+# local image (2026.09.23-1790692372). The date says when it was cut, the
+# seconds make every cut distinct, so two discs can never share a name and
+# `ls` orders them. It is NOT the node image's version — that number belongs to
+# va-crystal, is recorded beside this one in /etc/voipappz-image, and a disc
+# re-cut around an unchanged image is a new disc of the same image.
+# VA_ISO_VERSION overrides it, for a re-cut that must keep its name.
+VERSION="${VA_ISO_VERSION:-$(date -u +%Y.%m.%d)-$(date +%s)}"
+NAME="voipappz-node-${VERSION}.iso"
 
 # ---------------------------------------------------------------- preflight
 
@@ -123,66 +128,81 @@ rm -rf "$WORK"
 mkdir -p "$WORK/add/voipappz"
 ADD="$WORK/add"
 
-# The CD payload is now just two things: the offline package repository, and the
-# CLI. No container images, no answer sheet, no first-boot units — installing
-# the PLATFORM is `voipappz bootstrap`, run against the machine this ISO builds.
+# The offline package repository, and the stack: install.sh, scripts/, the
+# Makefile and the CLI binary. Making the machine a node is `va-node-install`,
+# run against the machine this ISO builds.
 cp "$PAYLOAD/stack.tar.gz" "$ADD/voipappz/stack.tar.gz"
 cp -a "$PAYLOAD/debs"      "$ADD/voipappz/debs"
 
-# Setup runs at FIRST BOOT, from this unit. Not at install time: there is no
-# docker daemon in the installer's chroot, and setup writes .env and
-# config/va.yaml — secrets and node identity that must never be baked into an
-# image and cloned onto every machine built from it.
+# What runs on the installed machine. Nothing here runs at install time: there
+# is no docker daemon in the installer's chroot, and the installer writes .env
+# and config/va.yaml — secrets and node identity that must never be baked into
+# an image and cloned onto every machine built from it.
+cp "$HERE/files/va-node-install"             "$ADD/voipappz/va-node-install"
 cp "$HERE/scripts/firstboot.sh"              "$ADD/voipappz/firstboot.sh"
 cp "$HERE/files/voipappz-firstboot.service"  "$ADD/voipappz/"
 cp "$HERE/scripts/load-images.sh"            "$ADD/voipappz/load-images.sh"
 cp "$HERE/files/voipappz-loadimages.service" "$ADD/voipappz/"
 
-# The container images. SPLIT into 2000MB parts because the archive is 4.6GB and
-# a single ISO9660 file cannot exceed 4GB. ISO level 3 encodes larger files as
-# multi-extent, but that then has to be read correctly by BOTH xorriso and the
-# installer's isofs — two places to be wrong about the file the whole image
-# depends on. Parts sidestep the limit and cost one `cat` at load time.
+# The node image. SPLIT into 2000MB parts because a single ISO9660 file cannot
+# exceed 4GB and the archive has been over it. ISO level 3 encodes larger files
+# as multi-extent, but that then has to be read correctly by BOTH xorriso and
+# the installer's isofs — two places to be wrong about the file the whole disc
+# depends on. Parts sidestep the limit and cost one `cat` at load time; the
+# split is unconditional so an archive that grows past the limit cannot quietly
+# produce a disc that will not load.
 mkdir -p "$ADD/voipappz/images"
+NODE_IMAGE=none
+NODE_IMAGE_DIGEST=none
 if [ "$WITH_IMAGES" -eq 1 ]; then
   [ -f "$PAYLOAD/images.tar.gz" ] || { echo "!! missing $PAYLOAD/images.tar.gz — run scripts/stage-payload.sh images" >&2; exit 1; }
+  [ -s "$PAYLOAD/images.list" ]   || { echo "!! missing $PAYLOAD/images.list — run scripts/stage-payload.sh images" >&2; exit 1; }
+
+  # `repository:tag@digest`, one line. This is the image ON THE DISC, read from
+  # what was actually saved — never from what was asked for.
+  NODE_IMAGE="$(sed -n '1s/@.*//p' "$PAYLOAD/images.list")"
+  NODE_IMAGE_DIGEST="$(sed -n '1s/.*@//p' "$PAYLOAD/images.list")"
+
+  # THE PAYLOAD IS A CACHE, AND A CACHE CAN BE STALE. `make iso` bakes whatever
+  # images.tar.gz holds; asked for a newer image, a cut that skipped the
+  # staging step would name the new tag on the command line and ship the old
+  # archive, and nothing would say so until a node booted last month's build.
+  # So when an image was named, the archive has to be that image.
+  if [ -n "${VA_VOIP_IMAGE:-}" ] && [ "$VA_VOIP_IMAGE" != "$NODE_IMAGE" ]; then
+    echo "!! the payload holds $NODE_IMAGE, but VA_VOIP_IMAGE asks for $VA_VOIP_IMAGE" >&2
+    echo "   stage it first:  VA_VOIP_IMAGE=$VA_VOIP_IMAGE make iso-payload" >&2
+    exit 1
+  fi
+
   # Plain byte count and letter suffixes: this runs under BUSYBOX split inside
   # the builder image, which has neither `-d` (numeric suffixes) nor the `m`
   # size suffix, and fails with a usage dump rather than a clear error.
   # Alphabetical part-aa, part-ab, ... still reassemble in order under `cat`.
   split -b 2000000000 "$PAYLOAD/images.tar.gz" "$ADD/voipappz/images/part-"
   cp "$PAYLOAD/images.list" "$ADD/voipappz/images.list"
-  log "images: $(wc -l < "$PAYLOAD/images.list") pre-pulled, split into $(find "$ADD/voipappz/images" -name 'part-*' | wc -l) parts"
+  # Checksums of the parts, verified on the installed machine before the load.
+  # A rotted disc or a copy that ran out of room is then a named failure
+  # rather than an obscure `docker load` error twenty minutes in.
+  ( cd "$ADD/voipappz/images" && sha256sum part-* ) > "$ADD/voipappz/images.sha256"
+  log "node image: $NODE_IMAGE ($NODE_IMAGE_DIGEST), $(find "$ADD/voipappz/images" -name 'part-*' | wc -l) part(s)"
 else
-  # The autoinstall copies both unconditionally and a failing late-command
+  # The autoinstall copies these unconditionally and a failing late-command
   # aborts the install, so the placeholders have to exist. load-images.sh treats
-  # an empty parts directory as "pull on demand", not as an error.
+  # an empty parts directory as "nothing to load", not as an error.
   : > "$ADD/voipappz/images.list"
-  log "images: none (--no-images) — this node will pull at \`up\` time"
+  : > "$ADD/voipappz/images.sha256"
+  log "node image: none (--no-images) — va-node-install will fetch one"
 fi
 
-# The operator's answer sheet, baked in only if one was named. Without it the
-# node installs and then waits, unconfigured — see firstboot.sh on why guessing
-# a domain is worse than doing nothing.
+# The operator's answer sheet, baked in only if one was named. It is
+# install.sh's own answer file (KEY=VALUE — VA_API_URL, VA_CUSTOMER_NAME, …):
+# with it the first boot runs `va-node-install` unattended, without it the
+# machine installs and waits. A sheet that carries an Account credential makes
+# the ISO a SECRET — cut one per site and do not publish it.
 if [ -n "$INSTALLER_ENV" ]; then
   [ -f "$INSTALLER_ENV" ] || { echo "!! --installer-env $INSTALLER_ENV not found" >&2; exit 1; }
   install -m 0600 "$INSTALLER_ENV" "$ADD/voipappz/installer.env"
-  log "baked answer sheet from $INSTALLER_ENV — this node will configure itself"
-
-  # firstboot.sh reads VA_PROFILE and falls back to `app`, which is the
-  # mothership's plane and not on this disc. Media cut here carries the node, so
-  # pin `voip` unless the operator already answered — a node that comes up
-  # looking for fifteen app images it does not have says nothing about why.
-  if grep -q '^VA_PROFILE=' "$ADD/voipappz/installer.env"; then
-    log "answer sheet already sets VA_PROFILE — leaving it alone"
-  else
-    echo "VA_PROFILE=voip" >> "$ADD/voipappz/installer.env"
-    log "pinned VA_PROFILE=voip — this disc carries the node image"
-  fi
-else
-  log "NOTE: no answer sheet. firstboot defaults to profile 'app', which is not"
-  log "      what this disc carries — put VA_PROFILE=voip in an --installer-env"
-  log "      sheet, or on the node run: voipappz up -p voip"
+  log "baked answer sheet from $INSTALLER_ENV — this machine installs its node at first boot"
 fi
 
 # WHAT THE BAKED BINARY SAYS IT IS, not what was asked for. CLI_VERSION is an
@@ -202,7 +222,9 @@ fi
 log "CLI on this disc: $cli_build"
 
 cat > "$ADD/voipappz/voipappz-image" <<EOF
-image_version=$VERSION
+iso_version=$VERSION
+node_image=$NODE_IMAGE
+node_image_digest=$NODE_IMAGE_DIGEST
 cli_version=$CLI_VERSION
 cli_build=$cli_build
 source=installer-iso
@@ -358,15 +380,17 @@ elif [ -d "$DEST_DIR" ]; then
   cp "$WORK/$NAME" "$DEST_DIR/$NAME.tmp"
   mv -f "$DEST_DIR/$NAME.tmp" "$DEST_DIR/$NAME"
   log "delivered $DEST_DIR/$NAME"
-else
+elif [ -n "$DEST_DIR" ]; then
   echo "!! $DEST_DIR does not exist — leaving the ISO at $WORK/$NAME" >&2
 fi
 
 echo
+echo "   $NAME"
 echo "   boot it: it installs an OS with no network, then powers off."
-echo "     packages → $(find "$ADD/voipappz/debs" -name '*.deb' | wc -l) .deb from the CD (docker, sngrep, tcpdump, …)"
-echo "     CLI      → /opt/voipappz, symlinked onto PATH"
-echo "     repo     → kept at /var/lib/voipappz/debs, the node's only apt source"
+echo "     packages   → $(find "$ADD/voipappz/debs" -name '*.deb' | wc -l) .deb from the CD (docker, sngrep, tcpdump, …)"
+echo "     node image → $NODE_IMAGE, loaded at first boot"
+echo "     installer  → /opt/voipappz (install.sh, the CLI on PATH)"
+echo "     repo       → kept at /var/lib/voipappz/debs, the machine's only apt source"
 echo
-echo "   then install the platform on that machine:"
-echo "     voipappz bootstrap"
+echo "   then make that machine a node:"
+echo "     sudo va-node-install"

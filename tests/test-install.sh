@@ -1043,6 +1043,17 @@ grep -Eq '^VA_NATS_(URL|HOST)=' "$NODE_DIR/.env" && die '.env carries broker val
 [[ $(docker inspect va-voip --format '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}') == *"$NODE_DIR/config/va.yaml:/tmp/node.yaml"* ]] \
   || die 'the node does not mount this installation va.yaml at /tmp/node.yaml'
 pass 'the node runs on the host network with this installation va.yaml'
+# The installer leaves the node as a systemd unit that starts the container it
+# made — no second `docker run`, so nothing here can drift from start_node.
+if [[ -d /run/systemd/system ]]; then
+  [[ $(systemctl is-enabled voipappz-node.service 2>/dev/null) == enabled ]] \
+    || die 'voipappz-node.service is not enabled'
+  [[ $(systemctl is-active voipappz-node.service 2>/dev/null) == active ]] \
+    || die 'voipappz-node.service is not active after the install'
+  grep -q 'ExecStart=.*docker start va-voip' /etc/systemd/system/voipappz-node.service \
+    || die 'voipappz-node.service does not start the installed container'
+  pass 'the node is a systemd unit that starts the installed container'
+fi
 wait_http http://127.0.0.1:4000/health 180
 
 # The in-container CLI is the operator interface. Prove the VoIP container is

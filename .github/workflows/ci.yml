@@ -586,7 +586,7 @@ jobs:
       # that will not boot from it.
       - name: It is a bootable disc, and it carries the installer payload
         run: |
-          iso=$(find packer/build/iso -name 'voipappz-os-*.iso' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2)
+          iso=$(find packer/build/iso -name 'voipappz-node-*.iso' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2)
           ls -lh "$iso"
           sudo apt-get update -qq && sudo apt-get install -y -qq xorriso >/dev/null
           xorriso -indev "$iso" -report_el_torito plain 2>&1 | tee /tmp/torito

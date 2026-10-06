@@ -1,122 +1,63 @@
 #!/bin/sh
-# First-boot configuration. Runs ONCE, from voipappz-firstboot.service.
+# First boot of a machine built from node media. Runs from
+# voipappz-firstboot.service, after voipappz-loadimages.
 #
-# This is the half of `install.sh` that bake.sh deliberately skipped: node
-# identity. It exists because an image must be identical on every instance and
-# a node must not be — .env and config/va.yaml carry secrets and addresses, so
-# they are generated HERE, on the running machine, never baked.
+# IT DOES NOT INSTALL A NODE ITSELF. install.sh does that — setup, registration,
+# the `docker run`, the systemd unit — and it is reached through
+# va-node-install, the same command an operator types. This script used to be
+# the mothership's: it ran `voipappz setup --env-file` and `voipappz up -p app`,
+# which are compose commands, on a machine that has one container and no compose
+# file. Two things survive from it:
 #
-# `voipappz setup` is a wizard, but it has an unattended path built in: every
-# prompt can be pre-answered with VOIPAPPZ_<LABEL>, which is exactly what
-# --env-file feeds it (the installer's cli/src/commands/setup.cr, #answer_key). So this script's
-# whole job is to produce a complete answer sheet and hand it over.
+#   * the build credential is retired on the machine, never in the image;
+#   * node identity and secrets are generated HERE, on the running machine, and
+#     are never baked into media.
 #
-# The operator supplies the tenant-specific half via cloud-init / user-data at
-# /etc/voipappz/installer.env (see installer.env.example). This script adds the
-# half only the booted machine can know: its addresses.
+# With no answer sheet it stops and says what to type. With one
+# (/etc/voipappz/installer.env, baked by `--installer-env` or dropped in by
+# hand) it runs the installer unattended. The sheet is install.sh's own answer
+# file — KEY=VALUE, the settings README.md lists — not a format of its own.
 set -eu
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 ANSWERS=/etc/voipappz/installer.env
-STAMP=/var/lib/voipappz/firstboot.done
-MERGED=/run/voipappz-answers.env
+STATE=/var/lib/voipappz
+STAMP=$STATE/firstboot.done
 
 log() { echo "[voipappz-firstboot] $*"; }
 
 [ -e "$STAMP" ] && { log "already configured, nothing to do"; exit 0; }
+mkdir -p "$STATE"
 
-# Retire the build credential. `voipappz` exists only on the VirtualBox image
-# (Packer needed a way in before any key existed); expiring it forces a new
-# password at the first console login, so the shipped .vdi has no usable
-# default credential while staying administrable. Done BEFORE the answer-sheet
-# check on purpose — an unconfigured node must still get this.
-if id voipappz >/dev/null 2>&1; then
+# Retire the build credential. `voipappz`/`voipappz` exists so the machine is
+# administrable from its console the moment the install finishes; expiring it
+# forces a new password at the first login, so the media carries no usable
+# default. ONCE: this unit re-runs on every boot until the node is configured,
+# and expiring the password each time would make an operator who is still
+# working on the machine choose a new one after every reboot.
+if [ ! -e "$STATE/password.expired" ] && id voipappz >/dev/null 2>&1; then
   chage -d 0 voipappz 2>/dev/null || true
+  : > "$STATE/password.expired"
 fi
 
 if [ ! -f "$ANSWERS" ]; then
-  # Deliberately NOT a failure, and deliberately not a partial setup. An image
-  # booted without an answer sheet is a perfectly good un-provisioned node —
-  # the operator runs `voipappz setup` by hand. Guessing a domain or an admin
-  # email here would produce a node that looks configured and is not.
-  log "no $ANSWERS — leaving this node unconfigured"
-  log "run: voipappz setup   (or supply $ANSWERS and reboot)"
+  # Deliberately NOT a failure, and deliberately not a guess. A machine booted
+  # without answers is a perfectly good un-provisioned one; inventing a
+  # mothership or an Account here would produce a node that looks configured
+  # and is not.
+  log "no $ANSWERS — this machine is not a node yet"
+  log "run: sudo va-node-install   (or supply $ANSWERS and reboot)"
   exit 0
 fi
 
-# ---------------------------------------------------------------- addresses
-#
-# EC2 exposes them over IMDS; VirtualBox has no IMDS at all, so every read is
-# best-effort with a short timeout and a local fallback. Getting this wrong is
-# not theoretical: a node whose internal address was set to its PUBLIC IP bound
-# kamailio to the wrong interface, the ingress dispatcher never got an answer
-# to its keepalives, and every call 404'd. Deriving it here is what stops that
-# being a hand-entered value at all.
-
-imds() { # imds <path> -> value, or empty
-  _t=$(curl -fsS -m 2 -X PUT "http://169.254.169.254/latest/api/token" \
-        -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null) || return 0
-  curl -fsS -m 2 -H "X-aws-ec2-metadata-token: $_t" \
-    "http://169.254.169.254/latest/meta-data/$1" 2>/dev/null || true
-}
-
-# The address on the interface holding the default route. This is the LAN bind
-# address — what kamailio's `listen=` must use, with the public address only
-# ever `advertise`d.
-local_ip() {
-  ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}'
-}
-
-INTERNAL_IP=$(imds local-ipv4); [ -n "$INTERNAL_IP" ] || INTERNAL_IP=$(local_ip)
-EXTERNAL_IP=$(imds public-ipv4)
-
-# No public address (VirtualBox, or an EC2 instance with no EIP): advertise the
-# internal one. Advertising something unreachable is worse than advertising a
-# private address — the far end would put it in Via/Contact and never come back.
-[ -n "$EXTERNAL_IP" ] || EXTERNAL_IP="$INTERNAL_IP"
-
-if [ -z "$INTERNAL_IP" ]; then
-  log "FATAL: could not determine this node's address"
+# The sheet is handed over as a FILE, not sourced: install.sh already parses
+# KEY=VALUE without evaluating it, and a sheet that carries an Account
+# credential must not pass through a shell that would expand it.
+log "running the installer with $ANSWERS"
+if ! VA_ENV_FILE="$ANSWERS" /usr/local/sbin/va-node-install; then
+  log "the installer FAILED — this machine is not a node; fix $ANSWERS and reboot,"
+  log "or run: sudo va-node-install"
   exit 1
 fi
 
-log "internal=$INTERNAL_IP external=$EXTERNAL_IP"
-
-# ---------------------------------------------------------------- answers
-
-umask 077
-cp "$ANSWERS" "$MERGED"
-
-{
-  echo ""
-  echo "# --- appended by voipappz-firstboot ---"
-  echo "VOIPAPPZ_EXTERNAL_IP=$EXTERNAL_IP"
-  # BOTH internal-IP keys, because setup asks a different question depending on
-  # how many interfaces it finds: "Internal IP" when there is one, "Choose
-  # internal IP" (a numbered menu) when there are several. The menu also accepts
-  # a literal address, so the same value answers either branch — and which
-  # branch fires is a property of the instance, not something we can predict at
-  # bake time.
-  echo "VOIPAPPZ_INTERNAL_IP=$INTERNAL_IP"
-  echo "VOIPAPPZ_CHOOSE_INTERNAL_IP=$INTERNAL_IP"
-} >> "$MERGED"
-
-PROFILE=$(awk -F= '$1 == "VA_PROFILE" { print $2 }' "$MERGED" | tail -1)
-[ -n "$PROFILE" ] || PROFILE=app
-
-cd "$INSTALL_DIR"
-
-log "running voipappz setup"
-if ! voipappz setup --env-file "$MERGED"; then
-  log "setup FAILED — not starting the stack"
-  rm -f "$MERGED"
-  exit 1
-fi
-rm -f "$MERGED"
-
-log "starting profile: $PROFILE"
-voipappz up -p "$PROFILE"
-
-mkdir -p "$(dirname "$STAMP")"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$STAMP"
 log "done"
