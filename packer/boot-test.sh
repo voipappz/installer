@@ -26,6 +26,11 @@
 #                  out. restrict=on answers DHCP and routes nothing, which is
 #                  what a destination machine actually looks like.
 #
+# A TEXT CHANNEL OUT. The guest's first serial port is a file,
+# build/boottest/serial.log. A screenshot is the only way to see the console,
+# and it is a picture; anything a test needs to READ is piped there from the
+# guest instead:   docker ps | sudo tee /dev/ttyS0
+#
 # qemu is not installed on the workstation — it lives in the same builder image
 # Packer runs from, so this drives it there, with --device /dev/kvm.
 set -euo pipefail
@@ -45,6 +50,18 @@ CPUS="${BOOTTEST_CPUS:-4}"
 TIMEOUT="${BOOTTEST_TIMEOUT:-2400}"
 
 ISO=""
+
+# OFFLINE BY DEFAULT, and that default is the test. BOOTTEST_NET=open gives the
+# guest a route out, for the one step a disc does not make offline: a node's
+# install must reach its mothership and broker, and its final health gate fails
+# on a remote that does not answer at all. From inside the guest, 10.0.2.2 is
+# this test's container — a broker started with
+# `docker run --network container:va-boottest nats:2-alpine` answers there.
+case "${BOOTTEST_NET:-offline}" in
+  offline) RESTRICT=on ;;
+  open)    RESTRICT=off ;;
+  *) echo "!! BOOTTEST_NET must be offline or open" >&2; exit 1 ;;
+esac
 
 log() { echo ">> $*"; }
 die() { echo "!! $*" >&2; exit 1; }
@@ -114,8 +131,9 @@ start_vm() {
     -drive "file=/w/build/boottest/$(basename "$DISK"),format=qcow2,if=virtio" \
     "$@" \
     -boot "order=$boot_order" \
-    -netdev user,id=n0,restrict=on -device virtio-net-pci,netdev=n0 \
+    -netdev "user,id=n0,restrict=$RESTRICT" -device virtio-net-pci,netdev=n0 \
     -display none -vga std \
+    -serial "file:/w/build/boottest/serial.log" \
     -qmp "unix:/w/build/boottest/qmp.sock,server,nowait" >/dev/null
 
   # The socket appears a moment after the process does; every later subcommand
@@ -180,7 +198,7 @@ iso_in_container() {
 
 cmd_boot() {
   [ -f "$DISK" ] || die "no installed disk at $DISK — run '$0 install' first"
-  log "booting the installed disk — OFFLINE"
+  log "booting the installed disk — network: ${BOOTTEST_NET:-offline}"
   start_vm c
   log "up. screenshot it with: $0 shot NAME"
 }
