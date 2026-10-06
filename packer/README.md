@@ -19,21 +19,42 @@ bootable disc that installs a node on an isolated machine, you want the ISO.
 
 `os-image.pkr.hcl` — a remastered Ubuntu Server 24.04.4 that installs an
 operating system with no network at all: docker, the SIP and triage tooling,
-the `voipappz` CLI, and the node container image.
+the `voipappz` CLI, `install.sh`, and the node container image.
 
 ```
-make iso-payload    # ONCE — pulls the node image and saves it
-make iso            # cut and deliver
-make iso QUICK=1    # skip package re-resolution; touches the network not at all
+make iso            # stage the node image if it moved, then cut
+make iso QUICK=1    # re-cut from the payload as it is; touches the network not at all
 make iso ISO_DEST=/mnt/d/isos
+VA_VOIP_IMAGE=nirlevi/va-crystal:<version> VOIPAPPZ_LOCAL_IMAGES=1 make iso   # a local build
+make iso-upload     # versioned + latest + sha256 to S3, private
 ```
 
-Roughly **40 seconds** once warm — images, packages and the base ISO are all
-cached, and the only unavoidable cost is writing the 8GB output.
+The output is `build/iso/voipappz-node-<YYYY.MM.DD>-<unix time>.iso` —
+va-crystal's version shape for a local build, so no two cuts share a name
+(`VA_ISO_VERSION=` overrides it). That is the DISC's version; the node image it
+carries has va-crystal's own, and both are written to `/etc/voipappz-image` on
+the installed machine and printed in its login banner.
+
+`make iso` stages the image itself. The payload is a cache, and a cut that
+trusted it shipped last month's image around this month's tag; the cutter now
+also refuses a payload that is not the `VA_VOIP_IMAGE` named.
 
 Operator instructions live in **`node-installer.html`**, which ships beside the
 ISO. The short version: boot it, wait, it **powers off**, remove the disc, boot
-again, then `voipappz bootstrap`.
+again, then `sudo va-node-install`.
+
+### What happens on the installed machine
+
+| when | what | by |
+|---|---|---|
+| first boot | the node image is verified against the disc's checksums and loaded | `voipappz-loadimages.service` |
+| first boot | the build password is expired; with an answer file, the node is installed unattended | `voipappz-firstboot.service` |
+| the operator | `sudo va-node-install` — names the disc's image and runs `install.sh` | `files/va-node-install` |
+| every boot after | `docker start va-voip` | `voipappz-node.service`, written by `install.sh` |
+
+`va-node-install` is not an installer: setup, registration, the `docker run`
+and the systemd unit are all `install.sh`'s. The image is offline; registration
+still has to reach the mothership (`--no-register` defers it).
 
 ### Boot-testing it
 
@@ -57,11 +78,10 @@ What a full pass costs, measured on 4 vCPU / 8GB with no network at all:
 | cut the ISO (`make iso QUICK=1`) | 2m30s |
 | install, disc to power-off | **10m30s** |
 | first boot: `docker load` of the node image | a few minutes |
-| `voipappz bootstrap --skip-login --ci` | ~4m |
+| `sudo va-node-install` | a few minutes |
 
-So a machine is taking calls about 25 minutes after the disc goes in, and the
-middle 9 minutes are silent — `voipappz-firstboot` is ordered after
-`voipappz-loadimages` and will not start the stack until every image is in.
+Those timings were measured when the disc carried the mothership's 17 images;
+a node disc carries one and is quicker at every step.
 
 ### Copying it to another machine
 
@@ -100,12 +120,13 @@ That separation is the whole design, and it is not tidiness:
 - A late-command that fails **aborts the entire install**. An earlier version did
   everything in the installer, `dpkg -i` returned 100, and subiquity discarded a
   finished partition table, bootloader and base system along with it.
-- `voipappz setup` writes `.env` and `config/va.yaml` — secrets plus node
-  identity, already `HOST_GENERATED` in `DeployManifest`. Baking those clones one
-  set of secrets onto every machine built from the image.
+- The installer writes `.env` and `config/va.yaml` — secrets plus node
+  identity. Baking those clones one set of secrets onto every machine built
+  from the image.
 
-So the disc stops one step short, and `voipappz-firstboot` runs setup on the
-booted machine — or says so and waits, if no answer sheet was baked in.
+So the disc stops one step short, and `va-node-install` runs the installer on
+the booted machine — typed by the operator, or run by `voipappz-firstboot` when
+an answer file was baked in.
 
 ### Why `source "null"`
 
@@ -123,10 +144,10 @@ the scripts stay usable on their own.
 
 | variable | default | controls |
 |---|---|---|
-| `os_packages` | 26 packages | **single source of truth** — feeds both the download and the install |
-| `with_images` | `true` | bake the node image; `false` makes the node pull at `up` time |
+| `os_packages` | 30 packages | **single source of truth** — feeds both the download and the install |
+| `with_images` | `true` | bake the node image; `false` makes `va-node-install` fetch it |
 | `network` | DHCP | netplan config substituted into the autoinstall |
-| `installer_env` | empty | answer sheet — the node then configures itself with no login |
+| `installer_env` | empty | an `install.sh` answer file — the first boot then installs the node with no login |
 | `dest_dir` | empty | where the ISO is delivered; empty leaves it in `packer/build/iso/` |
 | `refresh_packages` | `true` | `false` re-cuts from an unchanged payload |
 | `deliver_host` | `unset.invalid` | SSH target for the `voipappz-deliver` build |
@@ -187,9 +208,10 @@ the scripts stay usable on their own.
   hardware has had x86-64-v2 since Nehalem (2009); what has not is a VM told to
   present a generic CPU, which a hypervisor pinned to an old compatibility level
   for live migration will do.
-- **acme.sh cannot issue a certificate offline.** An air-gapped node stays on the
-  `CN=localhost` placeholder permanently — TLS negotiates, so it looks fine while
-  real clients reject it. `voipappz cert` reports which you have.
+- **`ufw` is installed and inactive.** The node runs on the host network: SIP
+  on 5060 (UDP+TCP), 5070, 5090, the node on 4000 and 8090, HEP on 9060/udp, and
+  RTP on a wide UDP range. Enable the firewall only with those allowed, or the
+  node comes up healthy and registers nobody.
 
 ---
 

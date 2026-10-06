@@ -70,7 +70,13 @@ build_stack_tarball() {
   gzip -c "$staging/stack.tar" > "$out.tmp.$$"
   mv -f "$out.tmp.$$" "$out"
 
-  echo ">> packaged $(du -h "$out" | cut -f1) stack from $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  # The commit the stack came from, for the disc's provenance file. Written
+  # here because this is the last place that can see the repository: the cutter
+  # runs inside the builder container, which mounts only packer/, and recorded
+  # `commit=unknown` on every disc.
+  git -C "$REPO_ROOT" rev-parse --short HEAD > "$HERE/build/stack.commit"
+
+  echo ">> packaged $(du -h "$out" | cut -f1) stack from $(cat "$HERE/build/stack.commit")"
 }
 
 # The registry credential for the bake's `docker pull`. The stack's own images

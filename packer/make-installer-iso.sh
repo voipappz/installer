@@ -221,6 +221,10 @@ if tar -xzOf "$PAYLOAD/stack.tar.gz" bin/voipappz > "$WORK/voipappz.bin" 2>/dev/
 fi
 log "CLI on this disc: $cli_build"
 
+# The commit the stack tarball was archived from. build.sh records it on the
+# host; inside the builder container there is no repository to ask.
+stack_commit="$(cat "$HERE/build/stack.commit" 2>/dev/null || git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
 cat > "$ADD/voipappz/voipappz-image" <<EOF
 iso_version=$VERSION
 node_image=$NODE_IMAGE
@@ -229,7 +233,7 @@ cli_version=$CLI_VERSION
 cli_build=$cli_build
 source=installer-iso
 built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-commit=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+commit=$stack_commit
 EOF
 
 # Subiquity 23.10+ reads /autoinstall.yaml off the installation media root with

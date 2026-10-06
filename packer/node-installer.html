@@ -77,60 +77,59 @@ Settings → Storage → optical drive → Remove Disk from Virtual Drive.
 <p class="warn">Leave it in and it reinstalls, wiping what it just built.</p></li>
 
 <li><strong>Wait for first boot.</strong> A few minutes loading the node image. It stops at a login
-prompt saying <code>leaving this node unconfigured</code> — that's expected.
+prompt saying <code>this machine is not a node yet</code> — that's expected.
 <p>Log in <code>voipappz</code> / <code>voipappz</code>. It forces a new password.</p></li>
 
-<li><strong>Bring it up.</strong>
-<pre><code>cd /opt/voipappz
-sudo voipappz bootstrap</code></pre>
-<p>Runs the setup wizard, starts the app, health-checks it. Nothing downloads.</p></li>
-
-<li><strong>Seed both Kamailios.</strong>
-<pre><code>sudo voipappz sbc ingress sync
-sudo voipappz sbc egress sync</code></pre>
-<p class="warn">Both. Separate stores — skipping the ingress 404s every call.</p></li>
+<li><strong>Make it a node.</strong>
+<pre><code>sudo va-node-install</code></pre>
+<p>Asks for a node name, its addresses, your mothership URL and an Account token, registers the
+node and starts it. The image is already on the disk — nothing downloads.</p>
+<p class="warn">Registration has to reach your mothership. With none in reach:
+<code>sudo va-node-install --no-register</code>, and register later.</p></li>
 
 </ol>
 
 <h2>What you end up with</h2>
-<pre><code>$ which docker voipappz sngrep tcpdump
-/usr/bin/docker
-/usr/local/bin/voipappz
-/usr/bin/sngrep
-/usr/bin/tcpdump
+<pre><code>$ systemctl is-enabled voipappz-node
+enabled                 <span class="cm"># the node starts at every boot</span>
 
-$ docker --version
-Docker version 29.7.2
+$ docker ps --format '{{.Names}}  {{.Image}}'
+va-voip  nirlevi/va-crystal:&lt;version&gt;
 
-$ docker images | wc -l
-19          <span class="cm"># 18 + header</span></code></pre>
-<p>Plus Ubuntu 24.04.4 and 22 more packages. The CLI is there from the install; the images
-arrive on first boot.</p>
+$ sudo voipappz health
+<span class="cm"># the node's own verdict; names anything that is down</span>
+
+$ cat /etc/voipappz-image
+<span class="cm"># which disc, which node image, which CLI</span></code></pre>
+<p>Plus Ubuntu 24.04.4, Docker, <code>sngrep</code>, <code>tcpdump</code>, <code>ufw</code> (installed, not enabled)
+and the usual triage tools. The same commands are printed at every login.</p>
 
 <h2>If something looks wrong</h2>
 <div class="tw">
 <table>
 <tbody>
-<tr><td>long silence</td><td>copying 4.6 GB off the disc</td></tr>
+<tr><td>long silence</td><td>copying the node image off the disc</td></tr>
 <tr><td>powers off</td><td>finished — remove the disc</td></tr>
 <tr><td>asks a question</td><td>VirtualBox's own installer is on; remake the VM</td></tr>
-<tr><td>no wizard</td><td>run <code>voipappz setup</code></td></tr>
-<tr><td>"unconfigured"</td><td>expected — it won't guess your domain</td></tr>
+<tr><td>"not a node yet"</td><td>expected — run <code>sudo va-node-install</code></td></tr>
 <tr><td>password rejected</td><td>expired on purpose; set a new one</td></tr>
-<tr><td>TLS warnings</td><td>offline can't get a real cert; <code>voipappz cert</code> confirms</td></tr>
+<tr><td>image missing</td><td><code>journalctl -u voipappz-loadimages</code></td></tr>
+<tr><td>node not running</td><td><code>systemctl status voipappz-node</code>, <code>docker logs va-voip</code></td></tr>
+<tr><td>firewall</td><td>ufw is off; before enabling it allow 5060 udp+tcp, 5070, 5090, 4000, 8090, 9060/udp and RTP</td></tr>
 </tbody>
 </table>
 </div>
 
 <h2>Build a new ISO</h2>
-<pre><code>make iso-payload    <span class="cm"># once, ~60 min</span>
-make iso            <span class="cm"># ~90 sec after that</span></code></pre>
+<pre><code>make iso            <span class="cm"># stages the node image if it moved, then cuts</span>
+make iso-upload     <span class="cm"># versioned + latest + sha256, private</span></code></pre>
 <div class="tw">
 <table>
 <tbody>
+<tr><td>VA_VOIP_IMAGE=</td><td>which node image; add VOIPAPPZ_LOCAL_IMAGES=1 for a local build</td></tr>
 <tr><td>ISO_DEST=</td><td>where it lands</td></tr>
 <tr><td>ISO_NETWORK=</td><td>static IP instead of DHCP</td></tr>
-<tr><td>-var installer_env=</td><td>answer sheet — no login needed at all</td></tr>
+<tr><td>-var installer_env=</td><td>an install.sh answer file — no login needed at all</td></tr>
 </tbody>
 </table>
 </div>
