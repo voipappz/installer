@@ -159,7 +159,7 @@ cmd_install() {
   docker run --rm -v "$HERE:/w" --entrypoint chown "$IMAGE" \
     -R "$(id -u):$(id -g)" /w/build/boottest
 
-  log "booting $(basename "$ISO") — OFFLINE, ${CPUS} cpu, ${MEM}MB"
+  log "booting $(basename "$ISO") — network: ${BOOTTEST_NET:-offline}, ${CPUS} cpu, ${MEM}MB"
   start_vm dc -drive "file=$(iso_in_container "$ISO"),media=cdrom,readonly=on"
 
   log "installing; the guest powers itself off when it is done (cap ${TIMEOUT}s)"

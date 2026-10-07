@@ -139,6 +139,7 @@ cp -a "$PAYLOAD/debs"      "$ADD/voipappz/debs"
 # and config/va.yaml — secrets and node identity that must never be baked into
 # an image and cloned onto every machine built from it.
 cp "$HERE/files/va-node-install"             "$ADD/voipappz/va-node-install"
+cp "$HERE/files/ubuntu.sources"              "$ADD/voipappz/ubuntu.sources"
 cp "$HERE/scripts/firstboot.sh"              "$ADD/voipappz/firstboot.sh"
 cp "$HERE/files/voipappz-firstboot.service"  "$ADD/voipappz/"
 cp "$HERE/scripts/load-images.sh"            "$ADD/voipappz/load-images.sh"

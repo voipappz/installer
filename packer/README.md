@@ -163,6 +163,16 @@ the scripts stay usable on their own.
   `Mirror/apply_autoinstall_config` having partitioned nothing, naming the mirror
   rather than the missing network. `fallback: offline-install` is the flag that
   makes this ISO work at all.
+- **…and with a network the fallback never fires.** On a machine with a route
+  out (VirtualBox NAT, any office LAN) the mirror test passes, apt gets
+  archive.ubuntu.com beside the CD, and curtin's `apt-get install grub-pc`
+  pulls whatever is newer online. On 2026-10-06 that was libfreetype6 from
+  security.ubuntu.com, "Connection reset by peer", and a disk with no
+  bootloader ("no bootable medium" at the next boot). The only mirror
+  candidate is now `http://127.0.0.1:9/ubuntu`, which nothing answers, so the
+  install is offline with or without a network; late-commands puts the stock
+  `ubuntu.sources` (`files/ubuntu.sources`) back on the installed system.
+  `BOOTTEST_NET=open packer/boot-test.sh install` is the test for it.
 - **`apt-get install -d` resolves against the BUILDER's installed set**, so every
   dependency the container already had is silently skipped — that shipped a
   payload missing libgssapi-krb5-2, libssh-4, libldap2 and four more, and the

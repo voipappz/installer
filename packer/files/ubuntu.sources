@@ -1,0 +1,15 @@
+# Ubuntu 24.04 (noble) — the stock archive, as a plain install writes it.
+# Put here by the node disc's late-commands: the install itself ran against the
+# disc alone. Unused on an air-gapped node; /var/lib/voipappz/debs is the local
+# repository either way.
+Types: deb
+URIs: http://archive.ubuntu.com/ubuntu/
+Suites: noble noble-updates noble-backports
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.ubuntu.com/ubuntu/
+Suites: noble-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg

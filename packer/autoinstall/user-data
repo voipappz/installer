@@ -75,9 +75,26 @@ autoinstall:
   #
   # geoip off for the same reason: the mirror-selection lookup is a network
   # round-trip that can only time out here.
+  #
+  # AND THE SAME WITH A NETWORK. `fallback` only fires when the mirror test
+  # FAILS. On a machine with a route out (VirtualBox NAT, any office LAN) the
+  # test passes, apt gets archive.ubuntu.com beside the CD, and curtin's
+  # `apt-get install grub-pc` reaches for whatever is newer online — observed
+  # 2026-10-06: libfreetype6 from security.ubuntu.com, "Connection reset by
+  # peer", exit 100, an unbootable disk. An install that works offline and
+  # fails online depends on someone else's mirror on someone else's day.
+  #
+  # So the one mirror candidate is an address nothing listens on (discard, on
+  # loopback): the test fails at once, with or without a network, and the
+  # fallback above is the only path there is. subiquity has no "offline: true".
+  # It writes that candidate into the installed system's ubuntu.sources, which
+  # late-commands puts back to the stock archive.
   apt:
     fallback: offline-install
     geoip: false
+    mirror-selection:
+      primary:
+        - uri: "http://127.0.0.1:9/ubuntu"
 
   # Third-party drivers are fetched from the network — another lookup that can
   # only hang on an isolated box, for something no VoIPAppz node needs.
@@ -169,6 +186,12 @@ autoinstall:
     - curtin in-target --target=/target -- apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/voipappz-local.list -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0 update
     - curtin in-target --target=/target -- env DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/voipappz-local.list -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0 install -y --no-install-recommends @OS_PACKAGES@
     - curtin in-target --target=/target -- systemctl enable docker.service containerd.service
+
+    # The installed machine's own archive list. The install ran against a
+    # mirror that does not exist (see `apt:` above) and subiquity leaves that
+    # address behind; a node that is later given a route out must find the real
+    # archive, not a refused connection on loopback.
+    - install -m 0644 /cdrom/voipappz/ubuntu.sources /target/etc/apt/sources.list.d/ubuntu.sources
 
     # The operator account is in `docker` so `voipappz` runs without sudo — the
     # CLI shells out to docker constantly and every call would otherwise prompt.
