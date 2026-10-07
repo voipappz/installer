@@ -578,6 +578,13 @@ docker compose version >/dev/null 2>&1 \
   || die 'docker compose is missing — the mothership fixture is a compose stack'
 pass 'docker compose present (the mothership fixture needs it; the node does not)'
 
+# The fixture's own secrets. The mothership's scripts/setup.sh generates them
+# on a real install; this test starts the compose file directly, so it supplies
+# the ones the compose file refuses to start without (voipappz/mothership
+# 823f8e166, 2026-09-24: the alert mailbox UI is published, behind a password).
+VA_MAILPIT_UI_PASSWORD="${VA_MAILPIT_UI_PASSWORD:-$(openssl rand -hex 16)}"
+export VA_MAILPIT_UI_PASSWORD
+
 MOTHERSHIP_UP=1
 (
   cd "$MOTHERSHIP_DIR"
