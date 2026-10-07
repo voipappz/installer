@@ -539,7 +539,7 @@ jobs:
       # A fresh runner has no plugins: `packer validate` without them fails with
       # "Missing plugins". init downloads them into build.sh's plugin volume.
       - name: packer init
-        run: packer/build.sh init
+        run: packer/build.sh init .
       - name: packer validate
         run: make image-validate
 
