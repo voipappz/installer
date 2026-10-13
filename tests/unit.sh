@@ -634,6 +634,14 @@ run_flags() {  # file -> the flags of its docker run, one per line, sorted
 check 'up.sh runs the same flags as install.sh'     '[[ "$(run_flags "$UP")" == "$(run_flags "$ROOT/install.sh")" ]]'
 check 'up.sh mounts the YAML at /tmp/node.yaml'     'grep -q "/tmp/node.yaml:ro" "$UP"'
 check 'up.sh keeps the kamailio volume'             'grep -q "voipappz-kamailio:/var/lib/kamailio" "$UP"'
+# Recordings outlive the container, and the upload archive is inside the same
+# volume (the node moves a file there with a rename) — in BOTH docker runs.
+for _f in "$UP" "$ROOT/install.sh"; do
+  check "$(basename "$_f") keeps the recordings volume" \
+    'grep -q "voipappz-recordings:/usr/local/freeswitch/recordings " "'"$_f"'"'
+  check "$(basename "$_f") archives uploads inside it" \
+    'grep -q "RECORDING_DONE_DIR=/usr/local/freeswitch/recordings/" "'"$_f"'"'
+done
 check 'up.sh applies the YAML to kamailio'          'grep -q "sbc egress sync" "$UP"'
 check 'the installer no longer needs Compose'        '! grep -qE "compose (up|down|ps|config|version)" "$ROOT/install.sh"'
 check 'the installer no longer extracts /stack'      '! grep -q "stack/." "$ROOT/install.sh"'
