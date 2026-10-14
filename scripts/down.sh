@@ -1,9 +1,10 @@
 #!/bin/sh
 # make down — stop the node, keeping its identity and its kamailio volume.
 #
-# `docker stop`, not `rm`: the container keeps its name, its mounts and the
-# subscribers in the voipappz-kamailio volume, so `make up` brings back the
-# same node rather than a new one. Removing it is `make up`'s job, and only
+# `docker stop`, not `rm`: the container keeps its name, its mounts, the
+# subscribers in the voipappz-kamailio volume and the not-yet-uploaded calls in
+# voipappz-recordings, so `make up` brings back the same node rather than a new
+# one. Removing it is `make up`'s job, and only
 # because starting a node IS replacing it.
 set -eu
 # shellcheck source=scripts/common.sh

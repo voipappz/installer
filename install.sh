@@ -1042,7 +1042,7 @@ start_node() {
 
   # This installer owns the name `va-voip`: replacing it IS how a node is
   # upgraded, and there is no other project to conflict with now that Compose
-  # is gone. Subscribers live in a named volume, so they survive the swap.
+  # is gone. Subscribers and recordings live in named volumes, so they survive the swap.
   if docker_cmd inspect va-voip >/dev/null 2>&1; then
     say "replacing the running node container"
     docker_cmd rm -f va-voip >/dev/null 2>&1 || die "could not remove the existing va-voip container"
@@ -1060,6 +1060,11 @@ start_node() {
   # scripts/run-node.sh, which calls itself "the one way a node runs" and is
   # what its CI proof boots; until 2026-08-29 the thing that installs real nodes
   # quietly used a smaller one. KEEP THE TWO IN STEP.
+  #
+  # Recordings are a volume (voipappz-recordings) for the same reason the
+  # subscribers are: a node upgrade replaces this container, and every mp3 not
+  # yet uploaded went with it. The archive dir is inside the volume because the
+  # node's uploader moves a file there with a rename (scripts/up.sh says more).
   set -- docker_cmd run -d --name va-voip \
     --network host \
     --restart unless-stopped \
@@ -1070,6 +1075,9 @@ start_node() {
     --ulimit memlock=-1:-1 --ulimit nofile=999999:999999 \
     -v "$INSTALL_DIR/config/va.yaml:/tmp/node.yaml:ro" \
     -v voipappz-kamailio:/var/lib/kamailio \
+    -v voipappz-recordings:/usr/local/freeswitch/recordings \
+    -e RECORDING_SRC_DIR=/usr/local/freeswitch/recordings \
+    -e RECORDING_DONE_DIR=/usr/local/freeswitch/recordings/copied \
     -e VA_PATH=/tmp/node.yaml \
     -e "FREESWITCH_PASSWORD=$FS_PASSWORD" \
     -e "VA_FREESWITCH_PASSWORD=$FS_PASSWORD" \
