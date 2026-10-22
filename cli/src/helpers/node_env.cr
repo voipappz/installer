@@ -176,6 +176,9 @@ module VoIPAppz
     SOFIA_PORTS = {SOFIA_INTERNAL_SIP_PORT.to_i, SOFIA_EXTERNAL_SIP_PORT.to_i}
     UUID_SHAPE = /\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z/
     LICENSE_SECRETS = {"LICENSE_JWT_SECRET", "LICENSE_ENCRYPTION_KEY"}
+    # What the node's broker link speaks: NATS over TCP, and NATS over
+    # WebSocket (va-crystal #69, 2026-10-21). https:// and wss:// carry TLS.
+    BROKER_SCHEMES = {"nats://", "tls://", "https://", "wss://", "http://", "ws://"}
     LICENSE_SECRET_MIN = 32
 
     def self.problems(env : Hash(String, String), process : Hash(String, String) = ENV.to_h, boot : Bool = false) : Array(String)
@@ -218,8 +221,8 @@ module VoIPAppz
       nats = get.call("NATS_URL")
       if nats.nil? || nats.empty?
         out << "broker.url is missing — the node's control plane is NATS (broker: url: nats://host:4222)"
-      elsif !nats.starts_with?("nats://") && !nats.starts_with?("tls://")
-        out << "broker.url #{nats} must be nats:// or tls://"
+      elsif BROKER_SCHEMES.none? { |scheme| nats.starts_with?(scheme) }
+        out << "broker.url #{nats} must be #{BROKER_SCHEMES.join(", ")}"
       end
 
       if boot

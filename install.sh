@@ -12,12 +12,16 @@ set -eu
 # beside the caller. A variable already in the environment wins over the
 # file, so `VA_API_URL=… sh install.sh` still overrides for one run. The file
 # may hold the Account login (VA_API_EMAIL / VA_API_PASSWORD or
-# VA_API_AUTHORIZATION) and the Docker Hub token; keep it mode 0600, and it is
+# VA_API_AUTHORIZATION) and the registry token; keep it mode 0600, and it is
 # never copied into the installation.
 VA_ENV_FILE="${VA_ENV_FILE:-}"
 [ -n "$VA_ENV_FILE" ] || { [ -f ./.env ] && VA_ENV_FILE=./.env; } || true
 if [ -n "$VA_ENV_FILE" ]; then
   [ -r "$VA_ENV_FILE" ] || { printf '!! cannot read %s\n' "$VA_ENV_FILE" >&2; exit 1; }
+  # It may carry tokens and passwords: say so when anyone else can read it.
+  if [ -n "$(find "$VA_ENV_FILE" -maxdepth 0 -perm /077 2>/dev/null)" ]; then
+    printf '!! %s can be read by other users; it may hold tokens — chmod 600 %s\n' "$VA_ENV_FILE" "$VA_ENV_FILE" >&2
+  fi
   while IFS= read -r _line || [ -n "$_line" ]; do
     case "$_line" in ''|'#'*) continue ;; esac
     _key=${_line%%=*}; _val=${_line#*=}
@@ -30,22 +34,23 @@ if [ -n "$VA_ENV_FILE" ]; then
   _line=""; _key=""; _val=""
 fi
 
-# :node, not :latest. Everything else this platform installs is pinned — the
-# CLI by ci/CLI_VERSION + ci/CLI_SHA256, SIPp by version and sha256, the base
-# ISO by checksum, kamailio by suite — and the node image was the one thing
-# that moved underneath a running node. It also disagreed with the two places
-# that DO name a tag: the stack's compose used ${VA_VOIP_TAG:-node} and the
-# ISO payload carries :node, so a node installed by this script ran a
-# different build from the one the media shipped. `docker inspect` could no
-# longer answer "which build is that node running?", which is the whole point
-# of the io.voipappz.cli.version label.
-VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}"
+# The node image lives in the GitHub registry, ghcr.io/voipappz/node — PRIVATE:
+# pulling it takes a GitHub user and a classic token with read:packages
+# (2026-10-22; it was nirlevi/va-crystal:node on Docker Hub, still accepted as
+# VA_VOIP_IMAGE). Each build is an immutable <YYYY.MM.DD>-<build> tag; :latest
+# is the newest. Name the exact tag (VA_VOIP_IMAGE=ghcr.io/voipappz/node:<tag>)
+# for a node that must run a known build — an upgrade is the same install
+# with a newer tag; `docker inspect` on the node still names its build.
+VA_VOIP_IMAGE="${VA_VOIP_IMAGE:-ghcr.io/voipappz/node:latest}"
 VA_IMAGE_ARCHIVE="${VA_IMAGE_ARCHIVE:-}"
 # Where `make s3-publish` in va-crystal puts the newest proven image archive.
 VA_IMAGE_URL="${VA_IMAGE_URL:-https://voipappz-assets-il.s3.il-central-1.amazonaws.com/images/va-crystal-node-latest.tar.gz}"
-# dockerhub | s3 | archive — unattended choice of image source. Empty means:
-# VA_IMAGE_ARCHIVE if set, else registry credentials if set, else ask.
+# registry | s3 | archive | local — unattended choice of image source. Empty
+# means: VA_IMAGE_ARCHIVE if set, else registry credentials if set, else ask.
+# `registry` pulls VA_VOIP_IMAGE from the registry its name says (ghcr.io by
+# default); `dockerhub` is its old name and still works.
 VA_IMAGE_SOURCE="${VA_IMAGE_SOURCE:-}"
+[ "$VA_IMAGE_SOURCE" != "dockerhub" ] || VA_IMAGE_SOURCE=registry
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
 VA_CA_BUNDLE="${VA_CA_BUNDLE:-}"
@@ -123,18 +128,18 @@ case "$INSTALL_DIR" in
   *) printf '!! INSTALL_DIR must be an absolute, specific directory\n' >&2; exit 1 ;;
 esac
 case "$VA_IMAGE_SOURCE" in
-  ''|dockerhub|archive) ;;
+  ''|registry|archive) ;;
   # The image already on this host, and nothing else: no registry, no
   # download, no menu. An install that follows `install.sh --image-only`.
   local) [ -z "$VA_IMAGE_ARCHIVE" ] \
     || { printf '!! VA_IMAGE_SOURCE=local takes no VA_IMAGE_ARCHIVE\n' >&2; exit 1; } ;;
   s3) [ -n "$VA_IMAGE_ARCHIVE" ] || VA_IMAGE_ARCHIVE=$VA_IMAGE_URL ;;
-  *) printf '!! VA_IMAGE_SOURCE must be dockerhub, s3, archive or local\n' >&2; exit 1 ;;
+  *) printf '!! VA_IMAGE_SOURCE must be registry, s3, archive or local\n' >&2; exit 1 ;;
 esac
 if [ "$VA_IMAGE_SOURCE" = "archive" ] && [ -z "$VA_IMAGE_ARCHIVE" ]; then
   printf '!! VA_IMAGE_SOURCE=archive needs VA_IMAGE_ARCHIVE=<path or URL>\n' >&2; exit 1
 fi
-[ "$VA_IMAGE_SOURCE" != "dockerhub" ] || VA_IMAGE_ARCHIVE=""
+[ "$VA_IMAGE_SOURCE" != "registry" ] || VA_IMAGE_ARCHIVE=""
 # A saved image archive (.tar or .tar.gz): an absolute local path, or an
 # http(s) URL that is downloaded to a temporary file first.
 if [ -n "$VA_IMAGE_ARCHIVE" ]; then
@@ -458,13 +463,13 @@ choose_image_source() {
   [ -z "$VA_IMAGE_SOURCE" ] || return 0
   [ -z "${VA_REGISTRY_USER:-}" ] && [ -z "${VA_REGISTRY_TOKEN:-}" ] || return 0
   has_tty || return 0
-  printf '  Image source:\n    1) pull %s from Docker Hub (needs a Docker Hub user + token)\n    2) download the latest image archive from Amazon S3\n    3) load a docker-save archive (.tar or .tar.gz) from a local path or URL\n' \
-    "$VA_VOIP_IMAGE" > /dev/tty
+  printf '  Image source:\n    1) pull %s from %s (needs %s)\n    2) download the latest image archive from Amazon S3\n    3) load a docker-save archive (.tar or .tar.gz) from a local path or URL\n' \
+    "$VA_VOIP_IMAGE" "$(registry_name "$VA_VOIP_IMAGE")" "$(registry_needs "$VA_VOIP_IMAGE")" > /dev/tty
   while :; do
-    ask "Choose 1, 2 or 3 [2]"
+    ask "Choose 1, 2 or 3 [1]"
     case "$REPLY" in
-      1) return 0 ;;
-      ''|2) VA_IMAGE_ARCHIVE=$VA_IMAGE_URL; return 0 ;;
+      ''|1) return 0 ;;
+      2) VA_IMAGE_ARCHIVE=$VA_IMAGE_URL; return 0 ;;
       3) break ;;
       *) printf '  enter 1, 2 or 3\n' > /dev/tty ;;
     esac
@@ -646,6 +651,37 @@ registry_of() {
       case "$_first" in localhost|*.*|*:*) printf '%s' "$_first" ;; *) printf '' ;; esac
       ;;
     *) printf '' ;;
+  esac
+}
+
+# What to call the registry an image comes from, and what logging in to it
+# takes — so a ghcr.io pull asks for a GitHub token, not a Docker Hub one.
+registry_name() {
+  case "$(registry_of "$1")" in
+    '') printf 'Docker Hub' ;;
+    ghcr.io) printf 'the GitHub registry (ghcr.io)' ;;
+    *) printf '%s' "$(registry_of "$1")" ;;
+  esac
+}
+registry_needs() {
+  case "$(registry_of "$1")" in
+    '') printf 'a Docker Hub user + token' ;;
+    ghcr.io) printf 'a GitHub user + a classic token with read:packages' ;;
+    *) printf 'a user + token for %s' "$(registry_of "$1")" ;;
+  esac
+}
+registry_user_prompt() {
+  case "$(registry_of "$1")" in
+    '') printf 'Docker Hub user' ;;
+    ghcr.io) printf 'GitHub user' ;;
+    *) printf '%s user' "$(registry_of "$1")" ;;
+  esac
+}
+registry_token_prompt() {
+  case "$(registry_of "$1")" in
+    '') printf 'Docker Hub token (input hidden)' ;;
+    ghcr.io) printf 'GitHub token with read:packages (input hidden)' ;;
+    *) printf '%s token (input hidden)' "$(registry_of "$1")" ;;
   esac
 }
 
@@ -1222,9 +1258,12 @@ pick_docker
 
 step "2/6  Platform image"
 # An archive named up front is always installed, replacing the tag if it is
-# already present — that is how a node is upgraded. Only an unspecified source
-# lets a present image stand.
-if [ -z "$VA_IMAGE_ARCHIVE" ] && docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
+# already present — that is how a node is upgraded — and so is a registry
+# named up front (VA_IMAGE_SOURCE=registry): a moving tag such as :latest is
+# pulled again rather than reused. Only an unspecified source lets a present
+# image stand.
+if [ -z "$VA_IMAGE_ARCHIVE" ] && [ "$VA_IMAGE_SOURCE" != "registry" ] \
+   && docker_cmd image inspect "$VA_VOIP_IMAGE" >/dev/null 2>&1; then
   say "$VA_VOIP_IMAGE is already present"
 elif [ "$VA_IMAGE_SOURCE" = "local" ]; then
   die_no_image
@@ -1287,19 +1326,19 @@ elif choose_image_source && [ -n "$VA_IMAGE_ARCHIVE" ]; then
   LOADED=""
   LOADED_REF=""
 else
-  if [ -z "${VA_REGISTRY_USER:-}" ]; then ask "Docker Hub user"; VA_REGISTRY_USER=$REPLY; fi
+  if [ -z "${VA_REGISTRY_USER:-}" ]; then ask "$(registry_user_prompt "$VA_VOIP_IMAGE")"; VA_REGISTRY_USER=$REPLY; fi
   if [ -z "${VA_REGISTRY_TOKEN:-}" ]; then
-    ask "Docker Hub token (input hidden)" silent
+    ask "$(registry_token_prompt "$VA_VOIP_IMAGE")" silent
     VA_REGISTRY_TOKEN=$REPLY
   fi
   if [ -z "$VA_REGISTRY_USER" ] || [ -z "$VA_REGISTRY_TOKEN" ]; then
-    die "Docker Hub user and token are required to pull $VA_VOIP_IMAGE"
+    die "pulling $VA_VOIP_IMAGE needs $(registry_needs "$VA_VOIP_IMAGE") (VA_REGISTRY_USER / VA_REGISTRY_TOKEN)"
   fi
 
   DOCKER_CONFIG_DIR="$(mktemp -d /tmp/voipappz-docker-auth.XXXXXX)"
   chmod 0700 "$DOCKER_CONFIG_DIR"
   REGISTRY="$(registry_of "$VA_VOIP_IMAGE")"
-  say "logging in to ${REGISTRY:-Docker Hub} with a temporary Docker config"
+  say "logging in to $(registry_name "$VA_VOIP_IMAGE") with a temporary Docker config"
   if [ -n "$REGISTRY" ]; then
     printf '%s' "$VA_REGISTRY_TOKEN" |
       docker_auth_cmd login "$REGISTRY" -u "$VA_REGISTRY_USER" --password-stdin >/dev/null 2>&1
@@ -1310,7 +1349,15 @@ else
   VA_REGISTRY_TOKEN=""
   unset VA_REGISTRY_TOKEN 2>/dev/null
   say "pulling $VA_VOIP_IMAGE"
-  docker_auth_cmd pull -q "$VA_VOIP_IMAGE" >/dev/null || die "could not pull $VA_VOIP_IMAGE"
+  # ghcr.io accepts the login with any GitHub token and refuses only the
+  # pull (403), so the reason has to be said here or the operator gets a bare
+  # "Forbidden".
+  if ! docker_auth_cmd pull -q "$VA_VOIP_IMAGE" >/dev/null; then
+    case "$REGISTRY" in
+      ghcr.io) die "could not pull $VA_VOIP_IMAGE — a 403 means the token lacks read:packages (a classic token: Settings → Developer settings → Tokens (classic)) or $VA_REGISTRY_USER has no access to the package; \"not found\" means that tag does not exist" ;;
+      *) die "could not pull $VA_VOIP_IMAGE" ;;
+    esac
+  fi
   cleanup_docker_config
 fi
 VA_REGISTRY_TOKEN=""
