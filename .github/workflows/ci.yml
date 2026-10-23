@@ -337,8 +337,12 @@ jobs:
           done
           curl -fsS -o /dev/null -m 2 http://127.0.0.1:5000/health
 
+      - name: Build the CLI install.sh runs
+        run: make build
+
       - name: Install a node, no registration
         env:
+          VA_CLI_URL: file://${{ github.workspace }}/bin/voipappz
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           VA_API_URL: http://127.0.0.1:5000
@@ -457,12 +461,18 @@ jobs:
       - name: Check out public installer
         uses: actions/checkout@v7
 
+      # Before the purge: the build runs in Docker. install.sh then runs THIS
+      # checkout's CLI instead of downloading the published one, so a PR is
+      # tested with the CLI it changes.
+      - name: Build the CLI install.sh runs
+        run: make build
 
       - name: Remove preinstalled Docker
         run: tests/clean-runner.sh
 
       - name: Install and register against real mothership
         env:
+          VA_CLI_URL: file://${{ github.workspace }}/bin/voipappz
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           # voipappz/mothership went private on 2026-09-04: its tarball now

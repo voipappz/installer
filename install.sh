@@ -46,6 +46,15 @@ VA_IMAGE_URL="${VA_IMAGE_URL:-https://voipappz-assets-il.s3.il-central-1.amazona
 # dockerhub | s3 | archive — unattended choice of image source. Empty means:
 # VA_IMAGE_ARCHIVE if set, else registry credentials if set, else ask.
 VA_IMAGE_SOURCE="${VA_IMAGE_SOURCE:-}"
+# THE CLI THIS SCRIPT RUNS: this repository's release, mounted over the one
+# baked into the image for every step here (setup, env, node register). The
+# baked CLI is as old as the image, so a fix to registration reached a host
+# only after va-crystal rebuilt — and registration broke for every image when
+# the API made node type a closed list. The running node keeps its own CLI.
+# `latest` is the rolling release of main; VA_CLI_VERSION=v0.2.0 pins a tag,
+# VA_CLI_URL=file:///path/voipappz runs a local build (CI runs its own).
+VA_CLI_VERSION="${VA_CLI_VERSION:-latest}"
+VA_CLI_URL="${VA_CLI_URL:-https://github.com/voipappz/installer/releases/download/$VA_CLI_VERSION/voipappz-linux-amd64}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/voipappz}"
 VA_CONFIG="${VA_CONFIG:-}"
 VA_CA_BUNDLE="${VA_CA_BUNDLE:-}"
@@ -156,6 +165,8 @@ DOCKER_CONFIG_DIR=""
 DOCKER_INSTALL_SCRIPT=""
 API_BODY_FILE=""
 ARCHIVE_DOWNLOAD=""
+CLI_DIR=""
+CLI_BIN=""
 WIZARD_RAN=0
 PROVISIONING_GUARD=""
 WORK_DIR=""
@@ -204,14 +215,14 @@ image_cli() {
   shift
   if [ "$FS_AS_ROOT" = "1" ]; then
     docker_cmd run --rm --network host \
-      --entrypoint voipappz \
+      --entrypoint voipappz -v "$CLI_BIN:/usr/local/bin/voipappz:ro" \
       -e VA_PROJECT_DIR=/work -e "VA_PATH=$_va_path" \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" "$@"
   else
     docker_cmd run --rm --network host \
       --user "$(id -u):$(id -g)" \
-      --entrypoint voipappz \
+      --entrypoint voipappz -v "$CLI_BIN:/usr/local/bin/voipappz:ro" \
       -e VA_PROJECT_DIR=/work -e "VA_PATH=$_va_path" \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" "$@"
@@ -242,12 +253,13 @@ register_node_cli() {
   # docker_with_authorization), so there is nothing here to mask.
   printf '  $ docker run --rm --network host%s --entrypoint voipappz \\\n' \
     "$([ "$FS_AS_ROOT" = "1" ] || printf ' --user %s:%s' "$(id -u)" "$(id -g)")" >&2
+  printf '      -v %s:/usr/local/bin/voipappz:ro \\\n' "$CLI_BIN" >&2
   printf '      -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \\\n' >&2
   printf '      -e VA_API_AUTHORIZATION -e SSL_CERT_FILE=%s \\\n' "$_ssl_cert" >&2
   printf '      -v %s:/work -w /work %s node register\n' "$WORK_DIR" "$VA_VOIP_IMAGE" >&2
   if [ "$FS_AS_ROOT" = "1" ]; then
     docker_with_authorization run --rm --network host \
-      --entrypoint voipappz \
+      --entrypoint voipappz -v "$CLI_BIN:/usr/local/bin/voipappz:ro" \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
       -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" \
       -v "$WORK_DIR:/work" -w /work \
@@ -255,12 +267,36 @@ register_node_cli() {
   else
     docker_with_authorization run --rm --network host \
       --user "$(id -u):$(id -g)" \
-      --entrypoint voipappz \
+      --entrypoint voipappz -v "$CLI_BIN:/usr/local/bin/voipappz:ro" \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
       -e VA_API_AUTHORIZATION -e "SSL_CERT_FILE=$_ssl_cert" \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" node register
   fi
+}
+
+# VA_CLI_URL into a private temp dir, checked like a downloaded image: a
+# published binary runs only against its published .sha256. It runs inside
+# the image (an amd64 static binary), so the host's architecture does not
+# matter. 0755 because the helpers run it as the caller's uid or as root.
+fetch_cli() {
+  CLI_DIR="$(mktemp -d /tmp/voipappz-cli.XXXXXX)" || die "could not create a directory for the CLI"
+  CLI_BIN="$CLI_DIR/voipappz"
+  case "$VA_CLI_URL" in
+    file:///*)
+      cp "${VA_CLI_URL#file://}" "$CLI_BIN" 2>/dev/null || die "could not read the CLI at $VA_CLI_URL" ;;
+    https://*|http://*)
+      curl -fsSL --retry 5 --retry-all-errors -o "$CLI_BIN" "$VA_CLI_URL" \
+        || die "could not download the CLI from $VA_CLI_URL"
+      curl -fsSL --retry 5 --retry-all-errors -o "$CLI_DIR/voipappz.sha256" "$VA_CLI_URL.sha256" \
+        || die "no $VA_CLI_URL.sha256 — the CLI runs only against its published checksum"
+      _cli_want="$(cut -c1-64 < "$CLI_DIR/voipappz.sha256")"
+      _cli_got="$(sha256sum "$CLI_BIN" | cut -d' ' -f1)"
+      [ "$_cli_want" = "$_cli_got" ] \
+        || die "sha256 mismatch for $VA_CLI_URL (expected $_cli_want, got $_cli_got)" ;;
+    *) die "VA_CLI_URL must be an https:// URL or file:///absolute/path" ;;
+  esac
+  chmod 0755 "$CLI_DIR" "$CLI_BIN"
 }
 
 # The image CLI has two wizards. With VA_PATH set it runs the node-only one
@@ -270,14 +306,14 @@ register_node_cli() {
 image_cli_tty() {
   if [ "$FS_AS_ROOT" = "1" ]; then
     docker_cmd run --rm -it --network host \
-      --entrypoint voipappz \
+      --entrypoint voipappz -v "$CLI_BIN:/usr/local/bin/voipappz:ro" \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" setup < /dev/tty
   else
     docker_cmd run --rm -it --network host \
       --user "$(id -u):$(id -g)" \
-      --entrypoint voipappz \
+      --entrypoint voipappz -v "$CLI_BIN:/usr/local/bin/voipappz:ro" \
       -e VA_PROJECT_DIR=/work -e VA_PATH=/work/config/va.yaml \
       -v "$WORK_DIR:/work" -w /work \
       "$VA_VOIP_IMAGE" setup < /dev/tty
@@ -411,6 +447,9 @@ cleanup() {
   esac
   case "$ARCHIVE_DOWNLOAD" in
     /tmp/voipappz-image-archive.*) rm -f -- "$ARCHIVE_DOWNLOAD" "$ARCHIVE_DOWNLOAD.sha256" ;;
+  esac
+  case "$CLI_DIR" in
+    /tmp/voipappz-cli.*) rm -rf -- "$CLI_DIR" ;;
   esac
   VA_REGISTRY_TOKEN=""
   VA_API_AUTHORIZATION=""
@@ -1325,9 +1364,14 @@ step "3/6  Node image"
 # container. The installation directory holds only what belongs to THIS node —
 # config/va.yaml, .env and the CA bundle.
 fs_cmd mkdir -p "$WORK_DIR/config"
-docker_cmd run --rm --entrypoint voipappz "$VA_VOIP_IMAGE" node --help >/dev/null \
-  || die "$VA_VOIP_IMAGE has no working node CLI"
-say "verified the in-container CLI of $VA_VOIP_IMAGE"
+fetch_cli
+if ! CLI_VERSION="$(docker_cmd run --rm --entrypoint voipappz -v "$CLI_BIN:/usr/local/bin/voipappz:ro" \
+       "$VA_VOIP_IMAGE" --version 2>/dev/null)" \
+   || ! docker_cmd run --rm --entrypoint voipappz -v "$CLI_BIN:/usr/local/bin/voipappz:ro" \
+       "$VA_VOIP_IMAGE" node --help >/dev/null; then
+  die "the CLI from $VA_CLI_URL does not run in $VA_VOIP_IMAGE"
+fi
+say "CLI $CLI_VERSION from $VA_CLI_URL, run inside $VA_VOIP_IMAGE"
 
 # THE IMAGE, AND NOTHING ELSE — fetched AND proved runnable, which is the
 # whole point of stopping here rather than at the end of step 2: an archive
