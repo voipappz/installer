@@ -638,8 +638,11 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # customer link path without weakening the rule that forbids implicit moves.
 # va-api: voipappz/mothership renamed the API container from va-app on
 # 2026-09-15 (1383418).
+# A dataset write, not Customer#update: voipappz/api e6160ad (2026-09-24) makes
+# the model refuse to blank a node once set, which is right for the product and
+# only this fixture wants to undo.
 docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
-  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "Customer.find_by_uuid(ENV.fetch(%q{CI_CUSTOMER_UUID})).update(node_uuid: nil)"' \
+  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "n = Customer.dataset.unfiltered.where(uuid: ENV.fetch(%q{CI_CUSTOMER_UUID})).update(node_uuid: nil); abort %Q{unassigned #{n} customers, expected 1} unless n == 1"' \
   >/dev/null
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
