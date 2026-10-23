@@ -999,7 +999,19 @@ create_customer() {
       SELECTED_CUSTOMER_UUID=$_uuid
       say "customer $_uuid created and initialized"
       ;;
-    406|409)
+    406)
+      # Not Acceptable is raised BEFORE the row is written: a password that
+      # breaks the mothership's policy, a name already taken, a node_uuid that
+      # is not one. Nothing was created, so the marker must not outlive the
+      # run and block the next one — and the mothership's own sentence is the
+      # only thing that says which of those it was.
+      _detail="$(printf '%s' "$API_BODY" | jq -r 'if type == "object" then (.message // .error // empty) else empty end' 2>/dev/null || true)"
+      fs_cmd rm -f -- "$PROVISIONING_GUARD" || true
+      die "mothership refused the new customer${_detail:+: $_detail} (HTTP 406)"
+      ;;
+    409)
+      # A conflict the mothership did not explain: it may or may not have
+      # written the row, so the marker stays and names what to resolve.
       die "customer creation conflicted; initialization state is uncertain (marker: $PROVISIONING_GUARD)"
       ;;
     *) api_error "create customer" ;;

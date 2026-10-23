@@ -767,7 +767,10 @@ pass 'installed CA bundle is reused on later runs'
 command -v expect >/dev/null 2>&1 || sudo apt-get install -y -qq expect >/dev/null
 TTY_DIR="$RUN_ROOT/tty-node"
 TTY_LOG="$LOG_DIR/tty-install.log"
-TTY_PASSWORD="Tty-Login-$RANDOM-$RANDOM"
+# The mothership's password policy caps a customer login at 18 characters
+# (Customer#password_error); a longer typed password is refused with HTTP 406
+# before anything is created, which used to read as an unexplained conflict.
+TTY_PASSWORD="Tty-$RANDOM-$RANDOM"
 set +e
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN -u VA_API_AUTHORIZATION -u VA_API_URL -u VA_NATS_URL -u VA_CONFIG \
   INSTALL_DIR="$TTY_DIR" VA_VOIP_IMAGE=installer-ci/va-crystal:tty START=0 VA_REGISTER=1 \
