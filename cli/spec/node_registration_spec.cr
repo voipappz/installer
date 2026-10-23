@@ -121,7 +121,8 @@ describe VoIPAppz::NodeRegistration do
         payload = JSON.parse(requests.last.body).as_h
         payload["uuid"].as_s.should eq(node.uuid)
         payload["name"].as_s.should eq("node-#{node.uuid}")
-        payload["type"].as_s.should eq("switch")
+        # The API's label for a switch node; `switch` itself is a 406 there.
+        payload["type"].as_s.should eq("voip")
         payload["roles"].as_a.map(&.as_s).should eq(["switch"])
         payload["profile"]["sip_port"].as_s.should eq("5060")
         payload["profile"]["port_internal"].as_s.should eq("5070")

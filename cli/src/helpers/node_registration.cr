@@ -86,11 +86,17 @@ module VoIPAppz::NodeRegistration
     base.ends_with?("/api") ? base : "#{base}/api"
   end
 
+  # va.yaml's `type: switch` is how the CLI tells a node document from a
+  # mothership one; the API's `type` is a label from a closed list (voipappz/api
+  # abb8dc3: voip app db egress) and answers 406 to `switch`. What the node does
+  # is in `roles`, which still says switch.
+  API_TYPE = {"switch" => "voip"}
+
   private def node_payload(node : NodeConfig) : String
     {
       uuid:    node.uuid,
       name:    node.name,
-      type:    node.type,
+      type:    API_TYPE.fetch(node.type, node.type),
       roles:   node.roles,
       profile: node.profile,
     }.to_json
