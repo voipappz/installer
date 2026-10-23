@@ -578,6 +578,13 @@ docker compose version >/dev/null 2>&1 \
   || die 'docker compose is missing — the mothership fixture is a compose stack'
 pass 'docker compose present (the mothership fixture needs it; the node does not)'
 
+# The fixture's own secrets. The mothership's scripts/setup.sh generates them
+# on a real install; this test starts the compose file directly, so it supplies
+# the ones the compose file refuses to start without (voipappz/mothership
+# 823f8e166, 2026-09-24: the alert mailbox UI is published, behind a password).
+VA_MAILPIT_UI_PASSWORD="${VA_MAILPIT_UI_PASSWORD:-$(openssl rand -hex 16)}"
+export VA_MAILPIT_UI_PASSWORD
+
 MOTHERSHIP_UP=1
 (
   cd "$MOTHERSHIP_DIR"
@@ -631,9 +638,19 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # customer link path without weakening the rule that forbids implicit moves.
 # va-api: voipappz/mothership renamed the API container from va-app on
 # 2026-09-15 (1383418).
-docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
-  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "Customer.find_by_uuid(ENV.fetch(%q{CI_CUSTOMER_UUID})).update(node_uuid: nil)"' \
-  >/dev/null
+# A dataset write, not Customer#update: voipappz/api e6160ad (2026-09-24) makes
+# the model refuse to blank a node once set, which is right for the product and
+# only this fixture wants to undo. A dataset write also skips after_save, so the
+# Redis caches it would have cleared (the row, and customer:<uuid>:*) are
+# cleared here, or GET /customers keeps serving the old node for 30 minutes.
+docker exec -i -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
+  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -' >/dev/null <<'RUBY'
+uuid = ENV.fetch('CI_CUSTOMER_UUID')
+n = Customer.dataset.unfiltered.where(uuid: uuid).update(node_uuid: nil)
+abort "unassigned #{n} customers, expected 1" unless n == 1
+Customer.cache_delete_pk(uuid) if Customer.respond_to?(:cache_delete_pk)
+Customer[uuid]._delete_cache
+RUBY
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
 
