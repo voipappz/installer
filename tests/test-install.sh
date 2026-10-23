@@ -682,10 +682,10 @@ if ! node=$(api GET "/nodes/$NODE_UUID" 2>&1); then
   show_safe_log "$LAST_LOG"
   die 'existing CLI registered only the YAML node'
 fi
-# ROLES, NOT type. voipappz-api dropped node.type in c44d6fe89 ("a node is
-# what its roles say" — type was a second, unenforced spelling that had already
-# drifted from roles in the live deployment), so the field is simply absent from
-# the response now. `source: database` is the other half of the claim: this is a
+# ROLES, NOT type. Selection reads roles only. voipappz-api dropped node.type in
+# c44d6fe89 and brought it back in abb8dc3 as a label from a closed list (voip
+# app db egress), which is why the CLI sends `voip` for va.yaml's `switch`.
+# `source: database` is the other half of the claim: this is a
 # row the CLI created, not the mothership's own va.yaml node showing through.
 assert_jq "$node" \
   ".uuid == \"$NODE_UUID\" and (.roles | index(\"switch\")) != null and .source == \"database\"" \
