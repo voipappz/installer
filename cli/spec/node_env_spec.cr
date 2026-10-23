@@ -239,6 +239,18 @@ describe "VoIPAppz::NodeEnv.problems" do
     problems.size.should eq 6
   end
 
+  # The node speaks NATS over TCP (nats://, tls://) and over WebSocket
+  # (https://, wss://, http://, ws://) since va-crystal #69; refusing those
+  # halted a node at boot that would have connected.
+  it "accepts every broker scheme the node speaks, and refuses anything else" do
+    %w[nats://b:4222 tls://b:4222 https://b.example.com wss://b.example.com:443 http://10.0.0.5:8080 ws://10.0.0.5:8080].each do |url|
+      env = VoIPAppz::NodeEnv.from(config_from(NODE_ENV_YAML.sub("'nats://broker.example.com:4222'", "'#{url}'")))
+      VoIPAppz::NodeEnv.problems(env, process: secrets, boot: true).should be_empty, "#{url} was refused"
+    end
+    env = VoIPAppz::NodeEnv.from(config_from(NODE_ENV_YAML.sub("'nats://broker.example.com:4222'", "'ftp://b:21'")))
+    VoIPAppz::NodeEnv.problems(env, process: secrets, boot: true).join("\n").should contain "broker.url ftp://b:21 must be"
+  end
+
   it "rejects 0.0.0.0 and a missing address, which is what kamailio binds when nothing resolves" do
     env = VoIPAppz::NodeEnv.from(config_from(<<-YAML))
       nodes:

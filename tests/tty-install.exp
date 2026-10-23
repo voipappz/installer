@@ -16,7 +16,7 @@ set token $env(TOKEN)
 
 spawn sh $installer
 expect {
-  -re {Choose 1, 2 or 3 \[2\]\S*: }                    { send "3\r"; exp_continue }
+  -re {Choose 1, 2 or 3 \[1\]\S*: }                    { send "3\r"; exp_continue }
   -re {Absolute path or http\(s\) URL of the image archive\S*: } { send "$archive\r"; exp_continue }
   -re {Node name \[[^\]]*\]\S*: }                      { send "tty-node\r"; exp_continue }
   -re {Choose internal IP \[1\]\S*: }                  { send "\r"; exp_continue }
@@ -27,7 +27,7 @@ expect {
   -re {new customer's login email\S*: }                { send "tty-owner@installer-ci.test\r"; exp_continue }
   -re {new customer's login password \(input hidden\)\S*: } { send "$env(TTY_PASSWORD)\r"; exp_continue }
   -re {Account email\S*: }                             { puts "\n!! fell through to email/password"; exit 3 }
-  -re {Docker Hub user\S*: }                           { puts "\n!! asked for Docker Hub although an archive was chosen"; exit 3 }
+  -re {GitHub user\S*: }                               { puts "\n!! asked for a registry login although an archive was chosen"; exit 3 }
   -re {VoIPAppz installation complete}              { exp_continue }
   timeout                                           { puts "\n!! timed out waiting for a prompt"; exit 2 }
   eof

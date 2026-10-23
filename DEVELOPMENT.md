@@ -45,8 +45,8 @@ sneaks into the installer or its tests (the project deliberately has none).
 ## Running the installer from your checkout
 
 ```sh
-make get                             # the image: S3 archive, verified, no questions
-make get dockerhub                   # ... pulled instead, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
+make get                             # pull ghcr.io/voipappz/node:latest, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN (GitHub, read:packages)
+make get s3                          # ... the newest S3 archive instead
 make get ARCHIVE=latest              # ... docker load the newest ../va-crystal/ci/build/*.tar.gz
 make get ARCHIVE=/path/img.tar.gz    # ... a path or an http(s) URL (which must publish .sha256)
 make install                         # install THAT image; never fetches, never asks
