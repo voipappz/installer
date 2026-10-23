@@ -2,6 +2,7 @@ require "admiral"
 require "log"
 require "mcp"
 require "../helpers/mcp_client"
+require "../helpers/mcp_wire"
 require "../helpers/colors"
 
 module VoIPAppz

@@ -126,6 +126,26 @@ jobs:
           ./bin/voipappz monitor --help | grep -q 'node-monitor' || {
             echo "!! 'monitor' did not fall through to the node monitor without a catalog" >&2; exit 1; }
 
+      # One burst, the way a client writes: until mcp_wire.cr, only
+      # `initialize` was answered and everything behind the params-less
+      # `notifications/initialized` waited forever. A tool call that runs and
+      # a write that is refused are the two halves of the contract.
+      - name: The MCP server answers over stdio
+        run: |
+          out=$({ printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"voipappz_run","arguments":{"command":"--version"}}}' \
+            '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"voipappz_run","arguments":{"command":"clean"}}}'
+            sleep 5; } | timeout 20 ./bin/voipappz mcp 2>/dev/null || true)
+          printf '%s\n' "$out"
+          check() { printf '%s\n' "$out" | jq -se "$1" >/dev/null || { echo "!! MCP: $2" >&2; exit 1; }; }
+          check 'any(.[]; .id == 1 and .result.serverInfo.name == "voipappz")' 'initialize'
+          check 'any(.[]; .id == 2 and ([.result.tools[].name] | index("voipappz_run")))' 'tools/list without params'
+          check 'any(.[]; .id == 3 and (.result.content[0].text | startswith("exit=0")))' 'a read-only tool call'
+          check 'any(.[]; .id == 4 and (.result.content[0].text | startswith("refused:")))' 'a destructive call is refused'
+
       # THE BINARY, EVERY RUN. The mothership's CI installs a stack and a node
       # with it rather than compiling its own copy, and va-crystal bakes it
       # into the node image — so every push should leave something they can
