@@ -9,7 +9,7 @@ on:
       mothership_ref:
         description: Mothership commit or branch to validate against
         required: false
-        default: 1d638d64a91f176020815095ed8f32d82d53b901
+        default: 170c396e64c269a8f3b110c19db1387250b9905f
         type: string
 
 permissions:
@@ -89,8 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      VA_VOIP_IMAGE: ${{ vars.NODE_TEST_IMAGE || 'nirlevi/va-crystal:node' }}
-      MOTHERSHIP_REF: ${{ inputs.mothership_ref || '1d638d64a91f176020815095ed8f32d82d53b901' }}
+      VA_VOIP_IMAGE: ${{ vars.NODE_TEST_IMAGE || 'nirlevi/va-crystal:node-2026.10.23' }}
+      MOTHERSHIP_REF: ${{ inputs.mothership_ref || '170c396e64c269a8f3b110c19db1387250b9905f' }}
       MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
     steps:
       - uses: actions/checkout@v7
@@ -173,7 +173,7 @@ jobs:
           # The Docker Hub copy, which these secrets can read. Switch to
           # ghcr.io/voipappz/node:latest once the repo holds a GitHub
           # read:packages token (install.sh's default since 2026-10-22).
-          VA_VOIP_IMAGE: nirlevi/va-crystal:node
+          VA_VOIP_IMAGE: nirlevi/va-crystal:node-2026.10.23
           VA_API_URL: http://127.0.0.1:5000
           VA_NATS_URL: nats://127.0.0.1:4222
         run: sh install.sh --no-register
@@ -301,14 +301,14 @@ jobs:
           # The Docker Hub copy, which these secrets can read. Switch to
           # ghcr.io/voipappz/node:latest once the repo holds a GitHub
           # read:packages token (install.sh's default since 2026-10-22).
-          VA_VOIP_IMAGE: nirlevi/va-crystal:node
+          VA_VOIP_IMAGE: nirlevi/va-crystal:node-2026.10.23
           # voipappz/mothership went private on 2026-09-04: its tarball now
           # needs a read token. This job already requires secrets (the registry
           # pair), so it is the one place in this workflow that can hold one —
           # unlike a job that runs on fork PRs and must answer at a
           # fixture instead.
           MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
-          VA_MOTHERSHIP_REF: ${{ inputs.mothership_ref || '1d638d64a91f176020815095ed8f32d82d53b901' }}
+          VA_MOTHERSHIP_REF: ${{ inputs.mothership_ref || '170c396e64c269a8f3b110c19db1387250b9905f' }}
         # The mothership fixture is DOWNLOADED, never cloned — the same tarball
         # its own installer fetches.
         run: tests/test-install.sh

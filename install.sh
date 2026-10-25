@@ -1017,7 +1017,14 @@ create_customer() {
       SELECTED_CUSTOMER_UUID=$_uuid
       say "customer $_uuid created and initialized"
       ;;
-    406|409)
+    406)
+      # The API's 406 is a validation refusal, not a conflict: nothing was
+      # created, and its message says which field. Repeat it, or the operator
+      # is left guessing (CI lost a day to "conflicted" over a node_uuid check).
+      _msg="$(printf '%s' "$API_BODY" | jq -r '.message // .error // empty' 2>/dev/null || true)"
+      die "mothership refused the new customer: ${_msg:-HTTP 406, no message} (marker: $PROVISIONING_GUARD)"
+      ;;
+    409)
       die "customer creation conflicted; initialization state is uncertain (marker: $PROVISIONING_GUARD)"
       ;;
     *) api_error "create customer" ;;

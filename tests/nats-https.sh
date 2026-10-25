@@ -106,6 +106,10 @@ connected() {
 }
 wait_connected() {
   for _ in $(seq 90); do connected && return; sleep 1; done
+  # Say why: without the node's own words this failure is a 90-second silence.
+  # The key-redaction assertion below is what keeps this tail safe to print.
+  echo '--- node log (last 40 lines)' >&2
+  docker logs --tail 40 "$ID-node" >&2 2>&1 || true
   fail 'node did not authenticate to the broker'
 }
 roundtrip() {
