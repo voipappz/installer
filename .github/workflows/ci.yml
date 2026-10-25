@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      mothership_ref:
+        description: Mothership commit or branch to validate against
+        required: false
+        default: 1d638d64a91f176020815095ed8f32d82d53b901
+        type: string
 
 permissions:
   contents: read
@@ -28,7 +34,7 @@ jobs:
           test -x install.sh
           sh -n install.sh
           dash -n install.sh
-          bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+          bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh tests/nats-https.sh
           # Preinstalled on a GitHub runner, absent from act's image — these
           # two lines are so `act -j shell` runs the same gate locally. The
           # update is not optional: act's image ships an EMPTY package list, so
@@ -36,7 +42,7 @@ jobs:
           # which reads as a missing package rather than a missing index.
           command -v shellcheck >/dev/null || { sudo apt-get update -qq \
             && sudo apt-get install -y -qq shellcheck; }
-          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh tests/nats-https.sh
           git diff --check
           test -z "$(find tests -type f -name '*.py' -print -quit)"
           ! grep -Eq 'python(3)?' install.sh
@@ -73,6 +79,40 @@ jobs:
           if make -n iso | grep -q "dest_dir="; then echo "!! iso names a dest_dir with none set" >&2; exit 1; fi
           make -n iso-deliver             | grep -q 'set ISO_HOST'
           make check-make
+
+  nats-https:
+    name: Node HTTPS through Kong / NATS authentication
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VA_VOIP_IMAGE: ${{ vars.NODE_TEST_IMAGE || 'nirlevi/va-crystal:node' }}
+      MOTHERSHIP_REF: ${{ inputs.mothership_ref || '1d638d64a91f176020815095ed8f32d82d53b901' }}
+      MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Registry credentials for the real node image
+        env:
+          REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          # act can use an already cached image without registry secrets.
+          if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_TOKEN" ]; then
+            auth=$(mktemp -d)
+            chmod 700 "$auth"
+            echo "DOCKER_CONFIG=$auth" >> "$GITHUB_ENV"
+            echo "NATS_TEST_DOCKER_CONFIG=$auth" >> "$GITHUB_ENV"
+            printf '%s' "$REGISTRY_TOKEN" | docker --config "$auth" login --username "$REGISTRY_USER" --password-stdin
+          fi
+      - name: Internal NATS and external HTTPS, keys, TLS and reconnect
+        run: make test-nats-https
+      - name: Remove temporary registry credentials
+        if: always()
+        run: |
+          if [ -n "${NATS_TEST_DOCKER_CONFIG:-}" ]; then rm -rf -- "$NATS_TEST_DOCKER_CONFIG"; fi
 
   # A NODE ON A CLEAN HOST, WITH NOTHING ELSE. The integration job below proves
   # registration against a real mothership; this one proves the thing that job
@@ -268,6 +308,7 @@ jobs:
           # unlike a job that runs on fork PRs and must answer at a
           # fixture instead.
           MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
+          VA_MOTHERSHIP_REF: ${{ inputs.mothership_ref || '1d638d64a91f176020815095ed8f32d82d53b901' }}
         # The mothership fixture is DOWNLOADED, never cloned — the same tarball
         # its own installer fetches.
         run: tests/test-install.sh

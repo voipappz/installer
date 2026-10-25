@@ -64,10 +64,8 @@ sip_interfaces:
   gateways:
     - '198.51.100.0/24|00000000-0000-0000-0000-000000000004'
 
-# WHERE THE NODE REPORTS. The installer writes both when they are missing:
-# the mothership from VA_API_URL (or the prompt), the broker from the
-# mothership's host on port 4222. A value already here always wins.
+# WHERE THE NODE REPORTS. One external URL: the broker is derived as /nats.
+# An optional broker.url override can name an internal nats://host:4222.
+# Credentials belong in the protected environment, never this YAML.
 mothership:
   url: 'https://cloud.voipappz.io'
-broker:
-  url: 'nats://cloud.voipappz.io:4222'

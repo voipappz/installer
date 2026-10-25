@@ -225,18 +225,24 @@ if [ -f "$VA_CONFIG" ]; then
   esac
 
   BROKER=$(yaml_section_value broker url)
+  if [ -z "$BROKER" ] && [ -n "$MOTHERSHIP" ]; then
+    _scheme=${MOTHERSHIP%%://*}
+    _authority=${MOTHERSHIP#*://}; _authority=${_authority%%[/?#]*}; _authority=${_authority##*@}
+    case "$_scheme" in http|https) BROKER="$_scheme://$_authority/nats" ;; esac
+  fi
+  BROKER_DISPLAY=$(printf '%s' "$BROKER" | sed 's#://[^@/]*@#://<credential>@#')
   case "$BROKER" in
     '') bad "broker.url is empty — the node needs an external NATS broker to come up" \
-            "nats://<host>:4222 in $VA_CONFIG" ;;
-    nats://*|tls://*|ws://*|wss://*)
+            "set mothership.url to https://<host>, or provide an internal broker override" ;;
+    nats://*|tls://*|ws://*|wss://*|http://*|https://*)
       ok "broker $(printf '%s' "$BROKER" | sed 's#://[^@/]*@#://<credential>@#')" ;;
-    *)  bad "broker.url is not a NATS URL: $BROKER" "nats://<host>:4222" ;;
+    *)  bad "broker.url is not a NATS URL: $BROKER_DISPLAY" "nats://<host>:4222" ;;
   esac
   # va.yaml is world-readable; ./.env is not. A broker credential belongs in
   # VA_NATS_URL_CREDENTIALED, which up.sh passes to the container as NATS_URL.
   case "$BROKER" in
     *://*@*) warn "the broker URL carries a credential, and $VA_CONFIG is world-readable" \
-                  "keep the bare nats://host:4222 here and put the full URL in $VA_ENV_FILE as VA_NATS_URL_CREDENTIALED" ;;
+                  "keep the bare URL here and put the full URL in $VA_ENV_FILE as VA_NATS_URL_CREDENTIALED" ;;
   esac
 
   # ── the credential boundary ───────────────────────────────────────────────
