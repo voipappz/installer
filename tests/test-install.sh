@@ -641,14 +641,19 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # customer link path without weakening the rule that forbids implicit moves.
 # va-api: voipappz/mothership renamed the API container from va-app on
 # 2026-09-15 (1383418).
-# PAST VALIDATION: since voipappz/api e6160ad a customer's node_uuid "cannot be
-# removed" through the model, which is the rule for real callers. This is
-# fixture setup. Through save, not a dataset update: GET /customers/:uuid reads
-# Customer[uuid] from the caching plugin (30 min TTL), and only a model save
-# expires that entry — a dataset update left the API serving the old node_uuid.
-docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
-  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "c = Customer[ENV.fetch(%q{CI_CUSTOMER_UUID})]; c.node_uuid = nil; c.save(validate: false)"' \
-  >/dev/null
+# A dataset write, not Customer#update: voipappz/api e6160ad (2026-09-24) makes
+# the model refuse to blank a node once set, which is right for the product and
+# only this fixture wants to undo. A dataset write also skips after_save, so the
+# Redis caches it would have cleared (the row, and customer:<uuid>:*) are
+# cleared here, or GET /customers keeps serving the old node for 30 minutes.
+docker exec -i -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
+  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -' >/dev/null <<'RUBY'
+uuid = ENV.fetch('CI_CUSTOMER_UUID')
+n = Customer.dataset.unfiltered.where(uuid: uuid).update(node_uuid: nil)
+abort "unassigned #{n} customers, expected 1" unless n == 1
+Customer.cache_delete_pk(uuid) if Customer.respond_to?(:cache_delete_pk)
+Customer[uuid]._delete_cache
+RUBY
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
 
@@ -765,10 +770,11 @@ pass 'installed CA bundle is reused on later runs'
 command -v expect >/dev/null 2>&1 || sudo apt-get install -y -qq expect >/dev/null
 TTY_DIR="$RUN_ROOT/tty-node"
 TTY_LOG="$LOG_DIR/tty-install.log"
-# The mothership's password policy caps a customer login at 18 characters
-# (Customer#password_error); a longer typed password is refused with HTTP 406
-# before anything is created, which used to read as an unexplained conflict.
-TTY_PASSWORD="Tty-$RANDOM-$RANDOM"
+# 12-18 characters with a special one: the customer profile's password rule,
+# enforced by the API since 2026-10-21 (voipappz-api e18918a). Two $RANDOMs
+# ran to 21 characters and the real-terminal install died on a 406 the
+# installer reported as "conflicted".
+TTY_PASSWORD="$(printf 'Tty-Login-%05d!' "$RANDOM")"
 set +e
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN -u VA_API_AUTHORIZATION -u VA_API_URL -u VA_NATS_URL -u VA_CONFIG \
   INSTALL_DIR="$TTY_DIR" VA_VOIP_IMAGE=installer-ci/va-crystal:tty START=0 VA_REGISTER=1 \
@@ -867,7 +873,7 @@ assert_jq "$node" '.name == "Installer-CI-Node-Updated"' \
   'changed YAML node fields are reconciled by the CLI'
 
 SECOND_EMAIL="owner-$RANDOM@installer-ci.test"
-SECOND_PASSWORD="Ci-Login-$RANDOM-$RANDOM"
+SECOND_PASSWORD="$(printf 'Ci-Login-%05d!' "$RANDOM")"   # 15 chars: inside the 12-18 rule
 run_installer success new-customer VA_CUSTOMER_NAME=Installer-CI-Secondary \
   VA_ACCOUNT_EMAIL="$SECOND_EMAIL" VA_ACCOUNT_PASSWORD="$SECOND_PASSWORD"
 customers=$(api GET /customers)
@@ -950,7 +956,7 @@ pass 'Account Basic credential is absent from YAML, .env, and installer logs'
 # VA_ROOT and answers 403 to everyone else. A live install met exactly this, and
 # a 403 must stop before any customer change instead of reading as a bad login.
 LIMITED_EMAIL=installer-ci-limited@example.invalid
-LIMITED_PASSWORD='Vpz-Installer-CI-Limited-2026!'
+LIMITED_PASSWORD='Vpz-CI-Limited-26!'   # 18 chars: the API's password rule also covers Accounts
 BOOTSTRAP_ACL=$(api GET /accounts | jq -r --arg email "$ACCOUNT_EMAIL" \
   '.[] | select(.email == $email) | .acl.uuid')
 [[ $BOOTSTRAP_ACL =~ ^[0-9a-f-]{36}$ ]] || die 'could not read the bootstrap Account ACL'

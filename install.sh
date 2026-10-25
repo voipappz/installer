@@ -1020,7 +1020,8 @@ create_customer() {
     406)
       # The API's 406 is a validation refusal, not a conflict: nothing was
       # created, and its message says which field. Repeat it, or the operator
-      # is left guessing (CI lost a day to "conflicted" over a node_uuid check).
+      # is left guessing (CI lost a day to "conflicted" over a password that
+      # was longer than the customer profile's 18-character rule).
       _msg="$(printf '%s' "$API_BODY" | jq -r '.message // .error // empty' 2>/dev/null || true)"
       die "mothership refused the new customer: ${_msg:-HTTP 406, no message} (marker: $PROVISIONING_GUARD)"
       ;;
