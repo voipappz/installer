@@ -14,6 +14,10 @@ on:
 
 permissions:
   contents: read
+  # The node image is a private ghcr.io package; the job token can pull it
+  # once the package grants this repository access. GHCR_USER/GHCR_TOKEN (a
+  # read:packages token) override it where that grant is missing.
+  packages: read
 
 concurrency:
   group: installer-${{ github.workflow }}-${{ github.ref }}
@@ -89,15 +93,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      VA_VOIP_IMAGE: ${{ vars.NODE_TEST_IMAGE || 'nirlevi/va-crystal:node-2026.10.23' }}
+      VA_VOIP_IMAGE: ${{ vars.NODE_TEST_IMAGE || 'ghcr.io/voipappz/node:latest' }}
       MOTHERSHIP_REF: ${{ inputs.mothership_ref || '170c396e64c269a8f3b110c19db1387250b9905f' }}
       MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - name: Registry credentials for the real node image
         env:
-          REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          REGISTRY_USER: ${{ secrets.GHCR_USER || github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           # act can use an already cached image without registry secrets.
           if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_TOKEN" ]; then
@@ -105,7 +109,7 @@ jobs:
             chmod 700 "$auth"
             echo "DOCKER_CONFIG=$auth" >> "$GITHUB_ENV"
             echo "NATS_TEST_DOCKER_CONFIG=$auth" >> "$GITHUB_ENV"
-            printf '%s' "$REGISTRY_TOKEN" | docker --config "$auth" login --username "$REGISTRY_USER" --password-stdin
+            printf '%s' "$REGISTRY_TOKEN" | docker --config "$auth" login ghcr.io --username "$REGISTRY_USER" --password-stdin
           fi
       - name: Internal NATS and external HTTPS, keys, TLS and reconnect
         run: make test-nats-https
@@ -168,12 +172,11 @@ jobs:
 
       - name: Install a node, no registration
         env:
-          VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          # The Docker Hub copy, which these secrets can read. Switch to
-          # ghcr.io/voipappz/node:latest once the repo holds a GitHub
-          # read:packages token (install.sh's default since 2026-10-22).
-          VA_VOIP_IMAGE: nirlevi/va-crystal:node-2026.10.23
+          VA_REGISTRY_USER: ${{ secrets.GHCR_USER || github.actor }}
+          VA_REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          # install.sh's own default since 2026-10-22, and the only node image
+          # that speaks HTTPS /nats. The Docker Hub copy stopped on 2026-08-31.
+          VA_VOIP_IMAGE: ghcr.io/voipappz/node:latest
           VA_API_URL: http://127.0.0.1:5000
           VA_NATS_URL: nats://127.0.0.1:4222
         run: sh install.sh --no-register
@@ -296,12 +299,11 @@ jobs:
 
       - name: Install and register against real mothership
         env:
-          VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          # The Docker Hub copy, which these secrets can read. Switch to
-          # ghcr.io/voipappz/node:latest once the repo holds a GitHub
-          # read:packages token (install.sh's default since 2026-10-22).
-          VA_VOIP_IMAGE: nirlevi/va-crystal:node-2026.10.23
+          VA_REGISTRY_USER: ${{ secrets.GHCR_USER || github.actor }}
+          VA_REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          # install.sh's own default since 2026-10-22, and the only node image
+          # that speaks HTTPS /nats. The Docker Hub copy stopped on 2026-08-31.
+          VA_VOIP_IMAGE: ghcr.io/voipappz/node:latest
           # voipappz/mothership went private on 2026-09-04: its tarball now
           # needs a read token. This job already requires secrets (the registry
           # pair), so it is the one place in this workflow that can hold one —
