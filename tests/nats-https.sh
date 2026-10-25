@@ -40,7 +40,8 @@ for image in "$NODE_IMAGE" "$NATS_IMAGE" "$KONG_IMAGE" "$BOX_IMAGE"; do
 done
 # Use the real configuration contract, including private native/monitor ports.
 sh "$MOTHERSHIP_DIR/scripts/check-kong-contract.sh"
-if VA_NATS_TOKEN='' docker compose --env-file /dev/null -f "$MOTHERSHIP_DIR/docker-compose.yaml" config --quiet > "$RUN_DIR/empty-key.log" 2>&1; then
+# Satisfy the unrelated ACME requirement: Compose interpolation order varies.
+if VA_DOMAIN=nats-ci.invalid VA_NATS_TOKEN='' docker compose --env-file /dev/null -f "$MOTHERSHIP_DIR/docker-compose.yaml" config --quiet > "$RUN_DIR/empty-key.log" 2>&1; then
   fail 'Compose accepted an empty NATS key'
 fi
 grep -q 'VA_NATS_TOKEN must be set and nonempty' "$RUN_DIR/empty-key.log" || fail 'Compose did not reject the empty key for the expected reason'
