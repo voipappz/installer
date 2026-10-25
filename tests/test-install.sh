@@ -770,7 +770,11 @@ pass 'installed CA bundle is reused on later runs'
 command -v expect >/dev/null 2>&1 || sudo apt-get install -y -qq expect >/dev/null
 TTY_DIR="$RUN_ROOT/tty-node"
 TTY_LOG="$LOG_DIR/tty-install.log"
-TTY_PASSWORD="Tty-Login-$RANDOM-$RANDOM"
+# 12-18 characters with a special one: the customer profile's password rule,
+# enforced by the API since 2026-10-21 (voipappz-api e18918a). Two $RANDOMs
+# ran to 21 characters and the real-terminal install died on a 406 the
+# installer reported as "conflicted".
+TTY_PASSWORD="$(printf 'Tty-Login-%05d!' "$RANDOM")"
 set +e
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN -u VA_API_AUTHORIZATION -u VA_API_URL -u VA_NATS_URL -u VA_CONFIG \
   INSTALL_DIR="$TTY_DIR" VA_VOIP_IMAGE=installer-ci/va-crystal:tty START=0 VA_REGISTER=1 \
@@ -869,7 +873,7 @@ assert_jq "$node" '.name == "Installer-CI-Node-Updated"' \
   'changed YAML node fields are reconciled by the CLI'
 
 SECOND_EMAIL="owner-$RANDOM@installer-ci.test"
-SECOND_PASSWORD="Ci-Login-$RANDOM-$RANDOM"
+SECOND_PASSWORD="$(printf 'Ci-Login-%05d!' "$RANDOM")"   # 15 chars: inside the 12-18 rule
 run_installer success new-customer VA_CUSTOMER_NAME=Installer-CI-Secondary \
   VA_ACCOUNT_EMAIL="$SECOND_EMAIL" VA_ACCOUNT_PASSWORD="$SECOND_PASSWORD"
 customers=$(api GET /customers)
@@ -952,7 +956,7 @@ pass 'Account Basic credential is absent from YAML, .env, and installer logs'
 # VA_ROOT and answers 403 to everyone else. A live install met exactly this, and
 # a 403 must stop before any customer change instead of reading as a bad login.
 LIMITED_EMAIL=installer-ci-limited@example.invalid
-LIMITED_PASSWORD='Vpz-Installer-CI-Limited-2026!'
+LIMITED_PASSWORD='Vpz-CI-Limited-26!'   # 18 chars: the API's password rule also covers Accounts
 BOOTSTRAP_ACL=$(api GET /accounts | jq -r --arg email "$ACCOUNT_EMAIL" \
   '.[] | select(.email == $email) | .acl.uuid')
 [[ $BOOTSTRAP_ACL =~ ^[0-9a-f-]{36}$ ]] || die 'could not read the bootstrap Account ACL'
