@@ -19,7 +19,7 @@ MAKEFLAGS   += --no-print-directory --no-builtin-rules --no-builtin-variables
 .DEFAULT_GOAL := help
 # Every target in one place so check-make can prove each still has a rule.
 # Add a target: add it here.
-PHONY_TARGETS := help check check-make test get install \
+PHONY_TARGETS := help check check-make test test-nats-https get install \
                  setup verify up down logs health cli \
                  build cli-test install-cli \
                  iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
@@ -55,7 +55,7 @@ SCRIPTS = install.sh scripts/common.sh scripts/setup.sh scripts/verify.sh script
           scripts/install-cli.sh scripts/node-images.sh \
           scripts/check-packer-targets.sh scripts/iso-upload.sh \
           scripts/extract-casper.sh tests/clean-runner.sh \
-          tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+          tests/test-install.sh tests/unit.sh tests/two-pbx.sh tests/nats-https.sh
 
 check: ## Everything CI runs first: syntax, shellcheck, clean diff, no python, unit tests
 	@printf '\n\033[1m1. syntax\033[0m — every script parses under the shell that runs it\n'
@@ -63,7 +63,7 @@ check: ## Everything CI runs first: syntax, shellcheck, clean diff, no python, u
 	sh -n install.sh
 	dash -n install.sh
 	for s in scripts/*.sh; do sh -n "$$s" && dash -n "$$s"; done
-	bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+	bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh tests/nats-https.sh
 	@printf '\n\033[1m2. shellcheck\033[0m — the lint CI runs, on all $(words $(SCRIPTS)) scripts\n'
 	@if command -v shellcheck >/dev/null 2>&1; then \
 	  echo "shellcheck $(SCRIPTS)"; shellcheck $(SCRIPTS); \
@@ -85,6 +85,9 @@ check: ## Everything CI runs first: syntax, shellcheck, clean diff, no python, u
 	@printf '\n\033[1m7. packer\033[0m — every -only= target names a source packer declares\n'
 	sh scripts/check-packer-targets.sh
 	@printf '\n\033[1mcheck green\033[0m — this is the "Shell" CI job; the integration job is `make test`\n\n'
+
+test-nats-https: ## Real node through Kong HTTPS: NATS keys, TLS, JetStream and reconnect
+	bash tests/nats-https.sh
 
 # A .PHONY target with no rule silently does nothing, so a deleted rule looks
 # like a working `make check` that skips steps.

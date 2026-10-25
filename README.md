@@ -38,7 +38,7 @@ VoIPAppz VoIP node installer
   Choose internal IP [1]:          ← Enter
   External IP [10.0.0.10]:         ← Enter, or the public address
   Mothership URL [https://cloud.voipappz.io]:   ← Enter, or your own
-  broker derived from the mothership host: nats://cloud.voipappz.io:4222
+  broker derived from the mothership URL: https://cloud.voipappz.io/nats
 
 5/6  Registration
   Account token (input hidden; empty = use email + password):   ← paste, or Enter
@@ -224,7 +224,8 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_CONFIG=/path/va.yaml` | Install this node YAML instead of answering the wizard. |
 | `VA_API_URL=https://…` | Mothership URL; persisted to `va.yaml`. |
 | `VA_API_AUTHORIZATION='Basic …'` | Account key, instead of the prompt. |
-| `VA_NATS_URL=nats://…` | Broker, when the YAML has none. May carry credentials (`nats://user:token@host:4222`): they go to the mode-0600 `.env` and the container environment only — the YAML gets the bare URL. ALL secrets live in env, never in `va.yaml`. |
+| `VA_NATS_TOKEN=…` | Mothership URL-safe NATS key. Uses the derived `/nats` endpoint without a second URL; kept out of YAML. |
+| `VA_NATS_URL=https://…/nats` | Broker, when the YAML has none. May carry credentials (`https://default:token@host/nats`): they go to the mode-0600 `.env` and the container environment only — the YAML gets the bare URL. ALL secrets live in env, never in `va.yaml`. |
 | `VA_CUSTOMER_UUID` / `VA_CUSTOMER_NAME` | Pick (or create) the customer. |
 | `VA_ACCOUNT_EMAIL` / `VA_ACCOUNT_PASSWORD` | The login of the Account a *new* customer gets; asked when a customer is created. The installer signs in with it once to prove it works, then forgets the password. |
 | `VA_IMAGE_SOURCE=registry\|s3\|archive\|local` | Image source without the menu. `registry` pulls `VA_VOIP_IMAGE` (always, so a moving tag is refreshed) with `VA_REGISTRY_USER` / `VA_REGISTRY_TOKEN`; `dockerhub` is its old name. `local` uses the image already on this host and never fetches. |
@@ -370,3 +371,45 @@ va-crystal pins one of those tags for the binary it bakes into
   drives a SIPp round trip.
 - Contributing: `main` is protected. Open a pull request; it merges once all
   seven CI jobs are green. See DEVELOPMENT.md, "Landing a change".
+
+### Broker transport
+
+Normal node configuration uses one public origin:
+
+```yaml
+mothership:
+  url: https://switch.voipappz.io
+env: {}
+```
+
+The installer derives `https://switch.voipappz.io/nats`, preserving a custom
+HTTPS port. Existing `broker.url` values are preserved; an explicit
+`nats://internal-host:4222` override remains available for internal services
+and tests. Public connections should use HTTPS/WSS through Kong.
+
+Keep the NATS key in the protected environment, not YAML. Supply
+`VA_NATS_TOKEN` with the mothership's URL-safe key to use the derived endpoint
+without repeating the hostname.
+`VA_NATS_URL` can carry `https://default:<key>@switch.voipappz.io/nats`;
+the installer stores the credentialed form only in the mode-0600 environment
+file and passes it to the node. A shared key authenticates a node but does
+not isolate tenants or node subjects: use it only for trusted infrastructure.
+
+`make test-nats-https` runs the published node process through the real
+Mothership Kong and NATS configuration. CI runs it as `nats-https` on trusted
+PRs, main pushes, and manual runs. It covers authenticated health request/reply,
+JetStream initialization, reconnect, internal TCP, invalid/missing keys,
+untrusted certificates, wrong TLS hostnames, and refusal of plaintext upgrades.
+It uses the existing `MOTHERSHIP_TOKEN` and Docker Hub CI secrets. For local
+`act` runs, mount a Mothership checkout and set `MOTHERSHIP_DIR`; set the
+`NODE_TEST_IMAGE` act variable to select a cached node image. The separate
+full-install job continues to cover SIP/media and registration.
+
+The Mothership origin/auth hardening must land before this new CI job: it
+requires `/nats` to reject unrelated browser origins. The changed CLI defaults
+must also be released and included in node images before using YAML without a
+broker override on an existing node.
+
+The NATS and full-install jobs pin Mothership fixture `1d638d64a91f176020815095ed8f32d82d53b901`.
+A manual workflow dispatch can override `mothership_ref`; update the reviewed
+fixture pin when adopting later Mothership changes.

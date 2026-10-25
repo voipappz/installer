@@ -71,6 +71,7 @@ CA_BUNDLE=""
 if [ -n "${VA_API_URL:-}" ]; then VA_API_URL_EXPLICIT=1; else VA_API_URL_EXPLICIT=0; fi
 VA_API_URL="${VA_API_URL:-https://cloud.voipappz.io}"
 VA_NATS_URL="${VA_NATS_URL:-}"
+VA_NATS_TOKEN="${VA_NATS_TOKEN:-}"
 # THE FOURTH VALUE THE IMAGE CANNOT DERIVE. Cable verifies every websocket
 # token against SECRET_KEY, so the node refuses to start without it (va-crystal
 # 2026.09.06 and later: "cannot start this node — SECRET_KEY is not set"). It
@@ -343,6 +344,26 @@ set_env_value() {
   fs_cmd chmod 0600 "$ENV_TEMP"
   fs_cmd mv -f -- "$ENV_TEMP" "$WORK_DIR/.env"
   ENV_TEMP=""
+}
+
+# Derive the WebSocket endpoint from the API origin, preserving its TLS port.
+# Explicit broker URLs (including internal nats://) still take precedence.
+broker_url_for() {
+  _broker_scheme=${1%%://*}
+  case "$_broker_scheme" in https|http) ;; *) return 1 ;; esac
+  _broker_authority=${1#*://}
+  _broker_authority=${_broker_authority%%[/?#]*}
+  _broker_authority=${_broker_authority##*@}
+  [ -n "$_broker_authority" ] || return 1
+  printf '%s://%s/nats' "$_broker_scheme" "$_broker_authority"
+}
+
+# Generated mothership keys are URL-safe hex. Keep a raw key out of YAML and
+# diagnostics; reserve arbitrary credentialed URLs for VA_NATS_URL.
+broker_url_with_key() {
+  case "$2" in ''|*[!A-Za-z0-9._~-]*) die "VA_NATS_TOKEN must be a nonempty URL-safe key" ;; esac
+  case "$1" in *://*@*) die "set VA_NATS_TOKEN or a credentialed VA_NATS_URL, not both" ;; esac
+  printf '%s://default:%s@%s' "${1%%://*}" "$2" "${1#*://}"
 }
 
 # nats://user:token@host:4222 -> host, for the resolution check.
@@ -1505,12 +1526,21 @@ if [ "$VA_API_URL_EXPLICIT" = "1" ]; then
 elif [ -z "$(yaml_api_url)" ]; then
   set_yaml_api_url "$VA_API_URL"
 fi
-# The broker lives beside the mothership: with no broker in the YAML and no
-# VA_NATS_URL, use nats://<mothership host>:4222.
+BROKER_DERIVED=0
+# One public origin: the broker uses the mothership's /nats HTTPS route.
+# Keep existing broker overrides, including internal TCP brokers used in tests.
 if [ -z "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
-  _api_host=${VA_API_URL#*://}; _api_host=${_api_host%%/*}; _api_host=${_api_host%%:*}
-  [ -n "$_api_host" ] && VA_NATS_URL="nats://$_api_host:4222" && say "broker derived from the mothership host: $VA_NATS_URL"
+  _broker_api=$(yaml_api_url); [ -n "$_broker_api" ] || _broker_api=$VA_API_URL
+  VA_NATS_URL=$(broker_url_for "$_broker_api") || die "cannot derive broker from mothership URL"
+  BROKER_DERIVED=1
+  say "broker derived from the mothership URL: $VA_NATS_URL"
 fi
+# A key plus the one mothership URL is enough; no second URL to maintain.
+if [ -n "$VA_NATS_TOKEN" ]; then
+  _broker_url=$VA_NATS_URL; [ -n "$_broker_url" ] || _broker_url=$(yaml_broker_url)
+  VA_NATS_URL=$(broker_url_with_key "$_broker_url" "$VA_NATS_TOKEN")
+fi
+unset VA_NATS_TOKEN
 # CREDENTIALS NEVER LAND IN va.yaml (it is 0644 by design). A VA_NATS_URL
 # carrying userinfo — nats://default:<token>@host:4222, the form an
 # authenticated broker needs — is split: the BARE url goes to the YAML, the
@@ -1527,14 +1557,14 @@ esac
 case "$(yaml_broker_url)" in
   *://*@*) die "va.yaml broker.url carries a credential — move it out (rerun with VA_NATS_URL='<credentialed url>' after removing it from the YAML); va.yaml is world-readable" ;;
 esac
-if [ -n "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
+if [ "$BROKER_DERIVED" = 0 ] && [ -n "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
   set_yaml_broker_url "$VA_NATS_URL"
 fi
 # NO BROKER IS A WARNING, NOT A REFUSAL. A node with no NATS is a node that
 # cannot talk to a mothership — kamailio, FreeSWITCH and the node's own API
 # still come up, which is exactly the local run this installer has to support.
 # `voipappz health` says the broker is down; that is the right place to say it.
-if [ -z "$(yaml_broker_url)" ]; then
+if [ -z "$VA_NATS_URL" ] && [ -z "$(yaml_broker_url)" ]; then
   say "WARNING: va.yaml names no broker — this node will run without one"
 fi
 
@@ -1599,6 +1629,7 @@ _flag_value=""
 # there at boot). Checked here, not recorded: a broker name that does not
 # resolve is a node that starts and connects to nothing.
 BROKER_URL="$(yaml_broker_url)"
+[ -n "$BROKER_URL" ] || BROKER_URL=$VA_NATS_URL
 [ -n "$BROKER_URL" ] || BROKER_URL=$CONFIG_NATS_URL
 BROKER_HOST="$(host_of_url "$BROKER_URL")"
 if [ -n "$BROKER_HOST" ]; then

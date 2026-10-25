@@ -179,10 +179,10 @@ render_example() {
   rm -f -- "$scratch"
   if [[ $node_type == switch ]]; then
     sed -i '/^  - app$/d' "$output"
-    # The example already carries both sections: replace the values in place,
-    # or a second `mothership:` key would shadow the first.
+    # The public example uses one mothership URL. This internal fixture
+    # deliberately overrides the broker with TCP.
     sed -i "/^mothership:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 '$API_URL'#" "$output"
-    sed -i "/^broker:/,/^[^[:space:]#]/ s#^\([[:space:]]*url:\).*#\1 'nats://127.0.0.1:4222'#" "$output"
+    printf "\nbroker:\n  url: 'nats://127.0.0.1:4222'\n" >> "$output"
   fi
 }
 

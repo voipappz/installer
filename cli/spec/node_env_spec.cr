@@ -65,15 +65,18 @@ describe VoIPAppz::NodeEnv do
     env["API_URL"].should eq "https://cloud.voipappz.io"
   end
 
-  it "the broker follows the mothership's host on 4222 when the file names none" do
-    # The installer's rule: mothership from VA_API_URL, broker from that host
-    # on 4222, a value already in the file always wins.
+  it "derives the HTTPS broker from the mothership origin unless overridden" do
     env = VoIPAppz::NodeEnv.from(config_from("nodes: []\n"))
-    env["NATS_URL"].should eq "nats://cloud.voipappz.io:4222"
+    env["NATS_URL"].should eq "https://cloud.voipappz.io/nats"
     env = VoIPAppz::NodeEnv.from(config_from("nodes: []\nmothership:\n  url: 'https://ms.example.net:8443'\n"))
-    env["NATS_URL"].should eq "nats://ms.example.net:4222"
+    env["NATS_URL"].should eq "https://ms.example.net:8443/nats"
     env = VoIPAppz::NodeEnv.from(config_from("nodes: []\nbroker:\n  url: 'nats://own.example.net:4222'\n"))
     env["NATS_URL"].should eq "nats://own.example.net:4222"
+  end
+
+  it "derives /nats without API path, query, fragment or credentials" do
+    env = VoIPAppz::NodeEnv.from(config_from("nodes: []\nmothership:\n  url: 'https://user:secret@ms.example:8443/api?x=y#fragment'\n"))
+    env["NATS_URL"].should eq "https://ms.example:8443/nats"
   end
 
   it "gives kamailio 5060 unless the file names another port" do

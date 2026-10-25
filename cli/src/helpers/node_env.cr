@@ -116,15 +116,18 @@ module VoIPAppz
         env["VA_API_URL"] = api_url
       end
 
-      # The broker follows the mothership: the installer writes both when
-      # they are missing — the mothership from VA_API_URL, the broker from the
-      # mothership's HOST on 4222 — and a value already in the file always
-      # wins. Deriving it here means a file that names only the mothership
-      # boots the same node the installer would have written.
+      # One external origin: derive /nats from the mothership URL. Preserve
+      # its TLS port; an explicit broker still supports internal TCP/tests.
       nats_url = config.broker.url.strip
       if nats_url.empty? && !api_url.empty?
-        if (host = URI.parse(api_url).host) && !host.empty?
-          nats_url = "nats://#{host}:#{BROKER_PORT}"
+        uri = URI.parse(api_url)
+        if uri.host && {"http", "https"}.includes?(uri.scheme)
+          uri.path = "/nats"
+          uri.query = nil
+          uri.fragment = nil
+          uri.user = nil
+          uri.password = nil
+          nats_url = uri.to_s
         end
       end
       env["NATS_URL"] = nats_url unless nats_url.empty?
