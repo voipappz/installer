@@ -93,10 +93,22 @@ docker run --rm -it --network host \
   || die "the image's setup wizard did not finish"
 [ -f "$VA_CONFIG" ] || die "the wizard did not write $VA_CONFIG"
 
-# The CLI generates these into ./.env; re-read them and say plainly if one is
-# missing, because `make up` will refuse without them.
+# GENERATED HERE, ONCE. The node-only wizard writes va.yaml and nothing else, so
+# the node-local secrets were never written and `make up` refused. They are
+# minted on this host the first time and kept: a rerun reads them back and never
+# rotates what a node already uses. 32 random bytes from the kernel as hex (64
+# characters; the licence keys need 32+), so the host needs no openssl.
 load_env_file
-require_env VA_FREESWITCH_PASSWORD VA_LICENSE_JWT_SECRET VA_LICENSE_ENCRYPTION_KEY
+for _s in VA_FREESWITCH_PASSWORD VA_LICENSE_JWT_SECRET VA_LICENSE_ENCRYPTION_KEY; do
+  eval "_have=\${$_s:-}"
+  if [ -z "$_have" ]; then
+    _new=$(od -An -tx1 -N32 /dev/urandom | tr -d " \n")
+    set_env_value "$_s" "$_new"
+    eval "$_s=\$_new; export $_s"
+    say "generated $_s (kept in $VA_ENV_FILE)"
+  fi
+done
+_new=""; _have=""
 
 # ── the API's signing secret ────────────────────────────────────────────────
 # The node image refuses to start without SECRET_KEY, and it has to be the SAME
