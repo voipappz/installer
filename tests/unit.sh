@@ -616,6 +616,45 @@ check 'setup.sh runs the CLI wizard, not its own'   'grep -q "VA_PATH=./work/" "
 # already gone. verify.sh asks the same questions out here — the contract's
 # fields, the four values that live only in ./.env, and the ports — and must
 # never be the thing that changes the node it is checking.
+printf '\n── setup Kong WebSocket URL and probe\n'
+SETUP_LIB="$TMP/setup-lib.sh"
+for fn in set_setup_url setup_broker_url verify_setup_broker; do
+  awk -v fn="$fn" '$0 ~ "^" fn "\\(\\) " {p=1} p {print} p && /^[})]$/ {exit}' "$ROOT/scripts/setup.sh" >> "$SETUP_LIB"
+done
+# shellcheck disable=SC1090
+source "$SETUP_LIB"
+check 'setup derives wss and keeps the TLS port' '[[ $(setup_broker_url https://ms.example:8443/api) == wss://ms.example:8443/nats ]]'
+check 'setup derives ws for HTTP' '[[ $(setup_broker_url http://127.0.0.1) == ws://127.0.0.1/nats ]]'
+check 'setup keeps IPv6 authority' '[[ $(setup_broker_url "https://[::1]:8443") == "wss://[::1]:8443/nats" ]]'
+VA_CONFIG="$TMP/setup.yaml"
+printf 'nodes: []\nmothership:\n  url: https://old.example\nbroker:\n  url: nats://old.example:4222\nenv: {}\n' > "$VA_CONFIG"
+set_setup_url mothership https://ms.example
+set_setup_url broker ws://ms.example/nats
+check 'setup replaces the old broker and preserves other YAML' 'grep -qx "  url: ws://ms.example/nats" "$VA_CONFIG" && grep -qx "env: {}" "$VA_CONFIG" && [[ $(grep -c "^broker:" "$VA_CONFIG") == 1 ]]'
+# Exercise the probe verdict independently of network availability.
+# shellcheck disable=SC2329 # called by the lifted verify_setup_broker function
+curl() {
+  local headers body
+  while (($#)); do
+    case "$1" in
+      --dump-header) headers=$2; shift ;;
+      --output) body=$2; shift ;;
+    esac
+    shift
+  done
+  printf '%s\r\n' "HTTP/1.1 ${PROBE_STATUS:-101 Switching Protocols}" \
+    'Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=' > "$headers"
+  printf '%s' "${PROBE_BODY-INFO {\"server_id\":\"test\"}}" > "$body"
+  return "${PROBE_RC:-28}"
+}
+check 'probe accepts a real upgrade with a NATS greeting and open connection' 'verify_setup_broker ws://ms.example/nats'
+check 'probe rejects the SPA catchall' '! (PROBE_STATUS="200 OK" verify_setup_broker ws://ms.example/nats) 2>/dev/null'
+check 'probe rejects an unrelated WebSocket service' '! (PROBE_BODY=hello verify_setup_broker ws://ms.example/nats) 2>/dev/null'
+check 'probe rejects TLS verification failure' '! (PROBE_RC=60 verify_setup_broker wss://ms.example/nats) 2>/dev/null'
+check 'probe rejects an HTTP broker URL' '! (verify_setup_broker https://ms.example/nats) 2>/dev/null'
+check 'probe rejects credentials in the public URL' '! (verify_setup_broker ws://default:secret@ms.example/nats) 2>/dev/null'
+unset -f curl
+
 printf '\n── make verify reads the configuration and changes nothing\n'
 VERIFY="$ROOT/scripts/verify.sh"
 # A docker verb in COMMAND position: at the start of a line, or after ; & | ( {

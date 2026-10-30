@@ -49,17 +49,17 @@ set_env_value() {  # 1: key, 2: value — one value in ./.env, replacing any old
   chmod 0600 "$VA_ENV_FILE"
 }
 
-set_mothership_url() {
-  case "$1" in
+set_setup_url() { # section, URL
+  case "$2" in
     *[[:space:]\'\"\\]*|*://*@*|*\?*|*\#*) die "enter a mothership URL without credentials, whitespace, quotes, query or fragment" ;;
   esac
-  case "$1" in
-    https://?*|http://?*) ;;
-    *) die "mothership URL must start with https:// or http://" ;;
+  case "$1:$2" in
+    mothership:https://?*|mothership:http://?*|broker:wss://?*|broker:ws://?*) ;;
+    *) die "mothership needs http(s)://; Kong NATS needs ws(s)://" ;;
   esac
   _tmp=$(mktemp "${VA_CONFIG}.tmp.XXXXXX")
-  awk -v url="${1%/}" '
-    /^mothership:[[:space:]]*(#.*)?$/ { inside = 1; found = 1; print; next }
+  awk -v section="$1" -v url="${2%/}" '
+    $0 ~ "^" section ":[[:space:]]*(#.*)?$" { inside = 1; found = 1; print; next }
     inside && /^[^[:space:]#]/ {
       if (!wrote) { print "  url: " url; wrote = 1 }
       inside = 0
@@ -70,13 +70,59 @@ set_mothership_url() {
     }
     { print }
     END {
-      if (!found) print "mothership:"
+      if (!found) print section ":"
       if (!wrote) print "  url: " url
     }
   ' "$VA_CONFIG" > "$_tmp"
   chmod 0644 "$_tmp"
   mv -f -- "$_tmp" "$VA_CONFIG"
 }
+
+setup_broker_url() {
+  case "$1" in
+    https://*) _scheme=wss ;;
+    http://*) _scheme=ws ;;
+    *) die "mothership URL must start with https:// or http://" ;;
+  esac
+  _authority=${1#*://}; _authority=${_authority%%/*}
+  [ -n "$_authority" ] || die "mothership URL needs a hostname"
+  printf '%s://%s/nats' "$_scheme" "$_authority"
+}
+
+verify_setup_broker() (
+  # A real Upgrade and NATS INFO, not a 200 from Kong's SPA catchall.
+  # This checks transport only; no credentials are sent or printed.
+  case "$1" in
+    *[[:space:]\'\"\\]*|*://*@*|*\?*|*\#*) die "NATS URL must not contain credentials or URL query/fragment" ;;
+  esac
+  case "$1" in
+    wss://?*) probe_url=https://${1#wss://} ;;
+    ws://?*) probe_url=http://${1#ws://} ;;
+    *) die "Kong NATS URL must start with wss:// or ws://" ;;
+  esac
+  command -v curl >/dev/null 2>&1 || die "curl is required to verify Kong NATS"
+  probe_dir=$(mktemp -d)
+  trap 'rm -rf "$probe_dir"' EXIT
+  set -- --http1.1 --silent --show-error --connect-timeout 5 --max-time 5 \
+    --dump-header "$probe_dir/headers" --output "$probe_dir/body" \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='
+  ca_bundle="$(dirname "$VA_CONFIG")/ca-bundle.pem"
+  [ ! -f "$ca_bundle" ] || set -- "$@" --cacert "$ca_bundle"
+  rc=0
+  curl "$@" "$probe_url" 2> "$probe_dir/error" || rc=$?
+  # An upgraded connection can stay open until our bounded timeout.
+  case "$rc" in
+    0|28) ;;
+    *) cat "$probe_dir/error" >&2; die "Kong NATS connection failed" ;;
+  esac
+  if ! grep -q '^HTTP/1.1 101 ' "$probe_dir/headers" ||
+     ! grep -qi '^Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=' "$probe_dir/headers" ||
+     ! grep -aq 'INFO {"server_id":' "$probe_dir/body"; then
+    die "Kong /nats did not return a WebSocket upgrade and NATS greeting; check the URL, port and broker"
+  fi
+  say "Kong NATS WebSocket verified (transport; authentication is checked when the node connects)"
+)
 
 [ -t 0 ] || die "make setup is interactive; it asks which image and which node this is"
 
@@ -123,7 +169,10 @@ step "The mothership"
 CURRENT_URL=$(sed -n '/^mothership:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_CONFIG" |
   head -1 | tr -d "\"'")
 VA_API_URL=$(ask "  Mothership URL (Kong)" "${VA_API_URL:-${CURRENT_URL:-https://cloud.voipappz.io}}")
-set_mothership_url "$VA_API_URL"
+BROKER_URL=$(ask "  Kong NATS URL (ws or wss)" "$(setup_broker_url "$VA_API_URL")")
+verify_setup_broker "$BROKER_URL"
+set_setup_url mothership "$VA_API_URL"
+set_setup_url broker "$BROKER_URL"
 
 # GENERATED HERE, ONCE. The node-only wizard writes va.yaml and nothing else, so
 # the node-local secrets were never written and `make up` refused. They are
