@@ -1031,6 +1031,7 @@ start_node() {
   # The service flags, recorded at install time (or by an earlier run).
   NODE_KAMAILIO="$(fs_cmd sed -n 's/^VA_KAMAILIO=//p' "$INSTALL_DIR/.env" | head -1)"
   NODE_FREESWITCH="$(fs_cmd sed -n 's/^VA_FREESWITCH=//p' "$INSTALL_DIR/.env" | head -1)"
+  NODE_ED137="$(fs_cmd sed -n 's/^VA_ED137=//p' "$INSTALL_DIR/.env" | head -1)"
   # A credentialed broker URL, if the install recorded one (the bare URL is in
   # va.yaml; the credential exists only here and in the container env).
   NODE_NATS_URL="$(fs_cmd sed -n 's/^VA_NATS_URL_CREDENTIALED=//p' "$INSTALL_DIR/.env" | head -1)"
@@ -1077,6 +1078,7 @@ start_node() {
     -e "LICENSE_ENCRYPTION_KEY=$LIC_ENC"
   [ -n "${NODE_KAMAILIO:-}" ] && set -- "$@" -e "VA_KAMAILIO=$NODE_KAMAILIO"
   [ -n "${NODE_FREESWITCH:-}" ] && set -- "$@" -e "VA_FREESWITCH=$NODE_FREESWITCH"
+  [ -n "${NODE_ED137:-}" ] && set -- "$@" -e "VA_ED137=$NODE_ED137"
   [ -n "${NODE_NATS_URL:-}" ] && set -- "$@" -e "NATS_URL=$NODE_NATS_URL"
   if [ -n "${NODE_SECRET_KEY:-}" ]; then
     set -- "$@" -e "SECRET_KEY=$NODE_SECRET_KEY"
@@ -1463,6 +1465,13 @@ for _flag in VA_KAMAILIO VA_FREESWITCH; do
     *) die "$_flag must be 'on' or 'off' (got: $_flag_value)" ;;
   esac
 done
+# VA_ED137=1: kamailio runs the ED-137 settings (1 s OPTIONS to trunk peers,
+# DSCP, WG67-Version and maxptime on the answers). Same home as the service
+# flags: the install .env, passed with docker -e.
+case "${VA_ED137:-}" in
+  ''|0|1) ;;
+  *) die "VA_ED137 must be 1 or 0 (got: $VA_ED137)" ;;
+esac
 
 # Run the existing setup implementation in the image. This normalizes the
 # supplied YAML and creates the Compose .env without installing a second CLI.
@@ -1498,7 +1507,7 @@ set_env_value INSTALL_DIR "$INSTALL_DIR"
 # The broker credential, kept out of the 0644 va.yaml.
 [ -z "$NATS_URL_WITH_CREDENTIALS" ] || set_env_value VA_NATS_URL_CREDENTIALED "$NATS_URL_WITH_CREDENTIALS"
 # Service selection (topology, not application config).
-for _flag in VA_KAMAILIO VA_FREESWITCH; do
+for _flag in VA_KAMAILIO VA_FREESWITCH VA_ED137; do
   eval "_flag_value=\${$_flag:-}"
   [ -z "$_flag_value" ] || set_env_value "$_flag" "$_flag_value"
 done

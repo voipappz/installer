@@ -21,7 +21,7 @@ MAKEFLAGS   += --no-print-directory --no-builtin-rules --no-builtin-variables
 # Add a target: add it here.
 PHONY_TARGETS := help check check-make test get install \
                  setup verify up down logs health cli \
-                 build cli-test install-cli \
+                 build \
                  iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
                  iso-upload image-cloud image-ami image-virtualbox \
                  image-disk-direct image-disk-from-iso image-validate \
@@ -52,7 +52,7 @@ help: ## Show this help
 # container when it is not installed, so this needs nothing but docker.
 SCRIPTS = install.sh scripts/common.sh scripts/setup.sh scripts/verify.sh scripts/up.sh \
           scripts/down.sh scripts/logs.sh scripts/health.sh scripts/cli.sh \
-          scripts/install-cli.sh scripts/node-images.sh \
+          scripts/node-images.sh \
           scripts/check-packer-targets.sh scripts/iso-upload.sh \
           scripts/extract-casper.sh tests/clean-runner.sh \
           tests/test-install.sh tests/unit.sh tests/two-pbx.sh
@@ -245,84 +245,23 @@ cli: ## [ARGS=cmd] The in-image CLI: make cli ARGS="sbc egress status"
 
 ##@ The CLI binary
 
-# cli/ is the voipappz CLI's SOURCE, moved here from the mothership on
-# 2026-09-03 so it can be public while the mothership is not.
-#
-# ONE SOURCE, ONE BINARY, since 2026-09-07. It used to be two: a host build and
-# a `-Dnode_runtime` build with the compose lifecycle commands compiled out.
-# The CLI already decides at RUNTIME where it is — Services.available? for a
-# catalog, Docker.local_exec? for the inside of the node image — so the flag
-# was a second mechanism answering a question already answered, and a second
-# artifact to build, release, pin and prove. va-crystal bakes this same binary
-# into nirlevi/va-crystal:node. install.sh never builds or fetches it: it only
-# runs the copy inside the image.
-#
-# In Docker, never on the host: nothing here assumes a Crystal toolchain, and
-# the alpine image is the same one the release workflow uses, so a workstation
-# build and a released build are the same binary. Static, always: the SIP
-# suites and the mothership's ISO run it FROM THE HOST, where a musl dynamic
-# build cannot exec.
-CRYSTAL_IMAGE ?= crystallang/crystal:1.16.3-alpine
-
-# The REPO ROOT is mounted, not cli/, so `shards` sees the lock file next to
-# the manifest and the specs can reach their fixtures under cli/spec.
-CLI_RUN = docker run --rm $(shell test -t 0 && echo -t) -v "$(CURDIR):/w" -w /w/cli $(CRYSTAL_IMAGE) sh -lc
-
-# `shards check` first: `shards install` on every build re-resolves the
-# dependency graph over the network for no gain. shard.lock is committed, so
-# what it installs is pinned — see cli/.gitignore for why that matters.
-CLI_SHARDS = (shards check >/dev/null 2>&1 || shards install --skip-postinstall)
-
-# chown back: the container is root, so bin/, lib/ and .shards/ land root-owned
-# and the NEXT run cannot write them — `shards install` then fails as Permission
-# denied on a tree the operator appears to own.
-CLI_CHOWN = chown -R $(shell id -u):$(shell id -g) bin lib .shards 2>/dev/null || true
-
-# The binary every consumer runs. cli/bin/voipappz is the compiler's output;
-# bin/voipappz is the one the mothership's Makefile, its SIP suites and its ISO
-# bake copy from this checkout when it sits beside theirs — and the one
-# va-crystal's image build downloads from this repo's releases.
-
-# NO CRYSTAL, NO DOCKER, NO WAIT: `make build RELEASE=…` DOWNLOADS the binary
-# instead of compiling one, through the same scripts/install-cli.sh that puts
-# it on PATH — it just installs into ./bin here. Same artifact: release.yml
-# links it from this source, in the image named above.
-#
-#   make build                 compile it here (docker, ~1 min)
-#   make build RELEASE=1       the newest tagged release
-#   make build RELEASE=latest  the rolling `latest` prerelease — every push to main
-#   make build RELEASE=v0.2.0  a specific tag
-#
-# Use it when you only need to RUN the CLI (the SIP suites, the ISO bake, a
-# laptop); compile when you are CHANGING it, because a download cannot contain
-# your edit.
-build: ## [RELEASE=1|latest|v0.2.0] Build the CLI binary at bin/voipappz (static, in Docker; RELEASE downloads it)
-ifdef RELEASE
-	@PREFIX='$(CURDIR)/bin' sh scripts/install-cli.sh --release $(filter-out 1,$(RELEASE))
-else
-	$(CLI_RUN) '$(CLI_SHARDS) && shards build voipappz --release --static --no-debug; s=$$?; $(CLI_CHOWN); exit $$s'
+# THE CLI IS NOT BUILT HERE (2026-10-29). Its source moved to
+# github.com/voipappz/node (cli/), which compiles it into the node image, so
+# every node runs the CLI of its own image. install.sh only ever ran that copy.
+# What still wants a host copy — the node disc bakes bin/voipappz — gets the
+# same binary out of the image: no compiler, no release, nothing to drift.
+NODE_IMAGE ?= $(or $(VA_VOIP_IMAGE),ghcr.io/voipappz/node:latest)
+build: ## [NODE_IMAGE=repo:tag] Copy the voipappz CLI out of the node image to bin/voipappz
 	@mkdir -p bin
-	@cp cli/bin/voipappz bin/voipappz
+	@cid=$$(docker create $(NODE_IMAGE)) || exit 1; \
+	  docker cp $$cid:/usr/local/bin/voipappz bin/voipappz; s=$$?; docker rm $$cid >/dev/null; exit $$s
 	@chmod +x bin/voipappz
-	@echo "cli binary: $$(./bin/voipappz --version)"
-endif
+	@echo "cli binary: $$(./bin/voipappz --version) (from $(NODE_IMAGE))"
 
-cli-test: ## The CLI spec suite (in Docker)
-	$(CLI_RUN) '$(CLI_SHARDS) && crystal spec --no-color; s=$$?; $(CLI_CHOWN); exit $$s'
-
-# File target: consumers build ONCE when the binary is absent instead of
-# recompiling on every call. `make build` forces a refresh.
+# File target: consumers copy ONCE when the binary is absent. `make build`
+# refreshes it.
 bin/voipappz:
 	$(MAKE) build
-
-#   make install-cli                        # this checkout, building it if needed
-#   make install-cli PREFIX=~/.local/bin    # no sudo
-#   make install-cli RELEASE=1              # the published binary instead
-#   make install-cli RELEASE=v0.2.0         # ... a specific tag
-install-cli: ## [PREFIX=dir] [RELEASE=1|v0.2.0] Put the voipappz CLI on PATH
-	@PREFIX="$(if $(PREFIX),$(PREFIX),/usr/local/bin)" sh scripts/install-cli.sh \
-	  $(if $(RELEASE),--release $(filter-out 1,$(RELEASE)))
-
 
 ##@ Node media (ISO)
 #
@@ -367,7 +306,7 @@ export VOIPAPPZ_LOCAL_IMAGES
 #
 #   make iso-release                       # pins nothing: bin/voipappz is `latest`
 #   make iso-release CLI_VERSION=v0.2.0    # ... and the disc records that tag
-iso-release: build cli-test iso-payload iso ## Build the CLI, run its specs, then cut a disc around it
+iso-release: build iso-payload iso ## Copy the CLI out of the node image, then cut a disc around it
 
 # NO SIP ROUND TRIP HERE. The scenarios need SIPp, and driving real calls
 # belongs to the node image's own build in ../va-crystal — a disc is media

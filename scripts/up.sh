@@ -108,6 +108,7 @@ set -- docker run -d --name "$NODE" \
 # URL that carries a credential (the bare one is in va.yaml).
 [ -z "${VA_KAMAILIO:-}" ]   || set -- "$@" -e "VA_KAMAILIO=$VA_KAMAILIO"
 [ -z "${VA_FREESWITCH:-}" ] || set -- "$@" -e "VA_FREESWITCH=$VA_FREESWITCH"
+[ -z "${VA_ED137:-}" ]      || set -- "$@" -e "VA_ED137=$VA_ED137"
 [ -z "${VA_NATS_URL_CREDENTIALED:-}" ] \
   || set -- "$@" -e "NATS_URL=$VA_NATS_URL_CREDENTIALED"
 # The pinned CA bundle sits beside the va.yaml it belongs to: ./config for a
