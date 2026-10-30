@@ -618,19 +618,15 @@ check 'setup.sh runs the CLI wizard, not its own'   'grep -q "VA_PATH=./work/" "
 # never be the thing that changes the node it is checking.
 printf '\n── setup Kong WebSocket URL and probe\n'
 SETUP_LIB="$TMP/setup-lib.sh"
-for fn in set_setup_url setup_broker_url credentialed_broker_url verify_setup_broker; do
+for fn in set_setup_url credentialed_broker_url verify_setup_broker; do
   awk -v fn="$fn" '$0 ~ "^" fn "\\(\\) " {p=1} p {print} p && /^[})]$/ {exit}' "$ROOT/scripts/setup.sh" >> "$SETUP_LIB"
 done
 # shellcheck disable=SC1090
 source "$SETUP_LIB"
-check 'setup derives wss and keeps the TLS port' '[[ $(setup_broker_url https://ms.example:8443/api) == wss://ms.example:8443/nats ]]'
-check 'setup derives ws for HTTP' '[[ $(setup_broker_url http://127.0.0.1) == ws://127.0.0.1/nats ]]'
-check 'setup keeps IPv6 authority' '[[ $(setup_broker_url "https://[::1]:8443") == "wss://[::1]:8443/nats" ]]'
 check 'setup passes the token as NATS URL userinfo outside YAML' '[[ $(credentialed_broker_url wss://ms.example/nats token-1) == wss://default:token-1@ms.example/nats ]]'
 check 'setup rejects a token that could alter the URL' '! (credentialed_broker_url ws://ms.example/nats "token@evil") 2>/dev/null'
 VA_CONFIG="$TMP/setup.yaml"
 printf 'nodes: []\nmothership:\n  url: https://old.example\nbroker:\n  url: nats://old.example:4222\nenv: {}\n' > "$VA_CONFIG"
-set_setup_url mothership https://ms.example
 set_setup_url broker ws://ms.example/nats
 check 'setup replaces the old broker and preserves other YAML' 'grep -qx "  url: ws://ms.example/nats" "$VA_CONFIG" && grep -qx "env: {}" "$VA_CONFIG" && [[ $(grep -c "^broker:" "$VA_CONFIG") == 1 ]]'
 # Exercise the probe verdict independently of network availability.

@@ -70,11 +70,11 @@ make health                         # its own verdict, from the CLI in the image
 make cli ARGS="sbc egress status"   # any other CLI command, in the image
 ```
 
-`make setup` asks for the mothership HTTP(S) URL, then offers its Kong NATS
-endpoint as `wss://<host>/nats` (HTTPS) or `ws://<host>/nats` (HTTP).
-You can choose either WebSocket transport, including a custom port. Setup
-requires a successful WebSocket upgrade and NATS greeting before writing
-`mothership.url` and `broker.url` to YAML. WSS verifies the certificate, using
+`make setup` asks for the mothership Kong NATS endpoint as
+`wss://<host>/nats` or `ws://<host>/nats`. You can choose either WebSocket
+transport, including a custom port. Setup requires a successful WebSocket
+upgrade and NATS greeting before writing `broker.url` to YAML. WSS verifies the
+certificate, using
 `config/ca-bundle.pem` beside the YAML when present. This checks the endpoint;
 NATS credentials remain in `.env` and authentication happens when the node connects.
 

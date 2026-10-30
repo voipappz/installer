@@ -54,10 +54,8 @@ set_setup_url() { # section, URL
     *[[:space:]\'\"\\]*|*://*@*|*\?*|*\#*) die "enter a mothership URL without credentials, whitespace, quotes, query or fragment" ;;
   esac
   case "$1" in
-    mothership)
-      case "$2" in https://?*|http://?*) ;; *) die "mothership API URL must start with https:// or http://" ;; esac ;;
     broker)
-      case "$2" in wss://?*|ws://?*) ;; *) die "Kong NATS URL must start with wss:// or ws://" ;; esac ;;
+      case "$2" in wss://?*|ws://?*) ;; *) die "Mothership Kong NATS URL must start with wss:// or ws://" ;; esac ;;
     *) die "unknown setup URL section: $1" ;;
   esac
   _tmp=$(mktemp "${VA_CONFIG}.tmp.XXXXXX")
@@ -79,17 +77,6 @@ set_setup_url() { # section, URL
   ' "$VA_CONFIG" > "$_tmp"
   chmod 0644 "$_tmp"
   mv -f -- "$_tmp" "$VA_CONFIG"
-}
-
-setup_broker_url() {
-  case "$1" in
-    https://*) _scheme=wss ;;
-    http://*) _scheme=ws ;;
-    *) die "mothership URL must start with https:// or http://" ;;
-  esac
-  _authority=${1#*://}; _authority=${_authority%%/*}
-  [ -n "$_authority" ] || die "mothership URL needs a hostname"
-  printf '%s://%s/nats' "$_scheme" "$_authority"
 }
 
 credentialed_broker_url() { # bare URL, mothership VA_NATS_TOKEN
@@ -175,13 +162,12 @@ docker run --rm -it --network host \
   || die "the image's setup wizard did not finish"
 [ -f "$VA_CONFIG" ] || die "the wizard did not write $VA_CONFIG"
 
-step "The mothership"
-CURRENT_URL=$(sed -n '/^mothership:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_CONFIG" |
+step "The mothership NATS connection"
+CURRENT_BROKER=$(sed -n '/^broker:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_CONFIG" |
   head -1 | tr -d "\"'")
-VA_API_URL=$(ask "  Mothership API URL via Kong (http or https)" "${VA_API_URL:-${CURRENT_URL:-https://cloud.voipappz.io}}")
-BROKER_URL=$(ask "  Kong NATS URL (ws or wss)" "$(setup_broker_url "$VA_API_URL")")
+case "$CURRENT_BROKER" in ws://?*|wss://?*) DEFAULT_BROKER_URL=$CURRENT_BROKER ;; *) DEFAULT_BROKER_URL=wss://cloud.voipappz.io/nats ;; esac
+BROKER_URL=$(ask "  Mothership Kong NATS URL (ws or wss)" "${VA_NATS_URL:-$DEFAULT_BROKER_URL}")
 verify_setup_broker "$BROKER_URL"
-set_setup_url mothership "$VA_API_URL"
 set_setup_url broker "$BROKER_URL"
 
 step "The NATS token"
