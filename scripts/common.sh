@@ -8,6 +8,10 @@
 # The node container. One per host: --network host means it owns this
 # machine's SIP, RTP and control ports, so there is nothing to namespace.
 NODE="${NODE:-va-voip}"
+# The node image, the ONE default (2026-10-30): every node runs the published
+# ghcr build unless .env or the environment names another tag.
+# shellcheck disable=SC2034 # used by setup.sh and up.sh, which source this
+DEFAULT_IMAGE="ghcr.io/voipappz/node:latest"
 
 # The two files that describe this node, both beside the Makefile. `make setup`
 # writes them; every other command reads them and invents nothing.
@@ -37,7 +41,8 @@ die() { printf '\n%s✘ %s%s\n' "$C_RED$C_BOLD" "$*" "$C_OFF" >&2; exit 1; }
 # rather than a line silently ignored. A value already in the environment wins,
 # so `VA_VOIP_IMAGE=... make up` still overrides for one run.
 #
-# NO DEFAULTS ANYWHERE. A value that is not in the file or the environment is
+# NO DEFAULTS, save one: the node image (DEFAULT_IMAGE above). A value that is
+# not in the file or the environment is
 # missing, and the command that needs it says so by name and stops. A node
 # started from half a configuration is worse than one that did not start.
 load_env_file() {  # 1: required (1 = the file must exist)

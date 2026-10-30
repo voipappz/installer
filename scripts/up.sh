@@ -22,6 +22,7 @@ set -eu
 . "$(dirname "$0")/common.sh"
 
 load_env_file 1
+VA_VOIP_IMAGE=${VA_VOIP_IMAGE:-$DEFAULT_IMAGE}
 require_env VA_VOIP_IMAGE VA_FREESWITCH_PASSWORD VA_LICENSE_JWT_SECRET \
             VA_LICENSE_ENCRYPTION_KEY VA_SECRET_KEY
 [ -f "$VA_CONFIG" ] || die "no $VA_CONFIG — the node's va.yaml is what this starts; run: make setup"

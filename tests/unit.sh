@@ -594,8 +594,9 @@ check 'no secret is ever put on a command line'     '! grep -E "^NODE_VARS" "$RO
 check 'install.sh still starts the installed node'  'grep -q "START_ONLY. = 1 .; then" "$ROOT/install.sh"'
 check '--start-only calls the same function'        '[[ $(grep -c "^ *start_node$" "$ROOT/install.sh") == 2 ]]'
 
-# NO GUESSING. Every value comes from ./.env or the run stops: no default tag,
-# no invented secret, no pull, no sudo. What is missing is named, and `make
+# NO GUESSING. Every value comes from ./.env or the run stops, save the image,
+# which defaults to ghcr.io/voipappz/node:latest: no invented secret, no pull,
+# no sudo. What is missing is named, and `make
 # setup` is what writes it.
 printf '\n── the node commands invent nothing\n'
 check 'up.sh invents no image tag'                  '! grep -q "VA_VOIP_IMAGE:-nirlevi" "$ROOT/scripts/"*.sh'
