@@ -19,12 +19,14 @@ VoIPAppz VoIP node installer
 
 2/6  Platform image
   Image source:
-    1) pull nirlevi/va-crystal:node from Docker Hub (needs a Docker Hub user + token)
+    1) pull ghcr.io/voipappz/node:latest from the GitHub registry (ghcr.io) (needs a GitHub user + a classic token with read:packages)
     2) download the latest image archive from Amazon S3
     3) load a docker-save archive (.tar or .tar.gz) from a local path or URL
-  Choose 1, 2 or 3 [2]: 2          ← Enter is enough
-  downloading https://voipappz-assets-il.s3.il-central-1.amazonaws.com/images/…
-  sha256 verified
+  Choose 1, 2 or 3 [1]:            ← Enter is enough
+  GitHub user: <you>
+  GitHub token with read:packages (input hidden):
+  logging in to the GitHub registry (ghcr.io) with a temporary Docker config
+  pulling ghcr.io/voipappz/node:latest
 
 3/6  Node stack
   installed the stack and verified its in-container CLI
@@ -174,7 +176,17 @@ Re-running the installer is safe: it keeps an existing `va.yaml`, `.env` and CA
 bundle, and registration is idempotent by node UUID.
 
 ```sh
-# upgrade to the latest published image
+# upgrade to one exact build from the GitHub registry (the safe way: you know what runs)
+export VA_REGISTRY_USER='<github-user>' VA_REGISTRY_TOKEN='<token with read:packages>'
+curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh |
+  env VA_IMAGE_SOURCE=registry VA_VOIP_IMAGE=ghcr.io/voipappz/node:<YYYY.MM.DD-build> sh
+unset VA_REGISTRY_TOKEN
+
+# or the newest: VA_IMAGE_SOURCE=registry always pulls, so :latest is refreshed
+curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh |
+  env VA_IMAGE_SOURCE=registry sh
+
+# or the latest published archive from S3
 curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh |
   env VA_IMAGE_SOURCE=s3 sh
 
@@ -183,8 +195,10 @@ curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh 
   env VA_IMAGE_ARCHIVE=/path/va-crystal-node-latest.tar.gz sh
 ```
 
-An archive you name is always loaded, replacing the present image — that is how
-a node is upgraded. The archives come from va-crystal's `make s3-archive` /
+A registry or an archive you name is always fetched, replacing the present
+image — that is how a node is upgraded. The image tags are listed in the
+GitHub registry (`ghcr.io/voipappz/node`, private): `<YYYY.MM.DD>-<build>` per
+build, `latest` the newest. The archives come from va-crystal's `make s3-archive` /
 `make s3-publish`.
 
 ## Unattended
@@ -196,7 +210,7 @@ login, keep it mode 0600, and run `sh install.sh`: whatever the file answers
 is not asked. Variables already in the environment win over the file.
 
 ```sh
-export VA_REGISTRY_USER='<docker-hub-user>' VA_REGISTRY_TOKEN='<docker-hub-token>'
+export VA_REGISTRY_USER='<github-user>' VA_REGISTRY_TOKEN='<token with read:packages>'
 export VA_API_AUTHORIZATION='Basic <account-key>'
 
 curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/install.sh |
@@ -213,12 +227,14 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_NATS_URL=nats://…` | Broker, when the YAML has none. May carry credentials (`nats://user:token@host:4222`): they go to the mode-0600 `.env` and the container environment only — the YAML gets the bare URL. ALL secrets live in env, never in `va.yaml`. |
 | `VA_CUSTOMER_UUID` / `VA_CUSTOMER_NAME` | Pick (or create) the customer. |
 | `VA_ACCOUNT_EMAIL` / `VA_ACCOUNT_PASSWORD` | The login of the Account a *new* customer gets; asked when a customer is created. The installer signs in with it once to prove it works, then forgets the password. |
-| `VA_IMAGE_SOURCE=dockerhub\|s3\|archive\|local` | Image source without the menu. `local` uses the image already on this host and never fetches. |
+| `VA_IMAGE_SOURCE=registry\|s3\|archive\|local` | Image source without the menu. `registry` pulls `VA_VOIP_IMAGE` (always, so a moving tag is refreshed) with `VA_REGISTRY_USER` / `VA_REGISTRY_TOKEN`; `dockerhub` is its old name. `local` uses the image already on this host and never fetches. |
+| `VA_REGISTRY_USER` / `VA_REGISTRY_TOKEN` | The registry login: for ghcr.io a GitHub user and a classic token with `read:packages`. The token goes to `docker login` on stdin, in a temporary config removed after the pull; it is never written to the installation. |
 | `VA_IMAGE_ARCHIVE=<path or URL>` | The archive to load (`.tar`/`.tar.gz`). A URL **must** publish a sibling `.sha256`; a download that does not match it, or has none, is refused. |
 | `VA_IMAGE_URL=https://…` | Override the S3 archive URL used by `s3`. |
-| `VA_VOIP_IMAGE=<ref>` | Image to run (default `nirlevi/va-crystal:node`). |
+| `VA_VOIP_IMAGE=<ref>` | Image to run (default `ghcr.io/voipappz/node:latest`; name an exact `<YYYY.MM.DD>-<build>` tag to pin a build). The old Docker Hub image `nirlevi/va-crystal:node` is still accepted. |
 | `VA_KAMAILIO=off` | Install a node without its own kamailio — it relies on an external SBC (the mothership ingress). Topology, so it lives in the container environment (recorded in the install `.env`, passed with `docker -e`); health reports the kamailio checks as "off by config". |
 | `VA_FREESWITCH=off` | Install a proxy/agent-only node without media. |
+| `VA_ED137=1` | ED-137 (ATM voice) node: kamailio probes trunk peers every second and marks them down within 2 s, marks SIP DSCP CS5, and adds `WG67-Version` and `a=maxptime:30` on the answers to trunk peers. Recorded in the install `.env`, passed with `docker -e`. The node's `ed137` role sets the trunk codecs. |
 | `VA_CA_BUNDLE=/path/chain.pem` | Trust anchors for a mothership whose chain the node cannot verify. |
 | `INSTALL_DIR=/path` | Where the stack lands (default `/opt/voipappz`). |
 | `START=0` | Install and register, do not start the container. |
@@ -294,54 +310,21 @@ that cost real time. `make iso-ship ISO_HOST=…` sends a cut disc to a machine;
 
 ## The `voipappz` CLI
 
-This repository is also the home of the `voipappz` CLI's source, `cli/`, since
-2026-09-03. It is the glue that installs the platform: `voipappz bootstrap`
-installs a mothership, `voipappz node install` launches the installer above,
-and the same binary is the CLI inside the node image (`docker exec va-voip
-voipappz …`). The mothership repository, where it lived, is private; the
-installer is public, so the source and the binaries live where anyone who can
-run the installer can reach them.
+The `voipappz` CLI is no longer built here (2026-10-29). Its source lives in
+github.com/voipappz/node (`cli/`), which compiles it into the node image, so
+every node runs the CLI of its own image: `docker exec va-voip voipappz …`.
+`install.sh` only ever ran that copy, and still does.
 
-One binary, everywhere. What a command can do is a fact about the host, so the
-CLI works it out when it runs: a service catalog in reach means a stack, and
-`kamctl` on PATH means it is inside the node image. There is no separate node
-build to fetch, pin or confuse with this one.
-
-`install.sh` never builds, fetches or runs a host binary. It only runs the
-copy inside the node image.
-
-Install the published binary on any linux amd64 or Apple silicon machine:
+Where a host copy is still wanted (the node disc bakes one), `make build`
+copies the same binary out of the node image — no compiler, no release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/scripts/install-cli.sh | sh -s -- --release
+make build                                        # bin/voipappz from ghcr.io/voipappz/node:latest
+make build NODE_IMAGE=ghcr.io/voipappz/node:<tag>  # ... or from a given image
 ```
 
-Build it from this checkout (Docker only, no Crystal toolchain):
-
-```sh
-make build                 # the static binary at bin/voipappz
-make build RELEASE=latest  # ... or download the same binary, compiling nothing
-make cli-test              # the spec suite
-make install-cli           # put bin/voipappz on PATH
-```
-
-Or take the newest build of `main` directly — no tag, no token, no toolchain:
-
-```sh
-curl -fsSLO https://github.com/voipappz/installer/releases/download/latest/voipappz-linux-amd64
-curl -fsSL  https://github.com/voipappz/installer/releases/download/latest/voipappz-linux-amd64.sha256 | sha256sum -c -
-chmod +x voipappz-linux-amd64
-```
-
-Every CI run compiles the linux binary and keeps it as an artifact for a week;
-every push to `main` also replaces the assets on the rolling `latest`
-prerelease above (`voipappz-linux-amd64` and its `.sha256`). It moves under you
-by design — pin a tag for a binary that will not.
-
-Releases (`git tag vX.Y.Z && git push origin vX.Y.Z`) publish
-`voipappz-linux-amd64`, `voipappz-darwin-arm64` and their `.sha256` files.
-va-crystal pins one of those tags for the binary it bakes into
-`nirlevi/va-crystal:node`.
+The public `latest` and `v*` CLI releases this repo used to publish are no
+longer updated.
 
 ## More
 

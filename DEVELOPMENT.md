@@ -45,8 +45,8 @@ sneaks into the installer or its tests (the project deliberately has none).
 ## Running the installer from your checkout
 
 ```sh
-make get                             # the image: S3 archive, verified, no questions
-make get dockerhub                   # ... pulled instead, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
+make get                             # pull ghcr.io/voipappz/node:latest, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN (GitHub, read:packages)
+make get s3                          # ... the newest S3 archive instead
 make get ARCHIVE=latest              # ... docker load the newest ../va-crystal/ci/build/*.tar.gz
 make get ARCHIVE=/path/img.tar.gz    # ... a path or an http(s) URL (which must publish .sha256)
 make install                         # install THAT image; never fetches, never asks
@@ -183,11 +183,6 @@ secrets automatically.
 
 - **Shell / Ubuntu 22.04, 24.04** — `make check` and the `make -n` target
   expansions, on every push and pull request.
-- **cli · specs + static link + SIPp round-trip** — `make cli-test`, `make
-  build`, the command-surface check, and a real SIPp round trip through
-  `voipappz test scenario`, on every push and pull request. The binary is kept
-  as an artifact for a week, and a push to `main` also replaces the rolling
-  `latest` release.
 - **Node starts with real-time limits / Ubuntu 22.04, 24.04** — installs a node
   against a stub mothership, checks the container's capabilities and ulimits
   reached the process, then drives `make up`, `make down` and `make health`
@@ -232,10 +227,10 @@ The integration test downloads the mothership's `main`, so a mothership change
 can turn this repository's CI red with no change here. When it does, fix the
 test to follow the mothership in a pull request like any other.
 
-`.github/workflows/release.yml` runs on a `v*` tag and publishes the CLI
-binaries and checksums. Nothing in `install.sh` consumes them; va-crystal and
-`scripts/install-cli.sh --release` do — as does `make build RELEASE=1`, which
-downloads that binary into `bin/` instead of compiling one.
+The CLI is not built or released here any more (2026-10-29): it lives in
+github.com/voipappz/node (`cli/`) and ships inside the node image. Its specs,
+static build and SIPp round-trip run there. `make build` copies it out of the
+node image into `bin/` for the node disc.
 
 ## Where things live
 
@@ -244,9 +239,7 @@ downloads that binary into `bin/` instead of compiling one.
 | `install.sh` | the product; steps 1–6 are the top-level `step "N/6 …"` blocks |
 | `tests/test-install.sh` | integration test (Bash) |
 | `tests/clean-runner.sh` | GitHub-runner-only Docker purge |
-| `cli/` | the `voipappz` CLI: source, specs, SIPp scenarios (moved from the mothership 2026-09-03) |
-| `scripts/install-cli.sh` | puts a built or published CLI binary on PATH |
-| `Makefile` | this developer tool, and the CLI build and test targets |
+| `Makefile` | this developer tool; `make build` copies the CLI out of the node image |
 | `README.md` | operator documentation |
 | `CLAUDE.md` | engineering notes and contracts (registration, customers, credentials) — read before changing behaviour |
 

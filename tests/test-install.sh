@@ -29,9 +29,12 @@ DOCKER_AUTH_DIR="$RUN_ROOT/docker-auth"
 ONBOARD_OUTPUT="$RUN_ROOT/onboard.out"
 mkdir -p "$LOG_DIR"
 
-# The image install.sh pulls, one place. install.sh defaults to :node
-# (a987282); a test that hardcodes :latest inspects an image nothing pulled.
-NODE_IMAGE=${VA_VOIP_IMAGE:-nirlevi/va-crystal:node}
+# The image install.sh pulls, one place, handed to every install.sh below so
+# the test inspects the image it pulled. install.sh defaults to ghcr.io/voipappz/node:latest
+# since 2026-10-22; CI names the image and its registry pair explicitly
+# (Docker Hub until the repository holds a GitHub read:packages token).
+NODE_IMAGE=${VA_VOIP_IMAGE:-ghcr.io/voipappz/node:latest}
+export VA_VOIP_IMAGE="$NODE_IMAGE"
 
 NODE_UUID=11111111-1111-4111-8111-111111111111
 NODE_SIP_UUID=22222222-2222-4222-8222-222222222222
@@ -638,19 +641,14 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # customer link path without weakening the rule that forbids implicit moves.
 # va-api: voipappz/mothership renamed the API container from va-app on
 # 2026-09-15 (1383418).
-# A dataset write, not Customer#update: voipappz/api e6160ad (2026-09-24) makes
-# the model refuse to blank a node once set, which is right for the product and
-# only this fixture wants to undo. A dataset write also skips after_save, so the
-# Redis caches it would have cleared (the row, and customer:<uuid>:*) are
-# cleared here, or GET /customers keeps serving the old node for 30 minutes.
-docker exec -i -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
-  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -' >/dev/null <<'RUBY'
-uuid = ENV.fetch('CI_CUSTOMER_UUID')
-n = Customer.dataset.unfiltered.where(uuid: uuid).update(node_uuid: nil)
-abort "unassigned #{n} customers, expected 1" unless n == 1
-Customer.cache_delete_pk(uuid) if Customer.respond_to?(:cache_delete_pk)
-Customer[uuid]._delete_cache
-RUBY
+# PAST VALIDATION: since voipappz/api e6160ad a customer's node_uuid "cannot be
+# removed" through the model, which is the rule for real callers. This is
+# fixture setup. Through save, not a dataset update: GET /customers/:uuid reads
+# Customer[uuid] from the caching plugin (30 min TTL), and only a model save
+# expires that entry — a dataset update left the API serving the old node_uuid.
+docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
+  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "c = Customer[ENV.fetch(%q{CI_CUSTOMER_UUID})]; c.node_uuid = nil; c.save(validate: false)"' \
+  >/dev/null
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
 

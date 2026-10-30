@@ -28,7 +28,6 @@ jobs:
           test -x install.sh
           sh -n install.sh
           dash -n install.sh
-          sh -n scripts/install-cli.sh && dash -n scripts/install-cli.sh
           bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
           # Preinstalled on a GitHub runner, absent from act's image — these
           # two lines are so `act -j shell` runs the same gate locally. The
@@ -37,7 +36,7 @@ jobs:
           # which reads as a missing package rather than a missing index.
           command -v shellcheck >/dev/null || { sudo apt-get update -qq \
             && sudo apt-get install -y -qq shellcheck; }
-          shellcheck install.sh scripts/install-cli.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
           git diff --check
           test -z "$(find tests -type f -name '*.py' -print -quit)"
           ! grep -Eq 'python(3)?' install.sh
@@ -49,7 +48,7 @@ jobs:
           # integration job, which has a node to run them against.
           for t in help check check-make get install \
                    setup verify up down logs health cli \
-                   build cli-test install-cli \
+                   build \
                    iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
                    iso-upload image-cloud image-ami image-virtualbox \
                    image-disk-direct image-disk-from-iso image-validate; do
@@ -60,13 +59,12 @@ jobs:
           # from the `##` comments, so it cannot name a target that is not
           # there; what it CAN do is lose one, which check-make catches.
           make -n get                     | grep -q -- --image-only
+          make -n get registry            | grep -q "VA_IMAGE_SOURCE='registry'"
           make -n get dockerhub           | grep -q "VA_IMAGE_SOURCE='dockerhub'"
           make -n get SOURCE=dockerhub    | grep -q "VA_IMAGE_SOURCE='dockerhub'"
           make -n install                 | grep -q 'VA_IMAGE_SOURCE=local'
           make -n install REGISTER=0      | grep -q -- --no-register
-          make -n build                   | grep -q crystallang/crystal
-          make -n build RELEASE=1         | grep -q -- 'install-cli.sh --release'
-          make -n build RELEASE=v0.2.0    | grep -q -- '--release v0.2.0'
+          make -n build                   | grep -q "docker create"
           # The media targets' knobs, same idea: QUICK re-cuts from an
           # unchanged payload, ISO_DEST decides where the disc lands, and an
           # ISO_HOST-less delivery must refuse rather than build.
@@ -75,215 +73,6 @@ jobs:
           if make -n iso | grep -q "dest_dir="; then echo "!! iso names a dest_dir with none set" >&2; exit 1; fi
           make -n iso-deliver             | grep -q 'set ISO_HOST'
           make check-make
-
-  # THE CLI, built and tested here since 2026-09-03, when cli/ moved in from
-  # the mothership so it can be public while the mothership is not.
-  #
-  # A SEPARATE JOB, deliberately. `shell` above stays a POSIX gate with no
-  # compiler in reach: install.sh is one script piped into sh, and its checks
-  # must keep passing on a machine that could not compile anything.
-  #
-  # Specs AND a link, in that order. A suite that passes while the artifact
-  # fails to link leaves nothing to ship — and the release workflow is not the
-  # place to discover that on a tag.
-  cli:
-    name: cli · specs + static link + SIPp round-trip
-    runs-on: ubuntu-latest
-    # Only this job publishes, and only the rolling `latest` release.
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Specs
-        run: make cli-test
-
-      # --static, and it matters beyond this repo: the mothership's SIP suites
-      # and its ISO run the binary FROM THE HOST, where a musl dynamic build
-      # cannot exec.
-      - name: Static build links and runs
-        run: |
-          make build
-          ./bin/voipappz --version
-          file bin/voipappz | grep -q 'statically linked'
-
-      # ONE BINARY, BOTH PLANES — the check that replaced the two-build proof
-      # on 2026-09-07. `status` is the compose rollup a stack needs;
-      # `node-monitor` is the screen a node needs, and it is registered
-      # unconditionally now instead of taking `monitor`'s name in a second
-      # build. Both present in one `--help` is what "the flag is gone" means.
-      # Losing either would mean someone reintroduced a build-time surface.
-      - name: One binary serves the stack and the node
-        run: |
-          for command in status node-monitor sbc pbx health; do
-            ./bin/voipappz --help | grep -qE "^[[:space:]]+$command\b" || {
-              echo "!! the binary has no '$command' — the command surface shrank" >&2; exit 1; }
-          done
-          # And the runtime dispatch: with no config/services.tsv in reach this
-          # checkout is not a stack, so `monitor` must resolve to the node
-          # screen. Compiling that decision in is what this repo just stopped
-          # doing; proving it at runtime is what replaces it.
-          ./bin/voipappz monitor --help | grep -q 'node-monitor' || {
-            echo "!! 'monitor' did not fall through to the node monitor without a catalog" >&2; exit 1; }
-
-      # THE BINARY, EVERY RUN. The mothership's CI installs a stack and a node
-      # with it rather than compiling its own copy, and va-crystal bakes it
-      # into the node image — so every push should leave something they can
-      # take. A week, not a day: a branch reviewed on Friday still has its
-      # binary on Monday.
-      - name: Keep the binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: voipappz-linux-amd64
-          path: bin/voipappz
-          retention-days: 7
-
-      # A STABLE URL for the newest main. Artifacts need a GitHub token and an
-      # API call to fetch; a release asset is a plain https download, which is
-      # what an installer, a Dockerfile or a workstation can actually use
-      # without credentials. `latest` is rolling and marked prerelease: the
-      # v* tags release.yml publishes stay the immutable, citable ones.
-      #
-      # ACT skips it — a local run has no token and nothing to publish to.
-      - name: Publish the rolling `latest` binaries
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !env.ACT }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          cp bin/voipappz voipappz-linux-amd64
-          sha256sum voipappz-linux-amd64 > voipappz-linux-amd64.sha256
-          gh release view latest >/dev/null 2>&1 || gh release create latest \
-            --prerelease --title 'latest (rolling)' \
-            --notes 'The newest main build. Replaced by every push to main; pin a v* tag for a binary that will not move.'
-          gh release upload latest --clobber \
-            voipappz-linux-amd64 voipappz-linux-amd64.sha256
-          gh release edit latest --notes "The newest main build ($GITHUB_SHA). Replaced by every push to main; pin a v* tag for a binary that will not move."
-
-      # THE CLI AT A REAL TERMINAL, a to z. Every step above pipes, and the
-      # CLI branches on STDIN.tty?/STDOUT.tty? throughout — the setup wizard
-      # blocks on stdin only when it has one, the tables draw, the line editor
-      # arms. A prompt that moved, vanished or was reworded is invisible to all
-      # of them. Moved here from the mothership on 2026-09-04: the prompts it
-      # asserts are cli/src/commands/setup.cr's, so the test now sits with the
-      # code it tests.
-      #
-      # `setup` and `status` need a PROJECT — a directory with a
-      # docker-compose.yaml — and write config/va.yaml and .env into it. That
-      # is cli/spec/fixtures/project, the same fixture the spec suite resolves
-      # through VA_PROJECT_DIR, copied so the assertions below read a file this
-      # run wrote.
-      #
-      # NOT the real mothership. It was, for one run: downloaded as a public
-      # tarball the way tests/test-install.sh takes it. That repository went
-      # private on 2026-09-04 and the step 404'd. A public repo's CI cannot
-      # depend on a private one without a credential, and this job runs on fork
-      # PRs where no secret is available — so the fixture is the only honest
-      # answer. What is under test is the CLI's prompts, not the mothership.
-      - name: A project to answer at, and expect to do the typing
-        run: |
-          cp -r cli/spec/fixtures/project /tmp/project
-          echo "MS=/tmp/project" >> "$GITHUB_ENV"
-          # Update first: act's image ships an empty package list (see the
-          # shell job), and a GitHub runner already has expect.
-          command -v expect >/dev/null || { sudo apt-get update -qq \
-            && sudo apt-get install -y -qq expect >/dev/null; }
-
-      - name: The CLI answers at a real terminal, a to z
-        run: expect tests/tty-cli.exp "$PWD/bin/voipappz" "$MS" /tmp/tty-cli.log
-
-      - name: What was typed at the terminal reached the configuration
-        # The four answers that are TYPED. The two IP answers are Enter, so
-        # they are not asserted: setup heals an address that is not bound on
-        # this host back to one that is, and asserting a healed value would be
-        # asserting the healer rather than the prompt.
-        run: |
-          grep -q '^  name: Terminal Org$'        "$MS/config/va.yaml"
-          grep -q '^  domain: cli.ci.example$'    "$MS/config/va.yaml"
-          grep -q '^  email: cli@cli.ci.example$' "$MS/config/va.yaml"
-          grep -q '^  environment: staging$'      "$MS/config/va.yaml"
-          # And --dry-run leaked nothing. It is the flag people paste into an
-          # issue, and VA_NATS_URL carries a password inside a value whose key
-          # does not say so — which an earlier version of it printed in full.
-          ! grep -q 's3cr3t-not-a-real-password' /tmp/tty-cli.log
-          ! grep -q 'Y2xpQGV4YW1wbGU6c3VwZXJzZWNyZXQ=' /tmp/tty-cli.log
-          echo "tty: four typed answers reached config/va.yaml, no secret reached the transcript"
-
-      # Two checks, both self-contained: no node, no registry, no target. The
-      # first run also fetches the pinned SIPp, so the download and its
-      # checksum are covered here too.
-      - name: SIPp scenario round-trip
-        run: |
-          # GitHub hands this step `bash -e`, and `set -uo pipefail` does not
-          # clear it. Half the commands below MUST fail — that is the negative
-          # assertion — so under -e the shell dies on the expected failure
-          # before the line that judges it ever runs. Verdicts are read from
-          # captured exit codes here, so -e has to go.
-          set +e
-          set -uo pipefail
-
-          cat > /tmp/offer.yml <<'YML'
-          name: ci-offer
-          to: echo
-          number_of_calls: 1
-          max_concurrent: 1
-          calls_per_second: 1
-          ptime: 20
-          maxptime: 30
-          steps:
-            - invite
-            - wait_for_answer
-            - ack_answer
-            - hangup
-          YML
-          sed '/ptime/d' /tmp/offer.yml > /tmp/bare.yml
-
-          # 1. Assertions, both directions. `trunk-offer-check` listens and
-          # checks the SDP it is offered; a client dials it.
-          #
-          # The negative case is the point. That a compliant offer passes only
-          # proves the scenario ran; that a NON-compliant one FAILS proves
-          # check_it is wired to the call's verdict, which is the whole reason
-          # to write the check instead of reading a capture.
-          timeout 120 ./bin/voipappz test scenario trunk-offer-check --out /tmp/uas & server=$!
-          sleep 5
-          timeout 120 ./bin/voipappz test scenario /tmp/offer.yml --out /tmp/uac -d 127.0.0.1:5080
-          client=$?
-          wait $server; served=$?
-          [ $client -eq 0 ] || { echo "!! the client scenario failed (exit $client)" >&2; exit 1; }
-          [ $served -eq 0 ] || { echo "!! assert_body rejected a compliant offer (exit $served)" >&2; exit 1; }
-
-          timeout 120 ./bin/voipappz test scenario trunk-offer-check --out /tmp/uas2 & server=$!
-          sleep 5
-          timeout 120 ./bin/voipappz test scenario /tmp/bare.yml --out /tmp/uac2 -d 127.0.0.1:5080 || true
-          wait $server; served=$?
-          [ $served -ne 0 ] || { echo "!! assert_body passed an offer with no a=ptime — check_it is not wired" >&2; exit 1; }
-
-          # 2. Media. `call` carries three seconds of RTP, so this exercises the
-          # generated pcap and the raw socket replaying it needs.
-          #
-          # The far end is SIPp's OWN uas, not another of our scenarios: two of
-          # ours meeting with media trips a segfault inside SIPp's pcap cleanup
-          # AFTER the dialog completes (both 200s sent, BYE answered). That is
-          # SIPp's bug, not the scenario's, and it must not gate this repo.
-          .cache/sipp -sn uas -p 5085 -m 1 -nostdin >/tmp/uas-builtin.log 2>&1 & farend=$!
-          sleep 3
-          # Keep the far end's output: a uas that died on startup would
-          # otherwise show up only as a client that dialled nothing.
-          kill -0 $farend 2>/dev/null || {
-            echo "!! SIPp's own uas did not stay up" >&2
-            cat /tmp/uas-builtin.log >&2
-            exit 1
-          }
-          timeout 120 ./bin/voipappz test scenario call --to echo -d 127.0.0.1:5085 --out /tmp/media
-          media=$?
-          # Reaped, never waited on: `-m 1` only exits once a call arrives, so
-          # a client that never dialled would hang this step until the job
-          # timeout instead of reporting the failure it already knows about.
-          kill $farend 2>/dev/null
-          wait $farend 2>/dev/null
-          [ $media -eq 0 ] || { echo "!! the media scenario failed (exit $media)" >&2; exit 1; }
-          echo "round trip ok: offer asserted both ways, media replayed"
 
   # A NODE ON A CLEAN HOST, WITH NOTHING ELSE. The integration job below proves
   # registration against a real mothership; this one proves the thing that job
@@ -337,14 +126,14 @@ jobs:
           done
           curl -fsS -o /dev/null -m 2 http://127.0.0.1:5000/health
 
-      - name: Build the CLI install.sh runs
-        run: make build
-
       - name: Install a node, no registration
         env:
-          VA_CLI_URL: file://${{ github.workspace }}/bin/voipappz
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          # The Docker Hub copy, which these secrets can read. Switch to
+          # ghcr.io/voipappz/node:latest once the repo holds a GitHub
+          # read:packages token (install.sh's default since 2026-10-22).
+          VA_VOIP_IMAGE: nirlevi/va-crystal:node
           VA_API_URL: http://127.0.0.1:5000
           VA_NATS_URL: nats://127.0.0.1:4222
         run: sh install.sh --no-register
@@ -461,24 +250,22 @@ jobs:
       - name: Check out public installer
         uses: actions/checkout@v7
 
-      # Before the purge: the build runs in Docker. install.sh then runs THIS
-      # checkout's CLI instead of downloading the published one, so a PR is
-      # tested with the CLI it changes.
-      - name: Build the CLI install.sh runs
-        run: make build
 
       - name: Remove preinstalled Docker
         run: tests/clean-runner.sh
 
       - name: Install and register against real mothership
         env:
-          VA_CLI_URL: file://${{ github.workspace }}/bin/voipappz
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          # The Docker Hub copy, which these secrets can read. Switch to
+          # ghcr.io/voipappz/node:latest once the repo holds a GitHub
+          # read:packages token (install.sh's default since 2026-10-22).
+          VA_VOIP_IMAGE: nirlevi/va-crystal:node
           # voipappz/mothership went private on 2026-09-04: its tarball now
           # needs a read token. This job already requires secrets (the registry
           # pair), so it is the one place in this workflow that can hold one —
-          # unlike the `cli` job, which runs on fork PRs and answers at a
+          # unlike a job that runs on fork PRs and must answer at a
           # fixture instead.
           MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
         # The mothership fixture is DOWNLOADED, never cloned — the same tarball
@@ -492,7 +279,7 @@ jobs:
   notify:
     name: release email
     runs-on: ubuntu-latest
-    needs: [shell, cli, container, integration]
+    needs: [shell, container, integration]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Check SMTP credentials
@@ -525,7 +312,6 @@ jobs:
             ${{ github.repository }} on main — ${{ github.sha }}
 
             shell             : ${{ needs.shell.result }}
-            cli               : ${{ needs.cli.result }}
             container         : ${{ needs.container.result }}
             integration       : ${{ needs.integration.result }}
 
