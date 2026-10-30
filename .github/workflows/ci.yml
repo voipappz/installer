@@ -58,7 +58,6 @@ jobs:
           # integration job, which has a node to run them against.
           for t in help check check-make get install \
                    setup verify up down logs health cli \
-                   build \
                    iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
                    iso-upload image-cloud image-ami image-virtualbox \
                    image-disk-direct image-disk-from-iso image-validate; do
@@ -74,7 +73,6 @@ jobs:
           make -n get SOURCE=dockerhub    | grep -q "VA_IMAGE_SOURCE='dockerhub'"
           make -n install                 | grep -q 'VA_IMAGE_SOURCE=local'
           make -n install REGISTER=0      | grep -q -- --no-register
-          make -n build                   | grep -q "docker create"
           # The media targets' knobs, same idea: QUICK re-cuts from an
           # unchanged payload, ISO_DEST decides where the disc lands, and an
           # ISO_HOST-less delivery must refuse rather than build.

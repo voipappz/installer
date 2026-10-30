@@ -21,7 +21,6 @@ MAKEFLAGS   += --no-print-directory --no-builtin-rules --no-builtin-variables
 # Add a target: add it here.
 PHONY_TARGETS := help check check-make test test-nats-https get install \
                  setup verify up down logs health cli \
-                 build \
                  iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
                  iso-upload image-cloud image-ami image-virtualbox \
                  image-disk-direct image-disk-from-iso image-validate \
@@ -248,26 +247,6 @@ health: ## The node's own health verdict, from the CLI inside the image
 cli: ## [ARGS=cmd] The in-image CLI: make cli ARGS="sbc egress status"
 	@$(NODE_ARGS) sh scripts/cli.sh $(ARGS)
 
-##@ The CLI binary
-
-# THE CLI IS NOT BUILT HERE (2026-10-29). Its source moved to
-# github.com/voipappz/node (cli/), which compiles it into the node image, so
-# every node runs the CLI of its own image. install.sh only ever ran that copy.
-# What still wants a host copy — the node disc bakes bin/voipappz — gets the
-# same binary out of the image: no compiler, no release, nothing to drift.
-NODE_IMAGE ?= $(or $(VA_VOIP_IMAGE),ghcr.io/voipappz/node:latest)
-build: ## [NODE_IMAGE=repo:tag] Copy the voipappz CLI out of the node image to bin/voipappz
-	@mkdir -p bin
-	@cid=$$(docker create $(NODE_IMAGE)) || exit 1; \
-	  docker cp $$cid:/usr/local/bin/voipappz bin/voipappz; s=$$?; docker rm $$cid >/dev/null; exit $$s
-	@chmod +x bin/voipappz
-	@echo "cli binary: $$(./bin/voipappz --version) (from $(NODE_IMAGE))"
-
-# File target: consumers copy ONCE when the binary is absent. `make build`
-# refreshes it.
-bin/voipappz:
-	$(MAKE) build
-
 ##@ Node media (ISO)
 #
 # A bootable, offline Ubuntu installer carrying docker, the SIP tooling, the
@@ -311,7 +290,7 @@ export VOIPAPPZ_LOCAL_IMAGES
 #
 #   make iso-release                       # pins nothing: bin/voipappz is `latest`
 #   make iso-release CLI_VERSION=v0.2.0    # ... and the disc records that tag
-iso-release: build iso-payload iso ## Copy the CLI out of the node image, then cut a disc around it
+iso-release: iso-payload iso ## Pull the node image into the payload, then cut a disc around it
 
 # NO SIP ROUND TRIP HERE. The scenarios need SIPp, and driving real calls
 # belongs to the node image's own build in ../va-crystal — a disc is media
