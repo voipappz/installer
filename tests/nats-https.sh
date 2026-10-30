@@ -116,18 +116,18 @@ roundtrip() {
   internal request "$SUBJECT" '{}' --timeout 20s --raw > "$RUN_DIR/reply.json"
   jq -e --arg uuid "$NODE_UUID" '.node_uuid == $uuid and .metrics.nats_connected == 1' "$RUN_DIR/reply.json" >/dev/null || fail 'node health reply was not from the connected node'
 }
-start_node "$ID-node" "https://default:$KEY@kong:8443/nats"
+start_node "$ID-node" "wss://default:$KEY@kong:8443/nats"
 wait_connected
 roundtrip
-pass 'real node authenticates and replies over HTTPS /nats with a trusted certificate'
+pass 'real node authenticates and replies over WSS /nats with a trusted certificate'
 # The real node creates its shared-state KV bucket through this same link.
 internal kv info LIVE >/dev/null
-pass 'node JetStream KV initialization succeeds over HTTPS'
+pass 'node JetStream KV initialization succeeds over WSS'
 
 status=$(docker exec "$ID-node" curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
   -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' http://kong:8000/nats)
-case "$status" in 308|426) pass 'plaintext HTTP cannot upgrade to NATS' ;; *) fail "plaintext route returned $status" ;; esac
+case "$status" in 101) pass 'plaintext WS can upgrade to NATS through Kong' ;; *) fail "plaintext route returned $status" ;; esac
 if docker exec "$ID-node" getent hosts nats >/dev/null 2>&1; then fail 'node can resolve the private broker'; fi
 pass 'external node has no direct broker network or TCP fallback'
 status=$(docker exec "$ID-node" curl -sS --cacert /ca.pem --max-time 5 -o /dev/null -w '%{http_code}' \
@@ -167,9 +167,9 @@ rejected() {
   docker rm -f "$ID-bad" >/dev/null
   pass "$label"
 }
-rejected 'wrong NATS key rejected' 'https://default:wrong@kong:8443/nats' 'Authorization|Authentication'
-rejected 'missing NATS key rejected' 'https://kong:8443/nats' 'Authorization|Authentication'
-rejected 'untrusted TLS certificate rejected' "https://default:$KEY@kong:8443/nats" 'certificate verify failed' /etc/ssl/certs/ca-certificates.crt
+rejected 'wrong NATS key rejected' 'wss://default:wrong@kong:8443/nats' 'Authorization|Authentication'
+rejected 'missing NATS key rejected' 'wss://kong:8443/nats' 'Authorization|Authentication'
+rejected 'untrusted TLS certificate rejected' "wss://default:$KEY@kong:8443/nats" 'certificate verify failed' /etc/ssl/certs/ca-certificates.crt
 IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$ID-edge\").IPAddress}}" "$ID-kong")
-rejected 'wrong TLS hostname rejected' "https://default:$KEY@$IP:8443/nats" 'certificate verify failed|hostname mismatch'
-pass 'node HTTPS /nats integration and security checks passed'
+rejected 'wrong TLS hostname rejected' "wss://default:$KEY@$IP:8443/nats" 'certificate verify failed|hostname mismatch'
+pass 'node WSS /nats integration and security checks passed'

@@ -89,6 +89,12 @@ setup_broker_url() {
   printf '%s://%s/nats' "$_scheme" "$_authority"
 }
 
+credentialed_broker_url() { # bare URL, mothership VA_NATS_TOKEN
+  case "$2" in ''|*[!A-Za-z0-9._~-]*) die "NATS token must contain only URL-safe letters, digits, . _ or -" ;; esac
+  case "$1" in *://*@*) die "Kong NATS URL must not include credentials" ;; esac
+  printf '%s://default:%s@%s' "${1%%://*}" "$2" "${1#*://}"
+}
+
 verify_setup_broker() (
   # A real Upgrade and NATS INFO, not a 200 from Kong's SPA catchall.
   # This checks transport only; no credentials are sent or printed.
@@ -117,9 +123,10 @@ verify_setup_broker() (
     *) cat "$probe_dir/error" >&2; die "Kong NATS connection failed" ;;
   esac
   if ! grep -q '^HTTP/1.1 101 ' "$probe_dir/headers" ||
+     ! grep -qi '^Server: kong' "$probe_dir/headers" ||
      ! grep -qi '^Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=' "$probe_dir/headers" ||
      ! grep -aq 'INFO {"server_id":' "$probe_dir/body"; then
-    die "Kong /nats did not return a WebSocket upgrade and NATS greeting; check the URL, port and broker"
+    die "Kong /nats did not return its WebSocket upgrade and NATS greeting; check the Kong URL, port and broker"
   fi
   say "Kong NATS WebSocket verified (transport; authentication is checked when the node connects)"
 )
@@ -173,6 +180,17 @@ BROKER_URL=$(ask "  Kong NATS URL (ws or wss)" "$(setup_broker_url "$VA_API_URL"
 verify_setup_broker "$BROKER_URL"
 set_setup_url mothership "$VA_API_URL"
 set_setup_url broker "$BROKER_URL"
+
+step "The NATS token"
+if [ -n "${VA_NATS_URL_CREDENTIALED:-}" ]; then
+  say "$VA_ENV_FILE already has VA_NATS_URL_CREDENTIALED; keeping it"
+else
+  NATS_TOKEN=${VA_NATS_TOKEN:-}
+  [ -n "$NATS_TOKEN" ] || NATS_TOKEN=$(ask_secret "  NATS token (VA_NATS_TOKEN from the mothership)")
+  set_env_value VA_NATS_URL_CREDENTIALED "$(credentialed_broker_url "$BROKER_URL" "$NATS_TOKEN")"
+  NATS_TOKEN=""
+fi
+unset VA_NATS_TOKEN
 
 # GENERATED HERE, ONCE. The node-only wizard writes va.yaml and nothing else, so
 # the node-local secrets were never written and `make up` refused. They are
