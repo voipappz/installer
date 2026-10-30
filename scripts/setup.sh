@@ -59,13 +59,10 @@ say "this writes $VA_ENV_FILE and $VA_CONFIG, and nothing else"
 # machine are a pile of builds and picking one for them is how you spend an
 # afternoon debugging the wrong binary. `make get` is what puts one here.
 step "The image"
-PRESENT=$(node_images)
-if [ -z "$PRESENT" ]; then
-  die "no va-crystal image on this host — fetch one first: make get"
-fi
-say "node images on this host:"
-printf '%s\n' "$PRESENT" | sed 's/^/     /'
-VA_VOIP_IMAGE=$(ask "  image" "${VA_VOIP_IMAGE:-$(printf '%s' "$PRESENT" | head -1)}")
+# ghcr.io/voipappz/node:latest unless told otherwise — the image every node
+# runs. Not pulled here: `make get` is the one command that fetches images, and
+# require_image says so when it is missing.
+VA_VOIP_IMAGE=$(ask "  image" "${VA_VOIP_IMAGE:-$DEFAULT_IMAGE}")
 require_image
 set_env_value VA_VOIP_IMAGE "$VA_VOIP_IMAGE"
 
