@@ -53,9 +53,12 @@ set_setup_url() { # section, URL
   case "$2" in
     *[[:space:]\'\"\\]*|*://*@*|*\?*|*\#*) die "enter a mothership URL without credentials, whitespace, quotes, query or fragment" ;;
   esac
-  case "$1:$2" in
-    mothership:https://?*|mothership:http://?*|broker:wss://?*|broker:ws://?*) ;;
-    *) die "mothership needs http(s)://; Kong NATS needs ws(s)://" ;;
+  case "$1" in
+    mothership)
+      case "$2" in https://?*|http://?*) ;; *) die "mothership API URL must start with https:// or http://" ;; esac ;;
+    broker)
+      case "$2" in wss://?*|ws://?*) ;; *) die "Kong NATS URL must start with wss:// or ws://" ;; esac ;;
+    *) die "unknown setup URL section: $1" ;;
   esac
   _tmp=$(mktemp "${VA_CONFIG}.tmp.XXXXXX")
   awk -v section="$1" -v url="${2%/}" '
@@ -175,7 +178,7 @@ docker run --rm -it --network host \
 step "The mothership"
 CURRENT_URL=$(sed -n '/^mothership:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_CONFIG" |
   head -1 | tr -d "\"'")
-VA_API_URL=$(ask "  Mothership URL (Kong)" "${VA_API_URL:-${CURRENT_URL:-https://cloud.voipappz.io}}")
+VA_API_URL=$(ask "  Mothership API URL via Kong (http or https)" "${VA_API_URL:-${CURRENT_URL:-https://cloud.voipappz.io}}")
 BROKER_URL=$(ask "  Kong NATS URL (ws or wss)" "$(setup_broker_url "$VA_API_URL")")
 verify_setup_broker "$BROKER_URL"
 set_setup_url mothership "$VA_API_URL"
