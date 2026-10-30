@@ -20,7 +20,7 @@ MAKEFLAGS   += --no-print-directory --no-builtin-rules --no-builtin-variables
 # Every target in one place so check-make can prove each still has a rule.
 # Add a target: add it here.
 PHONY_TARGETS := help check check-make test test-nats-https get install \
-                 setup verify up down logs health cli \
+                 setup verify up down logs health cli mcp \
                  iso iso-payload iso-clean iso-deliver iso-ship iso-node-install \
                  iso-upload image-cloud image-ami image-virtualbox \
                  image-disk-direct image-disk-from-iso image-validate \
@@ -50,7 +50,7 @@ help: ## Show this help
 # Exactly the "Shell" job of .github/workflows/ci.yml. shellcheck runs from its
 # container when it is not installed, so this needs nothing but docker.
 SCRIPTS = install.sh scripts/common.sh scripts/setup.sh scripts/verify.sh scripts/up.sh \
-          scripts/down.sh scripts/logs.sh scripts/health.sh scripts/cli.sh \
+          scripts/down.sh scripts/logs.sh scripts/health.sh scripts/cli.sh scripts/mcp.sh \
           scripts/node-images.sh \
           scripts/check-packer-targets.sh scripts/iso-upload.sh \
           scripts/extract-casper.sh tests/clean-runner.sh \
@@ -246,6 +246,9 @@ health: ## The node's own health verdict, from the CLI inside the image
 
 cli: ## [ARGS=cmd] The in-image CLI: make cli ARGS="sbc egress status"
 	@$(NODE_ARGS) sh scripts/cli.sh $(ARGS)
+
+mcp: ## How to connect an LLM to this node over MCP (the CLI's background server)
+	@$(NODE_ARGS) sh scripts/mcp.sh
 
 ##@ Node media (ISO)
 #
