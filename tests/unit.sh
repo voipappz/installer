@@ -540,6 +540,10 @@ check 'flag recorded in .env'                 'grep -qx "VA_KAMAILIO=off" "$TMP/
 check 'a rerun replaces, never duplicates'    '[[ $(grep -c "^VA_KAMAILIO=" "$TMP/.env") == 1 && $(grep -x "VA_KAMAILIO=on" "$TMP/.env") ]]'
 check 'the installer validates the flag'      'grep -q "must be .on. or .off." "$ROOT/install.sh"'
 check 'docker run carries the flag'           'grep -q "VA_KAMAILIO=\$NODE_KAMAILIO" "$ROOT/install.sh"'
+check 'VA_ED137 is recorded in .env'          'grep -q "VA_KAMAILIO VA_FREESWITCH VA_ED137" "$ROOT/install.sh"'
+check 'VA_ED137 is validated (1 or 0)'        'grep -q "VA_ED137 must be 1 or 0" "$ROOT/install.sh"'
+check 'install docker run carries VA_ED137'   'grep -q "VA_ED137=\$NODE_ED137" "$ROOT/install.sh"'
+check 'up.sh docker run carries VA_ED137'     'grep -q "VA_ED137=\$VA_ED137" "$ROOT/scripts/up.sh"'
 check 'the flag never lands in va.yaml'       '! grep -q "set_yaml_env_key" "$ROOT/install.sh"'
 
 check '.env.example exists'                          '[[ -f $ROOT/.env.example ]]'
@@ -647,6 +651,14 @@ run_flags() {  # file -> the flags of its docker run, one per line, sorted
 check 'up.sh runs the same flags as install.sh'     '[[ "$(run_flags "$UP")" == "$(run_flags "$ROOT/install.sh")" ]]'
 check 'up.sh mounts the YAML at /tmp/node.yaml'     'grep -q "/tmp/node.yaml:ro" "$UP"'
 check 'up.sh keeps the kamailio volume'             'grep -q "voipappz-kamailio:/var/lib/kamailio" "$UP"'
+# Recordings outlive the container, and the upload archive is inside the same
+# volume (the node moves a file there with a rename) — in BOTH docker runs.
+for _f in "$UP" "$ROOT/install.sh"; do
+  check "$(basename "$_f") keeps the recordings volume" \
+    'grep -q "voipappz-recordings:/usr/local/freeswitch/recordings " "'"$_f"'"'
+  check "$(basename "$_f") archives uploads inside it" \
+    'grep -q "RECORDING_DONE_DIR=/usr/local/freeswitch/recordings/" "'"$_f"'"'
+done
 check 'up.sh applies the YAML to kamailio'          'grep -q "sbc egress sync" "$UP"'
 check 'the installer no longer needs Compose'        '! grep -qE "compose (up|down|ps|config|version)" "$ROOT/install.sh"'
 check 'the installer no longer extracts /stack'      '! grep -q "stack/." "$ROOT/install.sh"'

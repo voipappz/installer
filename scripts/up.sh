@@ -88,6 +88,12 @@ fi
 # inside the image can raise its own rtprio or memlock, and a node without them
 # runs FreeSWITCH with no real-time scheduling: fine while idle, jitter under
 # load, and nothing names the cause.
+#
+# Recordings are a volume: FreeSWITCH writes <call_uuid>.mp3 there and the
+# node uploads it when the API's CDR asks. Inside the container, a recreate
+# (this script, every upgrade) deleted every mp3 not yet uploaded. The upload
+# archive (RECORDING_DONE_DIR) stays INSIDE the volume: the node moves a file
+# there with a rename, which cannot cross filesystems.
 set -- docker run -d --name "$NODE" \
   --network host \
   --restart unless-stopped \
@@ -98,6 +104,9 @@ set -- docker run -d --name "$NODE" \
   --ulimit memlock=-1:-1 --ulimit nofile=999999:999999 \
   -v "$VA_CONFIG:/tmp/node.yaml:ro" \
   -v voipappz-kamailio:/var/lib/kamailio \
+  -v voipappz-recordings:/usr/local/freeswitch/recordings \
+  -e RECORDING_SRC_DIR=/usr/local/freeswitch/recordings \
+  -e RECORDING_DONE_DIR=/usr/local/freeswitch/recordings/copied \
   -e VA_PATH=/tmp/node.yaml \
   -e "FREESWITCH_PASSWORD=$VA_FREESWITCH_PASSWORD" \
   -e "VA_FREESWITCH_PASSWORD=$VA_FREESWITCH_PASSWORD" \
@@ -108,6 +117,7 @@ set -- docker run -d --name "$NODE" \
 # URL that carries a credential (the bare one is in va.yaml).
 [ -z "${VA_KAMAILIO:-}" ]   || set -- "$@" -e "VA_KAMAILIO=$VA_KAMAILIO"
 [ -z "${VA_FREESWITCH:-}" ] || set -- "$@" -e "VA_FREESWITCH=$VA_FREESWITCH"
+[ -z "${VA_ED137:-}" ]      || set -- "$@" -e "VA_ED137=$VA_ED137"
 [ -z "${VA_NATS_URL_CREDENTIALED:-}" ] \
   || set -- "$@" -e "NATS_URL=$VA_NATS_URL_CREDENTIALED"
 # The pinned CA bundle sits beside the va.yaml it belongs to: ./config for a
