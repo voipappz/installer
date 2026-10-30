@@ -578,6 +578,13 @@ docker compose version >/dev/null 2>&1 \
   || die 'docker compose is missing — the mothership fixture is a compose stack'
 pass 'docker compose present (the mothership fixture needs it; the node does not)'
 
+# The fixture's own secrets. The mothership's scripts/setup.sh generates them
+# on a real install; this test starts the compose file directly, so it supplies
+# the ones the compose file refuses to start without (voipappz/mothership
+# 823f8e166, 2026-09-24: the alert mailbox UI is published, behind a password).
+VA_MAILPIT_UI_PASSWORD="${VA_MAILPIT_UI_PASSWORD:-$(openssl rand -hex 16)}"
+export VA_MAILPIT_UI_PASSWORD
+
 MOTHERSHIP_UP=1
 (
   cd "$MOTHERSHIP_DIR"
@@ -631,13 +638,13 @@ pass 'real Customer::Init created the bootstrap customer and Account'
 # customer link path without weakening the rule that forbids implicit moves.
 # va-api: voipappz/mothership renamed the API container from va-app on
 # 2026-09-15 (1383418).
-# save(validate: false): since 2026-10 the API refuses to BLANK a customer's
-# node_uuid (Customer#validate_node_uuid), so a plain update raised
-# "node_uuid cannot be removed". Unassigning is a fixture step no real client
-# may take; skipping validation here keeps that rule intact for everyone else,
-# and save (not a dataset update) still runs the hooks that drop cached copies.
+# PAST VALIDATION: since voipappz/api e6160ad a customer's node_uuid "cannot be
+# removed" through the model, which is the rule for real callers. This is
+# fixture setup. Through save, not a dataset update: GET /customers/:uuid reads
+# Customer[uuid] from the caching plugin (30 min TTL), and only a model save
+# expires that entry — a dataset update left the API serving the old node_uuid.
 docker exec -e "CI_CUSTOMER_UUID=$FIRST_UUID" va-api sh -c \
-  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "c = Customer.find_by_uuid(ENV.fetch(%q{CI_CUSTOMER_UUID})); c.node_uuid = nil; c.save(validate: false)"' \
+  'cd /opt/va-voipbox-api && bundle exec ruby -r ./lib/application -e "c = Customer[ENV.fetch(%q{CI_CUSTOMER_UUID})]; c.node_uuid = nil; c.save(validate: false)"' \
   >/dev/null
 customer=$(api GET "/customers/$FIRST_UUID")
 assert_jq "$customer" '.node_uuid == null' 'bootstrap customer is available for node assignment'
