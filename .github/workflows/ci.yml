@@ -5,9 +5,19 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      mothership_ref:
+        description: Mothership commit or branch to validate against
+        required: false
+        default: 170c396e64c269a8f3b110c19db1387250b9905f
+        type: string
 
 permissions:
   contents: read
+  # The node image is a private ghcr.io package; the job token can pull it
+  # once the package grants this repository access. GHCR_USER/GHCR_TOKEN (a
+  # read:packages token) override it where that grant is missing.
+  packages: read
 
 concurrency:
   group: installer-${{ github.workflow }}-${{ github.ref }}
@@ -28,7 +38,7 @@ jobs:
           test -x install.sh
           sh -n install.sh
           dash -n install.sh
-          bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+          bash -n tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh tests/nats-https.sh
           # Preinstalled on a GitHub runner, absent from act's image — these
           # two lines are so `act -j shell` runs the same gate locally. The
           # update is not optional: act's image ships an EMPTY package list, so
@@ -36,7 +46,7 @@ jobs:
           # which reads as a missing package rather than a missing index.
           command -v shellcheck >/dev/null || { sudo apt-get update -qq \
             && sudo apt-get install -y -qq shellcheck; }
-          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh
+          shellcheck install.sh tests/clean-runner.sh tests/test-install.sh tests/unit.sh tests/two-pbx.sh tests/nats-https.sh
           git diff --check
           test -z "$(find tests -type f -name '*.py' -print -quit)"
           ! grep -Eq 'python(3)?' install.sh
@@ -73,6 +83,40 @@ jobs:
           if make -n iso | grep -q "dest_dir="; then echo "!! iso names a dest_dir with none set" >&2; exit 1; fi
           make -n iso-deliver             | grep -q 'set ISO_HOST'
           make check-make
+
+  nats-https:
+    name: Node HTTPS through Kong / NATS authentication
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VA_VOIP_IMAGE: ${{ vars.NODE_TEST_IMAGE || 'ghcr.io/voipappz/node:latest' }}
+      MOTHERSHIP_REF: ${{ inputs.mothership_ref || '170c396e64c269a8f3b110c19db1387250b9905f' }}
+      MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Registry credentials for the real node image
+        env:
+          REGISTRY_USER: ${{ secrets.GHCR_USER || github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          # act can use an already cached image without registry secrets.
+          if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_TOKEN" ]; then
+            auth=$(mktemp -d)
+            chmod 700 "$auth"
+            echo "DOCKER_CONFIG=$auth" >> "$GITHUB_ENV"
+            echo "NATS_TEST_DOCKER_CONFIG=$auth" >> "$GITHUB_ENV"
+            printf '%s' "$REGISTRY_TOKEN" | docker --config "$auth" login ghcr.io --username "$REGISTRY_USER" --password-stdin
+          fi
+      - name: Internal NATS and external HTTPS, keys, TLS and reconnect
+        run: make test-nats-https
+      - name: Remove temporary registry credentials
+        if: always()
+        run: |
+          if [ -n "${NATS_TEST_DOCKER_CONFIG:-}" ]; then rm -rf -- "$NATS_TEST_DOCKER_CONFIG"; fi
 
   # A NODE ON A CLEAN HOST, WITH NOTHING ELSE. The integration job below proves
   # registration against a real mothership; this one proves the thing that job
@@ -128,12 +172,11 @@ jobs:
 
       - name: Install a node, no registration
         env:
-          VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          # The Docker Hub copy, which these secrets can read. Switch to
-          # ghcr.io/voipappz/node:latest once the repo holds a GitHub
-          # read:packages token (install.sh's default since 2026-10-22).
-          VA_VOIP_IMAGE: nirlevi/va-crystal:node
+          VA_REGISTRY_USER: ${{ secrets.GHCR_USER || github.actor }}
+          VA_REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          # install.sh's own default since 2026-10-22, and the only node image
+          # that speaks HTTPS /nats. The Docker Hub copy stopped on 2026-08-31.
+          VA_VOIP_IMAGE: ghcr.io/voipappz/node:latest
           VA_API_URL: http://127.0.0.1:5000
           VA_NATS_URL: nats://127.0.0.1:4222
         run: sh install.sh --no-register
@@ -256,18 +299,18 @@ jobs:
 
       - name: Install and register against real mothership
         env:
-          VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          # The Docker Hub copy, which these secrets can read. Switch to
-          # ghcr.io/voipappz/node:latest once the repo holds a GitHub
-          # read:packages token (install.sh's default since 2026-10-22).
-          VA_VOIP_IMAGE: nirlevi/va-crystal:node
+          VA_REGISTRY_USER: ${{ secrets.GHCR_USER || github.actor }}
+          VA_REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          # install.sh's own default since 2026-10-22, and the only node image
+          # that speaks HTTPS /nats. The Docker Hub copy stopped on 2026-08-31.
+          VA_VOIP_IMAGE: ghcr.io/voipappz/node:latest
           # voipappz/mothership went private on 2026-09-04: its tarball now
           # needs a read token. This job already requires secrets (the registry
           # pair), so it is the one place in this workflow that can hold one —
           # unlike a job that runs on fork PRs and must answer at a
           # fixture instead.
           MOTHERSHIP_TOKEN: ${{ secrets.MOTHERSHIP_TOKEN }}
+          VA_MOTHERSHIP_REF: ${{ inputs.mothership_ref || '170c396e64c269a8f3b110c19db1387250b9905f' }}
         # The mothership fixture is DOWNLOADED, never cloned — the same tarball
         # its own installer fetches.
         run: tests/test-install.sh

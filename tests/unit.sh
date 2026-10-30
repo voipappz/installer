@@ -70,10 +70,20 @@ LIB="$TMP/lib.sh"
   echo 'say() { :; }'
   echo 'fs_cmd() { "$@"; }'
   lift registry_name; lift registry_needs; lift registry_user_prompt; lift registry_token_prompt
-  lift registry_of; lift validate_scalar; lift yaml_api_url; lift yaml_broker_url; lift set_yaml_section_url
+  lift broker_url_for; lift broker_url_with_key; lift registry_of; lift validate_scalar; lift yaml_api_url; lift yaml_broker_url; lift set_yaml_section_url
 } > "$LIB"
 # shellcheck disable=SC1090
 source "$LIB"
+check 'broker defaults to HTTPS on the mothership origin' '[[ $(broker_url_for https://switch.voipappz.io) == https://switch.voipappz.io/nats ]]'
+check 'broker keeps an explicit TLS port, not an API path' '[[ $(broker_url_for https://switch.voipappz.io:8443/api) == https://switch.voipappz.io:8443/nats ]]'
+check 'broker strips credentials, query and fragment' '[[ $(broker_url_for "https://user:secret@ms.example/api?x=y#fragment") == https://ms.example/nats ]]'
+check 'loopback HTTP is available for internal tests' '[[ $(broker_url_for http://127.0.0.1:8080) == http://127.0.0.1:8080/nats ]]'
+check 'broker preserves IPv6 authority' '[[ $(broker_url_for "https://[::1]:8443") == "https://[::1]:8443/nats" ]]'
+check 'unsupported origin does not silently become TCP' '! broker_url_for ftp://example.invalid'
+check 'one HTTPS URL and key produce the default-user credential' '[[ $(broker_url_with_key https://switch.voipappz.io/nats test-key) == https://default:test-key@switch.voipappz.io/nats ]]'
+check 'key also supports an explicit internal broker' '[[ $(broker_url_with_key nats://nats:4222 test-key) == nats://default:test-key@nats:4222 ]]'
+check 'key cannot inject URL syntax' '! (broker_url_with_key https://example.invalid/nats "key@evil") >/dev/null 2>&1'
+check 'two credential sources are rejected' '! (broker_url_with_key https://default:old@example.invalid/nats new) >/dev/null 2>&1'
 check 'Docker Hub reference has no registry'         '[[ $(registry_of nirlevi/va-crystal:latest) == "" ]]'
 check 'bare name has no registry'                    '[[ $(registry_of alpine) == "" ]]'
 check 'host with a dot is a registry'                '[[ $(registry_of ghcr.io/kamailio/kamailio:6) == ghcr.io ]]'
@@ -519,7 +529,7 @@ check 'it is a node, not the app'                    'grep -q "^  type: switch" 
 check 'sofia internal port is the one health probes' 'grep -q "port_internal: \"5070\"" "$EX"'
 check 'sofia external port is the one health probes' 'grep -q "port_external: \"5090\"" "$EX"'
 check 'kamailio keeps 5060'                          'grep -q "sip_port: \"5060\"" "$EX"'
-check 'it names a mothership and a broker'           'grep -q "^mothership:" "$EX" && grep -q "^broker:" "$EX"'
+check 'one mothership URL is sufficient'            'grep -q "^mothership:" "$EX" && ! grep -q "^broker:" "$EX"'
 check 'it carries no customers block'                '! grep -q "^customers:" "$EX"'
 printf '\n── broker credentials never land in va.yaml\n'
 check 'the credentialed url is split before the yaml write' 'grep -q "NATS_URL_WITH_CREDENTIALS=\"\$VA_NATS_URL\"" "$ROOT/install.sh"'
