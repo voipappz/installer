@@ -327,6 +327,21 @@ make build NODE_IMAGE=ghcr.io/voipappz/node:<tag>  # ... or from a given image
 The public `latest` and `v*` CLI releases this repo used to publish are no
 longer updated.
 
+### Connect an LLM over MCP
+
+The node runs the CLI's MCP server in the background (the s6 service `va-mcp`,
+`127.0.0.1:4010`). `make mcp` shows its state and the `.mcp.json` entry to
+paste into Claude Code or any MCP client:
+
+```sh
+make cli ARGS="mcp token"   # mint the bearer token (shown once; the node keeps its hash)
+make mcp                    # where it listens, token and allowed addresses, the client entry
+```
+
+Over HTTP the operator actions run; lifecycle, shell, secrets and setup never
+do. To reach it from another machine, set `VA_MCP_HOST=0.0.0.0` and
+`VA_MCP_ALLOW_FROM=<cidr>` in `config/va.yaml` `env:` and `make up`.
+
 ## More
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) — changing the installer: `make check`,
