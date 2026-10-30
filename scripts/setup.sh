@@ -6,8 +6,8 @@
 #
 # The wizard is the image's own (`voipappz setup` with VA_PATH set: the
 # node-only one — name, internal IP, external IP). This script does not ask
-# those questions itself and never writes va.yaml by hand: the CLI in the image
-# owns that file's shape, and this owns only where it lands. It also generates
+# those questions itself: the CLI in the image owns the node configuration,
+# and this script adds the mothership URL. It also generates
 # the FreeSWITCH and licence secrets into ./.env on a first run and reads them
 # back on a rerun, so setting up twice never rotates what a node already uses.
 #
@@ -47,6 +47,35 @@ set_env_value() {  # 1: key, 2: value — one value in ./.env, replacing any old
   printf '%s=%s\n' "$1" "$2" >> "$_tmp"
   mv -f -- "$_tmp" "$VA_ENV_FILE"
   chmod 0600 "$VA_ENV_FILE"
+}
+
+set_mothership_url() {
+  case "$1" in
+    *[[:space:]\'\"\\]*|*://*@*|*\?*|*\#*) die "enter a mothership URL without credentials, whitespace, quotes, query or fragment" ;;
+  esac
+  case "$1" in
+    https://?*|http://?*) ;;
+    *) die "mothership URL must start with https:// or http://" ;;
+  esac
+  _tmp=$(mktemp "${VA_CONFIG}.tmp.XXXXXX")
+  awk -v url="${1%/}" '
+    /^mothership:[[:space:]]*(#.*)?$/ { inside = 1; found = 1; print; next }
+    inside && /^[^[:space:]#]/ {
+      if (!wrote) { print "  url: " url; wrote = 1 }
+      inside = 0
+    }
+    inside && /^[[:space:]]+url:/ {
+      if (!wrote) print "  url: " url
+      wrote = 1; next
+    }
+    { print }
+    END {
+      if (!found) print "mothership:"
+      if (!wrote) print "  url: " url
+    }
+  ' "$VA_CONFIG" > "$_tmp"
+  chmod 0644 "$_tmp"
+  mv -f -- "$_tmp" "$VA_CONFIG"
 }
 
 [ -t 0 ] || die "make setup is interactive; it asks which image and which node this is"
@@ -89,6 +118,12 @@ docker run --rm -it --network host \
   "$VA_VOIP_IMAGE" setup < /dev/tty \
   || die "the image's setup wizard did not finish"
 [ -f "$VA_CONFIG" ] || die "the wizard did not write $VA_CONFIG"
+
+step "The mothership"
+CURRENT_URL=$(sed -n '/^mothership:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_CONFIG" |
+  head -1 | tr -d "\"'")
+VA_API_URL=$(ask "  Mothership URL (Kong)" "${VA_API_URL:-${CURRENT_URL:-https://cloud.voipappz.io}}")
+set_mothership_url "$VA_API_URL"
 
 # GENERATED HERE, ONCE. The node-only wizard writes va.yaml and nothing else, so
 # the node-local secrets were never written and `make up` refused. They are
