@@ -108,7 +108,7 @@ check-make: ## Fail if any .PHONY target has no rule (CI runs this)
 # about.
 test: ## [MOTHERSHIP_DIR=dir] The integration test against a real mothership — DISPOSABLE HOST ONLY
 	@test -n "$${VA_REGISTRY_USER:-}" && test -n "$${VA_REGISTRY_TOKEN:-}" || { \
-	  printf '\033[1mexport VA_REGISTRY_USER and VA_REGISTRY_TOKEN\033[0m (Docker Hub, read access to nirlevi/va-crystal)\n'; exit 1; }
+	  printf '\033[1mexport VA_REGISTRY_USER and VA_REGISTRY_TOKEN\033[0m (a GitHub user + read:packages token for ghcr.io/voipappz/node, or Docker Hub with VA_VOIP_IMAGE=nirlevi/va-crystal:node)\n'; exit 1; }
 	tests/test-install.sh $(MOTHERSHIP_DIR)
 
 ##@ Get the image, then install it
@@ -125,25 +125,27 @@ NEWEST_ARCHIVE  = $(lastword $(sort $(wildcard $(VA_CRYSTAL_DIR)/ci/build/va-cry
 # work; `install` then never touches the network for it, so a re-install
 # cannot re-download what the host already has.
 #
-#   make get                          S3: the newest published image archive
-#   make get dockerhub                pull, with VA_REGISTRY_USER + VA_REGISTRY_TOKEN
+#   make get                          pull ghcr.io/voipappz/node:latest (GitHub user + read:packages token)
+#   make get VA_VOIP_IMAGE=ghcr.io/voipappz/node:<tag>   ... one exact build
+#   make get s3                       the newest published image archive from S3
+#   make get dockerhub                old name of the registry pull
 #   make get ARCHIVE=/path.tar.gz     docker load a docker-save archive: a path or an http(s) URL
 #   make get ARCHIVE=latest           ... the newest one in ../va-crystal/ci/build
 #
 # NO WIZARD, either way. install.sh asks which source to use only when nothing
-# chose one: `get` always names a source (the S3 default is the same one its
-# prompt offers as [2]) and `install` names `local`, which never fetches and
+# chose one: `get` always names a source (the registry default is the same one
+# its prompt offers as [1]) and `install` names `local`, which never fetches and
 # says plainly when the image is missing.
 #
 # The source is a bare word, not SOURCE=word, so each name below is also a
-# harmless phony goal — `make get dockerhub` runs `get` then the no-op
-# `dockerhub`. SOURCE=word (used by CI's `make -n` smoke tests) still works.
-IMAGE_SOURCES := s3 dockerhub archive local
+# harmless phony goal — `make get s3` runs `get` then the no-op
+# `s3`. SOURCE=word (used by CI's `make -n` smoke tests) still works.
+IMAGE_SOURCES := registry s3 dockerhub archive local
 .PHONY: $(IMAGE_SOURCES)
 $(IMAGE_SOURCES): ; @:
-SOURCE ?= $(or $(filter $(IMAGE_SOURCES),$(MAKECMDGOALS)),$(if $(ARCHIVE),archive,s3))
+SOURCE ?= $(or $(filter $(IMAGE_SOURCES),$(MAKECMDGOALS)),$(if $(ARCHIVE),archive,registry))
 
-get: ## [s3|dockerhub] [ARCHIVE=file|url|latest] Get the node image and prove it runs
+get: ## [registry|s3|dockerhub] [ARCHIVE=file|url|latest] Get the node image and prove it runs
 	@archive='$(ARCHIVE)'; \
 	 if [ "$$archive" = latest ]; then \
 	   archive='$(NEWEST_ARCHIVE)'; \

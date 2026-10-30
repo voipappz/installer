@@ -59,6 +59,7 @@ jobs:
           # from the `##` comments, so it cannot name a target that is not
           # there; what it CAN do is lose one, which check-make catches.
           make -n get                     | grep -q -- --image-only
+          make -n get registry            | grep -q "VA_IMAGE_SOURCE='registry'"
           make -n get dockerhub           | grep -q "VA_IMAGE_SOURCE='dockerhub'"
           make -n get SOURCE=dockerhub    | grep -q "VA_IMAGE_SOURCE='dockerhub'"
           make -n install                 | grep -q 'VA_IMAGE_SOURCE=local'
@@ -129,6 +130,10 @@ jobs:
         env:
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          # The Docker Hub copy, which these secrets can read. Switch to
+          # ghcr.io/voipappz/node:latest once the repo holds a GitHub
+          # read:packages token (install.sh's default since 2026-10-22).
+          VA_VOIP_IMAGE: nirlevi/va-crystal:node
           VA_API_URL: http://127.0.0.1:5000
           VA_NATS_URL: nats://127.0.0.1:4222
         run: sh install.sh --no-register
@@ -253,6 +258,10 @@ jobs:
         env:
           VA_REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           VA_REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          # The Docker Hub copy, which these secrets can read. Switch to
+          # ghcr.io/voipappz/node:latest once the repo holds a GitHub
+          # read:packages token (install.sh's default since 2026-10-22).
+          VA_VOIP_IMAGE: nirlevi/va-crystal:node
           # voipappz/mothership went private on 2026-09-04: its tarball now
           # needs a read token. This job already requires secrets (the registry
           # pair), so it is the one place in this workflow that can hold one —

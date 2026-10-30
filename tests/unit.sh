@@ -31,9 +31,16 @@ refuses() {  # label, expected message, env...
   if grep -Fq -- "$msg" <<<"$out"; then ok "$label"; else bad "$label: got '$out'"; fi
 }
 refuses 'START must be 0 or 1'                    'START must be 0 or 1'                 START=2
+ENVF="$TMP/answers.env"; printf '#\n' > "$ENVF"
+chmod 644 "$ENVF"
+refuses 'a world-readable answer file is called out'  'can be read by other users'   VA_ENV_FILE="$ENVF" START=2
+chmod 600 "$ENVF"
+out=$(env VA_ENV_FILE="$ENVF" START=2 sh "$INSTALLER" </dev/null 2>&1 || true)
+check 'a 0600 answer file passes quietly'            '! grep -q "can be read by other users" <<<"$out"'
 refuses 'VA_REGISTER must be 0 or 1'              'VA_REGISTER must be 0 or 1'           VA_REGISTER=yes
 refuses 'INSTALL_DIR must be absolute'            'INSTALL_DIR must be an absolute'      INSTALL_DIR=relative/dir
-refuses 'VA_IMAGE_SOURCE must be a known source'  'must be dockerhub, s3, archive or local' VA_IMAGE_SOURCE=ftp
+refuses 'VA_IMAGE_SOURCE must be a known source'  'must be registry, s3, archive or local' VA_IMAGE_SOURCE=ftp
+check 'dockerhub is still accepted, as the registry'      'grep -q "\"\$VA_IMAGE_SOURCE\" != \"dockerhub\" ] || VA_IMAGE_SOURCE=registry" "$INSTALLER"'
 refuses 'IMAGE_ONLY must be 0 or 1'               'IMAGE_ONLY must be 0 or 1'            IMAGE_ONLY=maybe
 refuses 'START_ONLY must be 0 or 1'               'START_ONLY must be 0 or 1'            START_ONLY=maybe
 refuses '--start-only needs an installation'      'nothing is installed at /tmp/unit-not-installed' \
@@ -62,6 +69,7 @@ LIB="$TMP/lib.sh"
 { printf '%s\n' 'die() { printf "die: %s\n" "$*" >&2; exit 1; }'
   echo 'say() { :; }'
   echo 'fs_cmd() { "$@"; }'
+  lift registry_name; lift registry_needs; lift registry_user_prompt; lift registry_token_prompt
   lift registry_of; lift validate_scalar; lift yaml_api_url; lift yaml_broker_url; lift set_yaml_section_url
 } > "$LIB"
 # shellcheck disable=SC1090
@@ -71,6 +79,11 @@ check 'bare name has no registry'                    '[[ $(registry_of alpine) =
 check 'host with a dot is a registry'                '[[ $(registry_of ghcr.io/kamailio/kamailio:6) == ghcr.io ]]'
 check 'host with a port is a registry'               '[[ $(registry_of localhost:5001/va/stack:test) == localhost:5001 ]]'
 check 'localhost is a registry'                      '[[ $(registry_of localhost/x:y) == localhost ]]'
+check 'the default image is the GitHub registry'     'grep -q "VA_VOIP_IMAGE:-ghcr.io/voipappz/node:latest" "$INSTALLER"'
+check 'ghcr asks for a GitHub read:packages token'  '[[ $(registry_needs ghcr.io/voipappz/node:latest) == *GitHub*read:packages* && $(registry_token_prompt ghcr.io/voipappz/node:1) == GitHub\ token* ]]'
+check 'ghcr asks for a GitHub user'                '[[ $(registry_user_prompt ghcr.io/voipappz/node:1) == "GitHub user" ]]'
+check 'Docker Hub keeps its own wording'            '[[ $(registry_name nirlevi/va-crystal:node) == "Docker Hub" && $(registry_user_prompt nirlevi/va-crystal:node) == "Docker Hub user" ]]'
+check 'another registry is named by its host'       '[[ $(registry_needs localhost:5001/x:y) == *localhost:5001* ]]'
 
 printf '\n── validate_scalar\n'
 check 'plain value passes'                           'validate_scalar X "https://cloud.voipappz.io" 2>/dev/null'
