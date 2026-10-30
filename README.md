@@ -295,54 +295,21 @@ that cost real time. `make iso-ship ISO_HOST=…` sends a cut disc to a machine;
 
 ## The `voipappz` CLI
 
-This repository is also the home of the `voipappz` CLI's source, `cli/`, since
-2026-09-03. It is the glue that installs the platform: `voipappz bootstrap`
-installs a mothership, `voipappz node install` launches the installer above,
-and the same binary is the CLI inside the node image (`docker exec va-voip
-voipappz …`). The mothership repository, where it lived, is private; the
-installer is public, so the source and the binaries live where anyone who can
-run the installer can reach them.
+The `voipappz` CLI is no longer built here (2026-10-29). Its source lives in
+github.com/voipappz/node (`cli/`), which compiles it into the node image, so
+every node runs the CLI of its own image: `docker exec va-voip voipappz …`.
+`install.sh` only ever ran that copy, and still does.
 
-One binary, everywhere. What a command can do is a fact about the host, so the
-CLI works it out when it runs: a service catalog in reach means a stack, and
-`kamctl` on PATH means it is inside the node image. There is no separate node
-build to fetch, pin or confuse with this one.
-
-`install.sh` never builds, fetches or runs a host binary. It only runs the
-copy inside the node image.
-
-Install the published binary on any linux amd64 or Apple silicon machine:
+Where a host copy is still wanted (the node disc bakes one), `make build`
+copies the same binary out of the node image — no compiler, no release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/voipappz/installer/main/scripts/install-cli.sh | sh -s -- --release
+make build                                        # bin/voipappz from ghcr.io/voipappz/node:latest
+make build NODE_IMAGE=ghcr.io/voipappz/node:<tag>  # ... or from a given image
 ```
 
-Build it from this checkout (Docker only, no Crystal toolchain):
-
-```sh
-make build                 # the static binary at bin/voipappz
-make build RELEASE=latest  # ... or download the same binary, compiling nothing
-make cli-test              # the spec suite
-make install-cli           # put bin/voipappz on PATH
-```
-
-Or take the newest build of `main` directly — no tag, no token, no toolchain:
-
-```sh
-curl -fsSLO https://github.com/voipappz/installer/releases/download/latest/voipappz-linux-amd64
-curl -fsSL  https://github.com/voipappz/installer/releases/download/latest/voipappz-linux-amd64.sha256 | sha256sum -c -
-chmod +x voipappz-linux-amd64
-```
-
-Every CI run compiles the linux binary and keeps it as an artifact for a week;
-every push to `main` also replaces the assets on the rolling `latest`
-prerelease above (`voipappz-linux-amd64` and its `.sha256`). It moves under you
-by design — pin a tag for a binary that will not.
-
-Releases (`git tag vX.Y.Z && git push origin vX.Y.Z`) publish
-`voipappz-linux-amd64`, `voipappz-darwin-arm64` and their `.sha256` files.
-va-crystal pins one of those tags for the binary it bakes into
-`nirlevi/va-crystal:node`.
+The public `latest` and `v*` CLI releases this repo used to publish are no
+longer updated.
 
 ## More
 

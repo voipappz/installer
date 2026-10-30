@@ -1,7 +1,6 @@
 # act (nektos/act) — this repo's workflows, locally.
 #
 #   act -j shell          the POSIX gates: syntax, shellcheck, unit tests (~1m)
-#   act -j cli --bind     specs, the binary, the tty a-to-z, SIPp (~10m)
 #   make act-packer       the media templates validate (~1m)
 #   make act-iso          cut a disc with no container image on it (~20m)
 #
@@ -10,11 +9,6 @@
 # workstation Docker Hub login) and, for the ISO, Canonical's base image
 # fetched once by `make act-iso-base`.
 #   act -n -j <job>       parse and list the steps, run nothing
-#
-# --bind for `cli`: `make build` compiles in a NESTED `docker run -v
-# "$(CURDIR):/w"`, and that mount is resolved by the HOST daemon. Without
-# --bind the workspace is a copy, the binary lands outside it, and the next
-# line fails with "cannot stat 'cli/bin/voipappz'" after a good compile.
 #
 # `container` and `integration` install a real node: they want DOCKERHUB_*
 # and a disposable /opt/voipappz (this host's is the lab node's). Run those
