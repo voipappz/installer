@@ -680,10 +680,10 @@ if ! node=$(api GET "/nodes/$NODE_UUID" 2>&1); then
   show_safe_log "$LAST_LOG"
   die 'existing CLI registered only the YAML node'
 fi
-# ROLES, NOT type. voipappz-api dropped node.type in c44d6fe89 ("a node is
-# what its roles say" — type was a second, unenforced spelling that had already
-# drifted from roles in the live deployment), so the field is simply absent from
-# the response now. `source: database` is the other half of the claim: this is a
+# ROLES, NOT type. Selection reads roles only. voipappz-api dropped node.type in
+# c44d6fe89 and brought it back in abb8dc3 as a label from a closed list (voip
+# app db egress), which is why the CLI sends `voip` for va.yaml's `switch`.
+# `source: database` is the other half of the claim: this is a
 # row the CLI created, not the mothership's own va.yaml node showing through.
 assert_jq "$node" \
   ".uuid == \"$NODE_UUID\" and (.roles | index(\"switch\")) != null and .source == \"database\"" \
@@ -765,7 +765,10 @@ pass 'installed CA bundle is reused on later runs'
 command -v expect >/dev/null 2>&1 || sudo apt-get install -y -qq expect >/dev/null
 TTY_DIR="$RUN_ROOT/tty-node"
 TTY_LOG="$LOG_DIR/tty-install.log"
-TTY_PASSWORD="Tty-Login-$RANDOM-$RANDOM"
+# The mothership's password policy caps a customer login at 18 characters
+# (Customer#password_error); a longer typed password is refused with HTTP 406
+# before anything is created, which used to read as an unexplained conflict.
+TTY_PASSWORD="Tty-$RANDOM-$RANDOM"
 set +e
 env -u VA_REGISTRY_USER -u VA_REGISTRY_TOKEN -u VA_API_AUTHORIZATION -u VA_API_URL -u VA_NATS_URL -u VA_CONFIG \
   INSTALL_DIR="$TTY_DIR" VA_VOIP_IMAGE=installer-ci/va-crystal:tty START=0 VA_REGISTER=1 \
