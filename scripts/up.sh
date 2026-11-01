@@ -121,6 +121,13 @@ set -- docker run -d --name "$NODE" \
 [ -z "${VA_ED137:-}" ]      || set -- "$@" -e "VA_ED137=$VA_ED137"
 [ -z "${VA_NATS_URL_CREDENTIALED:-}" ] \
   || set -- "$@" -e "NATS_URL=$VA_NATS_URL_CREDENTIALED"
+# The MCP server (s6 va-mcp): the token's hash (`make mcp` mints it), and where
+# it listens and whom it admits. Only the hash is here; the token is shown once.
+for _m in VA_MCP_TOKEN_SHA256 VA_MCP_HOST VA_MCP_PORT VA_MCP_ALLOW_FROM; do
+  eval "_mv=\${$_m:-}"
+  [ -z "$_mv" ] || set -- "$@" -e "$_m=$_mv"
+done
+_mv=""
 # The pinned CA bundle sits beside the va.yaml it belongs to: ./config for a
 # checkout, /opt/voipappz/config for an installation named with VA_CONFIG=.
 CA_BUNDLE="$(dirname "$VA_CONFIG")/ca-bundle.pem"

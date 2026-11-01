@@ -39,16 +39,6 @@ ask_secret() {  # 1: prompt -> answer on stdout, never echoed
   printf '%s' "$_secret"
 }
 
-set_env_value() {  # 1: key, 2: value — one value in ./.env, replacing any old one
-  [ -n "$2" ] || return 0
-  touch "$VA_ENV_FILE"
-  _tmp=$(mktemp "${VA_ENV_FILE}.tmp.XXXXXX")
-  sed "/^$1=/d" "$VA_ENV_FILE" > "$_tmp"
-  printf '%s=%s\n' "$1" "$2" >> "$_tmp"
-  mv -f -- "$_tmp" "$VA_ENV_FILE"
-  chmod 0600 "$VA_ENV_FILE"
-}
-
 set_setup_url() { # section, URL
   case "$2" in
     *[[:space:]\'\"\\]*|*://*@*|*\?*|*\#*) die "enter a mothership URL without credentials, whitespace, quotes, query or fragment" ;;

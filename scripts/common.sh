@@ -64,6 +64,16 @@ load_env_file() {  # 1: required (1 = the file must exist)
 
 # NAME EVERY MISSING VALUE, not just the first: filling in a fresh .env should
 # take one run to learn what it wants, not five.
+set_env_value() {  # 1: key, 2: value — one value in ./.env, replacing any old one
+  [ -n "$2" ] || return 0
+  touch "$VA_ENV_FILE"
+  _tmp=$(mktemp "${VA_ENV_FILE}.tmp.XXXXXX")
+  sed "/^$1=/d" "$VA_ENV_FILE" > "$_tmp"
+  printf '%s=%s\n' "$1" "$2" >> "$_tmp"
+  mv -f -- "$_tmp" "$VA_ENV_FILE"
+  chmod 0600 "$VA_ENV_FILE"
+}
+
 require_env() {  # variable names
   _missing=""
   for _v in "$@"; do
