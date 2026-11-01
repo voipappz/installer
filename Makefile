@@ -247,8 +247,8 @@ health: ## The node's own health verdict, from the CLI inside the image
 cli: ## [ARGS=cmd] The in-image CLI: make cli ARGS="sbc egress status"
 	@$(NODE_ARGS) sh scripts/cli.sh $(ARGS)
 
-mcp: ## How to connect an LLM to this node over MCP (the CLI's background server)
-	@$(NODE_ARGS) sh scripts/mcp.sh
+mcp: ## [TOKEN=new] How to connect an LLM to this node over MCP; TOKEN=new mints the token
+	@$(NODE_ARGS) TOKEN='$(TOKEN)' sh scripts/mcp.sh
 
 ##@ Node media (ISO)
 #

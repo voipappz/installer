@@ -3,14 +3,30 @@
 #
 # The node runs its CLI's MCP server in the background: the s6 service
 # va-mcp, `voipappz mcp http`, plain HTTP on 127.0.0.1:4010 unless
-# VA_MCP_HOST/VA_MCP_PORT say otherwise. A request needs the bearer token
-# (`make cli ARGS="mcp token"` prints it once; the node keeps only its hash)
-# and must come from an address in VA_MCP_ALLOW_FROM (loopback when unset).
-# This prints the state of that server and the client entry to paste. It
-# never prints the token or its hash.
+# VA_MCP_HOST/VA_MCP_PORT say otherwise. A request needs the bearer token and
+# must come from an address in VA_MCP_ALLOW_FROM (loopback when unset).
+#
+# THE TOKEN'S HASH LIVES IN .env (2026-11-01), with the other secrets: the
+# node's va.yaml is mounted read-only, so the CLI inside cannot keep it there.
+# `make mcp TOKEN=new` mints a token here, keeps only its SHA-256 in .env as
+# VA_MCP_TOKEN_SHA256, prints the token once, and `make up` hands it to the
+# node. This never prints the token again, nor its hash.
 set -eu
 # shellcheck source=scripts/common.sh
 . "$(dirname "$0")/common.sh"
+
+load_env_file
+
+if [ "${TOKEN:-}" = new ]; then
+  _token=$(od -An -tx1 -N32 /dev/urandom | tr -d " \n")
+  _hash=$(printf "%s" "$_token" | sha256sum | cut -d" " -f1)
+  set_env_value VA_MCP_TOKEN_SHA256 "$_hash"
+  VA_MCP_TOKEN_SHA256=$_hash
+  printf "\n%sthe MCP token — shown once; keep it in your MCP client%s\n" "$C_BOLD" "$C_OFF" > /dev/tty
+  printf "%s\n" "$_token" > /dev/tty
+  say "its SHA-256 is in $VA_ENV_FILE as VA_MCP_TOKEN_SHA256; run make up to give it to the node"
+  _token=""; _hash=""
+fi
 
 require_docker
 require_running
@@ -22,13 +38,19 @@ node_env() {
 mcp_host=$(node_env VA_MCP_HOST); mcp_host=${mcp_host:-127.0.0.1}
 mcp_port=$(node_env VA_MCP_PORT); mcp_port=${mcp_port:-4010}
 allow=$(node_env VA_MCP_ALLOW_FROM)
-if [ -n "$(node_env VA_MCP_TOKEN_SHA256)" ] ||
-   docker exec "$NODE" sh -c 'grep -q "VA_MCP_TOKEN_SHA256" "${VA_PATH:-/opt/va.yaml}" 2>/dev/null'; then
+# Configured (in .env) and applied (in the running node) can differ until make up.
+_applied=$(node_env VA_MCP_TOKEN_SHA256)
+if [ -n "${VA_MCP_TOKEN_SHA256:-}" ] && [ "$_applied" = "$VA_MCP_TOKEN_SHA256" ]; then
   token="set"
+elif [ -n "${VA_MCP_TOKEN_SHA256:-}" ]; then
+  token="in $VA_ENV_FILE, not yet in the node — run: make up"
+elif [ -n "$_applied" ]; then
+  token="set in the node, but not in $VA_ENV_FILE — the next make up drops it"
 else
   token="unset"
 fi
-if docker exec "$NODE" sh -c 's6-svstat /run/service/va-mcp 2>/dev/null' | grep -q '^up'; then
+_applied=""
+if docker exec "$NODE" sh -c '/command/s6-svstat /run/service/va-mcp 2>/dev/null' | grep -q '^up'; then
   service="up"
 else
   service="down"
@@ -37,7 +59,7 @@ fi
 printf '\n%sMCP on %s%s\n' "$C_BOLD" "$NODE" "$C_OFF"
 say "service    va-mcp $service (voipappz mcp http)"
 say "listens    http://$mcp_host:$mcp_port/mcp"
-say "token      $token$( [ "$token" = unset ] && printf ' — mint one: make cli ARGS="mcp token"')"
+say "token      $token$( [ "$token" = unset ] && printf ' — mint one: make mcp TOKEN=new')"
 say "clients    ${allow:-loopback only (VA_MCP_ALLOW_FROM unset)}"
 case "$mcp_host" in
   127.*|localhost|::1) say "reach      this host only; for another machine set VA_MCP_HOST=0.0.0.0 and VA_MCP_ALLOW_FROM in config/va.yaml env:, then make up" ;;
