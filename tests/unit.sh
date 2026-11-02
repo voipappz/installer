@@ -624,6 +624,7 @@ done
 # shellcheck disable=SC1090
 source "$SETUP_LIB"
 check 'setup passes the token as NATS URL userinfo outside YAML' '[[ $(credentialed_broker_url wss://ms.example/nats token-1) == wss://default:token-1@ms.example/nats ]]'
+check 'setup accepts the mothership nats://default:<token> form' '[[ $(credentialed_broker_url wss://ms.example/nats nats://default:token-1) == wss://default:token-1@ms.example/nats ]]'
 check 'setup rejects a token that could alter the URL' '! (credentialed_broker_url ws://ms.example/nats "token@evil") 2>/dev/null'
 VA_CONFIG="$TMP/setup.yaml"
 printf 'nodes: []\nmothership:\n  url: https://old.example\nbroker:\n  url: nats://old.example:4222\nenv: {}\n' > "$VA_CONFIG"
