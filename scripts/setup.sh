@@ -70,9 +70,10 @@ set_setup_url() { # section, URL
 }
 
 credentialed_broker_url() { # bare URL, mothership VA_NATS_TOKEN
-  case "$2" in ''|*[!A-Za-z0-9._~-]*) die "NATS token must contain only URL-safe letters, digits, . _ or -" ;; esac
+  case "$2" in nats://default:*) _token=${2#nats://default:}; _token=${_token%%@*} ;; *) _token=$2 ;; esac
+  case "$_token" in ''|*[!A-Za-z0-9._~-]*) die "NATS token must contain only URL-safe letters, digits, . _ or -" ;; esac
   case "$1" in *://*@*) die "Kong NATS URL must not include credentials" ;; esac
-  printf '%s://default:%s@%s' "${1%%://*}" "$2" "${1#*://}"
+  printf '%s://default:%s@%s' "${1%%://*}" "$_token" "${1#*://}"
 }
 
 verify_setup_broker() (
@@ -155,7 +156,7 @@ docker run --rm -it --network host \
 step "The mothership NATS connection"
 CURRENT_BROKER=$(sed -n '/^broker:/,/^[^[:space:]#]/{ s/^[[:space:]]*url:[[:space:]]*//p; }' "$VA_CONFIG" |
   head -1 | tr -d "\"'")
-case "$CURRENT_BROKER" in ws://?*|wss://?*) DEFAULT_BROKER_URL=$CURRENT_BROKER ;; *) DEFAULT_BROKER_URL=wss://cloud.voipappz.io/nats ;; esac
+case "$CURRENT_BROKER" in ws://?*|wss://?*) DEFAULT_BROKER_URL=$CURRENT_BROKER ;; *) DEFAULT_BROKER_URL=wss://switch.voipappz.io/nats ;; esac
 BROKER_URL=$(ask "  Mothership Kong NATS URL (ws or wss)" "${VA_NATS_URL:-$DEFAULT_BROKER_URL}")
 verify_setup_broker "$BROKER_URL"
 set_setup_url broker "$BROKER_URL"
