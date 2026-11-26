@@ -237,6 +237,7 @@ unset VA_REGISTRY_TOKEN VA_API_AUTHORIZATION
 | `VA_FREESWITCH=off` | Install a proxy/agent-only node without media. |
 | `VA_ED137=1` | ED-137 (ATM voice) node: kamailio probes trunk peers every second and marks them down within 2 s, marks SIP DSCP CS5, and adds `WG67-Version` and `a=maxptime:30` on the answers to trunk peers. Recorded in the install `.env`, passed with `docker -e`. The node's `ed137` role sets the trunk codecs. |
 | `VA_CA_BUNDLE=/path/chain.pem` | Trust anchors for a mothership whose chain the node cannot verify. |
+| `VA_S3_ENDPOINT` / `VA_S3_KEY` / `VA_S3_SECRET` / `VA_S3_REGION` | Where the node uploads call recordings (S3 or MinIO; `http://127.0.0.1:9000` for a mothership on the same box). Recorded in the mode-0600 `.env` and passed to the container, never written to `va.yaml`. The first three go together; region defaults to `us-east-1`. Without them recordings stay on the node. |
 | `INSTALL_DIR=/path` | Where the stack lands (default `/opt/voipappz`). |
 | `START=0` | Install and register, do not start the container. |
 
