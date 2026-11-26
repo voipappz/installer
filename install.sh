@@ -70,6 +70,17 @@ VA_NATS_TOKEN="${VA_NATS_TOKEN:-}"
 # API this node belongs to, or it verifies nothing. A credential, so it lives
 # in the install .env and the container environment, never in va.yaml.
 VA_SECRET_KEY="${VA_SECRET_KEY:-}"
+# RECORDING STORAGE. The node uploads call recordings itself (S3_ENDPOINT,
+# S3_KEY, S3_SECRET, S3_REGION in its environment, node/recording/workers.cr);
+# without them every upload fails with "Bucket ... is not accessible at  —
+# Missing scheme". A mothership on the same box has MinIO on
+# http://127.0.0.1:9000. Credentials, so they live in the install .env and the
+# container environment, never in va.yaml (0644). All optional: a node with no
+# storage keeps its recordings on disk.
+VA_S3_ENDPOINT="${VA_S3_ENDPOINT:-}"
+VA_S3_KEY="${VA_S3_KEY:-}"
+VA_S3_SECRET="${VA_S3_SECRET:-}"
+VA_S3_REGION="${VA_S3_REGION:-}"
 VA_REGISTER="${VA_REGISTER:-1}"
 VA_CUSTOMER_UUID="${VA_CUSTOMER_UUID:-}"
 VA_CUSTOMER_NAME="${VA_CUSTOMER_NAME:-}"
@@ -1102,6 +1113,11 @@ start_node() {
   NODE_NATS_URL="$(fs_cmd sed -n 's/^VA_NATS_URL_CREDENTIALED=//p' "$INSTALL_DIR/.env" | head -1)"
   # The API's token-signing secret. The image refuses to start without it.
   NODE_SECRET_KEY="$(fs_cmd sed -n 's/^VA_SECRET_KEY=//p' "$INSTALL_DIR/.env" | head -1)"
+  # Recording storage, if the install recorded it (see VA_S3_* above).
+  NODE_S3_ENDPOINT="$(fs_cmd sed -n 's/^VA_S3_ENDPOINT=//p' "$INSTALL_DIR/.env" | head -1)"
+  NODE_S3_KEY="$(fs_cmd sed -n 's/^VA_S3_KEY=//p' "$INSTALL_DIR/.env" | head -1)"
+  NODE_S3_SECRET="$(fs_cmd sed -n 's/^VA_S3_SECRET=//p' "$INSTALL_DIR/.env" | head -1)"
+  NODE_S3_REGION="$(fs_cmd sed -n 's/^VA_S3_REGION=//p' "$INSTALL_DIR/.env" | head -1)"
   if [ -z "$FS_PASSWORD" ] || [ -z "$LIC_JWT" ] || [ -z "$LIC_ENC" ]; then
     die "$INSTALL_DIR/.env is missing the FreeSWITCH or licence secrets; rerun the installer"
   fi
@@ -1158,6 +1174,14 @@ start_node() {
   else
     say "WARNING: no VA_SECRET_KEY — a current node image refuses to start without it"
   fi
+  # Recording storage: all four or nothing, so a half-configured node is said
+  # out loud instead of failing every upload later.
+  if [ -n "${NODE_S3_ENDPOINT:-}" ] && [ -n "${NODE_S3_KEY:-}" ] && [ -n "${NODE_S3_SECRET:-}" ]; then
+    set -- "$@" -e "S3_ENDPOINT=$NODE_S3_ENDPOINT" -e "S3_KEY=$NODE_S3_KEY" \
+      -e "S3_SECRET=$NODE_S3_SECRET" -e "S3_REGION=${NODE_S3_REGION:-us-east-1}"
+  elif [ -n "${NODE_S3_ENDPOINT:-}${NODE_S3_KEY:-}${NODE_S3_SECRET:-}" ]; then
+    say "WARNING: VA_S3_ENDPOINT, VA_S3_KEY and VA_S3_SECRET go together; recordings will not upload"
+  fi
   if [ -n "$CA_BUNDLE" ]; then
     set -- "$@" -v "$INSTALL_DIR/config/ca-bundle.pem:/etc/ssl/va-ca-bundle.pem:ro" \
       -e SSL_CERT_FILE=/etc/ssl/va-ca-bundle.pem
@@ -1171,7 +1195,7 @@ start_node() {
   for _a in "$@" "$VA_VOIP_IMAGE"; do
     case "$_a" in
       docker_cmd) printf 'docker ' ;;
-      FREESWITCH_PASSWORD=*|VA_FREESWITCH_PASSWORD=*|LICENSE_JWT_SECRET=*|LICENSE_ENCRYPTION_KEY=*|SECRET_KEY=*)
+      FREESWITCH_PASSWORD=*|VA_FREESWITCH_PASSWORD=*|LICENSE_JWT_SECRET=*|LICENSE_ENCRYPTION_KEY=*|SECRET_KEY=*|S3_KEY=*|S3_SECRET=*)
         printf '%s=<generated> ' "${_a%%=*}" ;;
       *) printf '%s ' "$_a" ;;
     esac
@@ -1180,7 +1204,7 @@ start_node() {
   _a=""
 
   "$@" "$VA_VOIP_IMAGE" >/dev/null || die "could not start the node container"
-  FS_PASSWORD=""; LIC_JWT=""; LIC_ENC=""; NODE_SECRET_KEY=""
+  FS_PASSWORD=""; LIC_JWT=""; LIC_ENC=""; NODE_SECRET_KEY=""; NODE_S3_KEY=""; NODE_S3_SECRET=""
   say "started va-voip from $VA_VOIP_IMAGE"
 
   _attempt=0
@@ -1597,6 +1621,12 @@ set_env_value INSTALL_DIR "$INSTALL_DIR"
 # The API's token-signing secret: the image refuses to start without it, and
 # it must equal the API's own, so the installer records it, never invents it.
 [ -z "$VA_SECRET_KEY" ] || set_env_value VA_SECRET_KEY "$VA_SECRET_KEY"
+# Recording storage (VA_S3_*): recorded only when given, so a rerun without
+# them keeps what an earlier run stored.
+[ -z "$VA_S3_ENDPOINT" ] || set_env_value VA_S3_ENDPOINT "$VA_S3_ENDPOINT"
+[ -z "$VA_S3_KEY" ]      || set_env_value VA_S3_KEY "$VA_S3_KEY"
+[ -z "$VA_S3_SECRET" ]   || set_env_value VA_S3_SECRET "$VA_S3_SECRET"
+[ -z "$VA_S3_REGION" ]   || set_env_value VA_S3_REGION "$VA_S3_REGION"
 # The broker credential, kept out of the 0644 va.yaml.
 [ -z "$NATS_URL_WITH_CREDENTIALS" ] || set_env_value VA_NATS_URL_CREDENTIALED "$NATS_URL_WITH_CREDENTIALS"
 # Service selection (topology, not application config).

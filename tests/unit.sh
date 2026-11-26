@@ -538,6 +538,14 @@ check 'a bare url passes through unchanged'    '[[ $(printf %s "nats://ms.exampl
 check 'an existing credentialed yaml url dies' 'grep -q "va.yaml broker.url carries a credential" "$ROOT/install.sh"'
 check 'docker run gets the credentialed env'   'grep -q "NATS_URL=\$NODE_NATS_URL" "$ROOT/install.sh"'
 
+printf '\n── recording storage (VA_S3_*) into the install .env, never va.yaml\n'
+check 'the S3 settings are recorded in the 0600 .env'  'grep -q "set_env_value VA_S3_SECRET" "$ROOT/install.sh"'
+check 'they are read back from the install .env'       'grep -q "s/^VA_S3_SECRET=//p" "$ROOT/install.sh"'
+check 'docker run gets the four S3 variables'          'grep -q "S3_ENDPOINT=\$NODE_S3_ENDPOINT" "$ROOT/install.sh" && grep -q "S3_SECRET=\$NODE_S3_SECRET" "$ROOT/install.sh"'
+check 'the printed command masks the S3 key and secret' 'grep -q "|S3_KEY=\*|S3_SECRET=\*)" "$ROOT/install.sh"'
+check 'a half-configured storage is warned about'      'grep -q "go together; recordings will not upload" "$ROOT/install.sh"'
+check 'the S3 settings never reach va.yaml'            '! grep -qE "set_yaml.*S3_" "$ROOT/install.sh"'
+
 printf '\n── service flags into the install .env\n'
 {
   echo 'WORK_DIR=$TMP'; echo 'fs_cmd() { "$@"; }'; echo 'die() { echo "$*" >&2; exit 1; }'
